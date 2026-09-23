@@ -18,14 +18,16 @@ This plan is the execution guide for the MVP and follows the architecture in ARC
 ### Completed
 - Task 1: footprint input and validation
 - Task 2: extrusion engine for foundation, wall mass, and flat roof
-- Local app shell, JSON file input, orbit controls, GLB export
+- Task 3: facade subdivision metadata (stories, wall runs, equal panels)
+- Local app shell, JSON file input, orbit controls, unit display, GLB export
 
 ### In progress
-- Task 4: per-wall-run and per-story material assignment (visible panel controls complete)
+- Task 4: material assignment. Palette and story/panel selectors exist; solid finish panels render on rectangular footprints only.
+- Task 5: flat, gable, hip, and shed roofs. Rectangular analytic meshes and one equal-pitch hip skeleton path work. Complex joins do not. See [Complex roof structures](#complex-roof-structures).
+- Task 9: automatic rectilinear volume decomposition and per-volume story, roof type, and ridge controls. Caps stay independent.
 
-### Deferred to later milestones
-- Task 5: gable/hip roof types
-- Task 6–10: modifiers and volume logic
+### Not started
+- Tasks 6–8 and 10: windows, doors, trim, steps, porches, and other modifiers.
 
 ## Architecture-aligned milestones
 
@@ -313,15 +315,11 @@ Current slice:
   flat cap.
 
 Remaining Task 9 work:
-- Per-volume roof plane mitering where two volumes share the same wall-top
-  elevation (currently each volume's roof is independently flat/exact but
-  meets its neighbor at a visible seam along the shared wall rather than a
-  blended valley). This requires a general straight-skeleton solve
-  (simultaneous/cascading edge-collapse events); evaluated and deferred as a
-  larger follow-up rather than risking a partially-correct implementation.
-- A mitered lean-to/main-roof intersection. Constant ridge-height mode aligns
-  ridge elevations across differing widths, but it does not yet create the
-  required trimmed valley faces.
+- Roof joins, edge roles, eaves, and shell closure are recorded under
+  [Complex roof structures](#complex-roof-structures).
+  That section supersedes the earlier note that a general skeleton solve was
+  the whole follow-up. An unweighted skeleton already covers equal-height,
+  equal-pitch hips.
 - Per-volume material assignment (currently shares the building-wide wall
   material).
 
@@ -348,8 +346,56 @@ This project intentionally differs from the strict CCW-only wording in the origi
 ### Local static web app constraints
 The current implementation uses a direct local static asset model rather than a framework build system. This is consistent with the project’s lightweight requirement and is the best fit for the user’s local-only workflow.
 
+## Complex roof structures
+
+A complex roof is still a set of independent caps. Each rectangular volume can take a flat, gable, hip, or shed roof. Those caps are not resolved into one roof. Shared valleys, mixed edge roles, different eave heights, and overhangs around a concave plan do not become a single surface.
+
+The case that does resolve is narrow. An equal-height, equal-pitch hip over a simple rectilinear outline uses `createStraightSkeletonHipGeometry` and produces hips and valleys. Every other combination uses separate rectangular roofs, or a sampled distance field.
+
+### What the current builders cover
+
+- Rectangles use analytic flat, gable, hip, and shed meshes. A rectangular footprint ignores per-volume roof types and builds one roof from the building default.
+- `decomposeIntoVolumes()` splits a rectilinear footprint into rectangles. The U preset is 3 volumes. The L, narrow lean-to, and wide wing presets are 2.
+- Equal-height, equal-pitch hips with more than one volume call `createStraightSkeletonHipGeometry` after `SkeletonBuilder` initializes. The call passes one outer ring and one pitch.
+- If that solver is missing, the same hip falls through to `createRoofFieldSurface`, a gridded distance field. The U preset is about 1,200 vertices on that path, and the UI does not report the fallback.
+- Constant ridge height, any gable, or a mix of roof types uses `createVolumeRoofAssembly`.
+- A story-count override uses `createMultiVolumeBuilding`. Each volume gets its own walls, foundation, and roof.
+- Standalone sheds close the high side and the two sloped ends. Flat roofs are a thin slab.
+
+### Deficiencies
+
+#### The roof is not an editable structure
+
+- `computeFacadeLayout()` always emits one zone, `roof-zone-main`, covering every wall run.
+- Per-volume roof type and ridge direction live in sidebar state (`volumeRoofTypes`, `volumeRidgeDirections`) beside that zone. They are discarded with the page. There is no saved roof graph and no `.bld` record.
+- A roof zone cannot differ from the automatic rectangle decomposition. Zones cannot be split, merged, or redrawn. A diagonal or non-orthogonal footprint is still forced onto that rectangle grid.
+- Footprint edges have no role. Every skeleton edge is an eave. A gable rake, a hip, a valley, or a flush verge cannot be named on an edge.
+- Rise and pitch are building-wide. Constant-height mode only derives a pitch from each volume's half-span so the ridges match. A 6:12 wing against a 4:12 main roof cannot be expressed. The skeleton is used unweighted.
+- Courtyards are unsupported. `SkeletonBuilder.buildFromPolygon` accepts inner rings, and the composer never passes them.
+
+#### Adjacent roofs do not cut each other
+
+- In `createVolumeRoofAssembly`, each volume keeps a full rectangular prism. `buildConnectedConstantRiseRidges` moves ridge endpoints so a side ridge can meet a spanning ridge. It does not clip the planes. Valley faces are absent, and the roofs meet on a vertical seam along the shared wall.
+- Different eave heights, from any story-count override, do not intersect. A one-story shed does not tuck under the main eave, and a lower ridge does not run into the taller slope. The weighted 3D intersection described in `ARCHITECTURE.md` is not implemented.
+- **Snap to ridge** has no control. **Merge into adjacent roof plane** is a disabled dropdown. `volumeRoofConnections` is stored and never read by a mesh builder. A shed that shares an edge with another volume stays a standalone shell.
+
+#### The surface stops at the wall plate
+
+- Eave depth expands a rectangular outline only. Multi-volume roofs are built with overhang `0`. Hips and valleys do not continue past a re-entrant corner.
+- Hip and gable geometry is the sloping top only. Fascia, soffit, and gable-end returns are not generated.
+- Walls extrude to one horizontal plate, and the roof sits 2 cm above it. Gable triangles use the roof material. The top story stays a rectangle and is not clipped to a sloping upper edge.
+- Mansard is named in `ARCHITECTURE.md` and is not built. Dormers, boolean cross-gables, crickets, and parapets sit outside the four implemented types.
+
+### Next steps
+
+The next roof work is a resolver, not another roof type.
+
+1. Tag each footprint edge as eave or rake, and store one pitch per eave. Persist that graph with the volume assignments instead of leaving it in sidebar state.
+2. At a shared wall-plate elevation, solve one weighted straight skeleton, or an equivalent plane arrangement, so equal-height hips, gables, and mixed pitches share valley and ridge vertices. Replace the silent dense-field fallback with a reported failure.
+3. Where plate elevations differ, trim plane against plane so a lower shed or gable can tuck under a taller slope, or snap its ridge to a chosen ridge. Drive this from the connection control already present in the sidebar.
+4. Close every boundary that does not meet another roof face with fascia, a gable return, or a vertical closure. Offset the eave polygon before the solve so a concave plan carries a real overhang.
+5. Cut wall tops and the top story to the resolved roof so gable ends are wall faces. Mansard, dormers, and other forms wait until this shell is closed.
+
 ## Immediate next implementation step
 
-Add user-defined volume and roof-zone assignments so different parts of a
-concave or attached footprint can select independent roof configurations.
-Facade panels remain an optional surface-detail layer.
+Step 1 of the resolver above: tag footprint edges as eave or rake, with one pitch per eave, and persist that roof graph. Facade panels remain an optional surface-detail layer.
