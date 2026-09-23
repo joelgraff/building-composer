@@ -1,0 +1,17 @@
+{
+  "name": "building_composer",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "straight-skeleton": "^3.0.0",
+    "three": "^0.186.0"
+  }
+}

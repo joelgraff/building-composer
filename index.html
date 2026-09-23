@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Building Composer</title>
+    <style>
+      :root {
+        --bg: #f3f5f7;
+        --panel: #ffffff;
+        --panel-alt: #edf2f7;
+        --text: #112033;
+        --muted: #5d7288;
+        --accent: #326bf5;
+        --grid: rgba(17, 32, 51, 0.08);
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        font-family: Inter, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 18px;
+        background: var(--panel);
+        border-bottom: 1px solid rgba(17, 32, 51, 0.08);
+      }
+
+      .brand {
+        font-size: 1.15rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      button {
+        appearance: none;
+        border: 1px solid rgba(17, 32, 51, 0.08);
+        background: linear-gradient(#fff, #f3f6f9);
+        color: var(--text);
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: rgba(50, 107, 245, 0.4);
+      }
+
+      .primary {
+        background: var(--accent);
+        color: #fff;
+        border-color: transparent;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(280px, 360px) 1fr;
+        flex: 1;
+        min-height: 0;
+      }
+
+      .sidebar {
+        background: var(--panel-alt);
+        border-right: 1px solid rgba(17, 32, 51, 0.08);
+        padding: 18px;
+        overflow: auto;
+      }
+
+      .metrics {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .metrics .metric:nth-child(1),
+      .metrics .metric:nth-child(2),
+      .metrics .metric:nth-child(n + 5) {
+        display: none;
+      }
+
+      .metric {
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(17, 32, 51, 0.08);
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+
+      .metric-label {
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+
+      .metric-value {
+        font-weight: 700;
+        font-size: 1.1rem;
+      }
+
+      .viewer {
+        position: relative;
+        display: grid;
+        grid-template-rows: 1fr 180px;
+        min-height: 0;
+      }
+
+      .viewport-shell {
+        position: relative;
+        min-height: 0;
+        border-bottom: 1px solid rgba(17, 32, 51, 0.08);
+        background: linear-gradient(#eff4f8, #e7edf2);
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+
+      #viewport {
+        position: absolute;
+        inset: 0;
+      }
+
+      .top-view-panel {
+        position: relative;
+        background: linear-gradient(#f6f8fa, #edf2f7);
+      }
+
+      #top-view {
+        position: absolute;
+        inset: 0;
+        border: 0;
+      }
+
+      .panel {
+        margin-top: 16px;
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(17, 32, 51, 0.08);
+        border-radius: 10px;
+        padding: 12px;
+      }
+
+      .panel h3 {
+        margin: 0 0 10px 0;
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .advanced-panel {
+        margin-top: 12px;
+        border: 1px solid rgba(17, 32, 51, 0.08);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.42);
+      }
+
+      .advanced-panel summary {
+        cursor: pointer;
+        padding: 10px 12px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .advanced-panel .panel {
+        margin: 0;
+        border: 0;
+        border-top: 1px solid rgba(17, 32, 51, 0.08);
+        border-radius: 0 0 8px 8px;
+        background: transparent;
+      }
+
+      .field {
+        display: grid;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+
+      .field:last-child {
+        margin-bottom: 0;
+      }
+
+      .field label {
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      .field input,
+      .field select {
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(17, 32, 51, 0.12);
+        background: #fff;
+        font: inherit;
+      }
+
+      .status {
+        margin-top: 18px;
+        background: rgba(50, 107, 245, 0.08);
+        color: var(--text);
+        border: 1px solid rgba(50, 107, 245, 0.18);
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-size: 0.9rem;
+        line-height: 1.4;
+      }
+
+      @media (max-width: 900px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .viewer {
+          min-height: 60vh;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <div class="brand">Building Composer</div>
+      <div class="actions">
+        <button id="sample-btn" class="primary">Load footprint</button>
+        <button id="load-btn">Load JSON</button>
+        <button id="export-btn">Export GLB</button>
+        <button id="reset-view-btn">Reset view</button>
+      </div>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h2>Building</h2>
+        <div class="metrics">
+          <div class="metric">
+            <div class="metric-label">Status</div>
+            <div class="metric-value" id="status-value">Waiting</div>
+          </div>
+
+          <div class="metric">
+            <div class="metric-label">Expected winding</div>
+            <div class="metric-value">
+              <select id="winding-select" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid rgba(17,32,51,0.12); background:#fff; font:inherit;">
+                <option value="CCW">CCW</option>
+                <option value="CW">CW</option>
+              </select>
+            </div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Footprint type</div>
+            <div class="metric-value">
+              <select id="footprint-select" aria-label="Footprint type" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid rgba(17,32,51,0.12); background:#fff; font:inherit;">
+                <option value="sample" selected>Rectangle</option>
+                <option value="u">U shape</option>
+                <option value="l">L shape</option>
+                <option value="narrow-lean-to">Narrow rear lean-to</option>
+                <option value="wide-wing">Wider attached wing</option>
+              </select>
+            </div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Display units</div>
+            <div class="metric-value">
+              <select id="unit-select" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid rgba(17,32,51,0.12); background:#fff; font:inherit;">
+                <option value="imperial" selected>Imperial (feet)</option>
+                <option value="metric">Metric (meters)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="metric">
+            <div class="metric-label">Facade</div>
+            <div class="metric-value" id="facade-value">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Area</div>
+            <div class="metric-value" id="area-value">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Perimeter</div>
+            <div class="metric-value" id="perimeter-value">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Centroid</div>
+            <div class="metric-value" id="centroid-value">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Bounding box</div>
+            <div class="metric-value" id="bbox-value">—</div>
+          </div>
+        </div>
+
+        <details class="advanced-panel">
+          <summary>Facade defaults</summary>
+        <div class="panel">
+          <h3>Facade controls</h3>
+          <div class="field">
+            <label for="story-count">Stories</label>
+            <input id="story-count" type="number" min="1" max="12" step="1" value="2" />
+          </div>
+          <div class="field">
+            <label for="story-height">Story height (<span id="story-height-unit">feet</span>)</label>
+            <input id="story-height" type="number" min="0.1" max="100" step="0.1" />
+          </div>
+          <div class="field">
+            <label for="panels-per-run">Facade panels per wall run</label>
+            <input id="panels-per-run" type="number" min="1" max="8" step="1" value="2" />
+          </div>
+          <div class="field">
+            <label for="wall-material">Facade material</label>
+            <select id="wall-material">
+              <option value="wood" selected>Wood</option>
+              <option value="brick">Brick</option>
+              <option value="stucco">Stucco</option>
+              <option value="metal">Metal</option>
+              <option value="stone">Stone</option>
+            </select>
+          </div>
+        </div>
+        </details>
+
+        <div class="panel">
+          <h3>Selected element</h3>
+          <div id="selected-element-label" style="font-size:0.9rem; font-weight:700; color:var(--text);">Building defaults</div>
+          <select id="element-select" hidden aria-hidden="true"></select>
+        </div>
+
+        <div class="panel">
+          <h3>Volume Configuration</h3>
+          <div id="roof-zone-target" style="font-size:0.8rem; line-height:1.4; color:var(--muted); margin-bottom:8px;"></div>
+          <div id="roof-support-note" style="font-size:0.8rem; line-height:1.4; color:var(--muted); margin-bottom:10px;"></div>
+          <div class="field">
+            <label for="roof-type">Roof type</label>
+            <select id="roof-type">
+              <option value="flat" selected>Flat</option>
+              <option value="gable">Gable</option>
+              <option value="hip">Hip</option>
+              <option value="shed">Shed</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="roof-direction">High edge / ridge alignment</label>
+            <select id="roof-direction">
+              <option value="x-min" selected>High edge: X-min</option>
+              <option value="x-max">High edge: X-max</option>
+              <option value="z-min">High edge: Z-min</option>
+              <option value="z-max">High edge: Z-max</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="roof-pitch-rise">Roof pitch rise (per 12 run)</label>
+            <input id="roof-pitch-rise" type="number" min="1" max="24" step="1" value="6" />
+            <div id="roof-pitch-display" style="font-size:0.8rem; color:var(--muted);">6:12 (approximately 26.6°)</div>
+          </div>
+          <div class="field">
+            <label for="roof-height">Roof rise (<span id="roof-height-unit">feet</span>)</label>
+            <input id="roof-height" type="number" min="0.1" max="100" step="0.1" />
+          </div>
+          <div class="field">
+            <label for="roof-eave-depth">Eave depth (<span id="roof-eave-unit">feet</span>)</label>
+            <input id="roof-eave-depth" type="number" min="0" max="20" step="0.1" />
+          </div>
+          <div class="field" id="roof-height-mode-field" style="display:none;">
+            <label for="roof-height-mode">Ridge Control</label>
+            <select id="roof-height-mode">
+              <option value="slope" selected>Constant slope</option>
+              <option value="height">Constant height</option>
+            </select>
+          </div>
+          <div class="field" id="roof-connection-field" style="display:none;">
+            <label for="roof-connection">Roof connection</label>
+            <select id="roof-connection">
+              <option value="standalone">Standalone shell</option>
+              <option value="merge-plane" disabled>Merge into adjacent roof plane (planned)</option>
+            </select>
+          </div>
+          <div style="font-size:0.8rem; line-height:1.4; color:var(--muted); margin-bottom:10px;">
+            Selected volume massing
+          </div>
+          <div id="volume-controls"></div>
+        </div>
+
+        <details class="advanced-panel">
+          <summary>Facade summary</summary>
+          <div class="panel">
+          <div id="facade-summary-box" style="font-size:0.9rem; line-height:1.5; color:var(--text);">
+            No footprint loaded.
+          </div>
+          </div>
+        </details>
+
+        <details class="advanced-panel">
+          <summary>Story materials</summary>
+          <div class="panel">
+            <div id="story-materials"></div>
+          </div>
+        </details>
+
+        <details class="advanced-panel">
+          <summary>Facade panel materials</summary>
+          <div class="panel">
+            <div id="panel-materials"></div>
+          </div>
+        </details>
+
+        <div class="status" id="status-box">
+          Load a closed, CCW footprint to generate the base massing.
+        </div>
+      </aside>
+
+      <main class="viewer">
+        <div class="viewport-shell">
+          <canvas id="viewport"></canvas>
+        </div>
+        <div class="top-view-panel">
+          <canvas id="top-view"></canvas>
+        </div>
+      </main>
+    </div>
+
+    <input id="file-input" type="file" accept="application/json" hidden />
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./node_modules/three/build/three.module.js"
+        }
+      }
+    </script>
+    <script src="./node_modules/straight-skeleton/dist/index.js"></script>
+    <script type="module" src="./js/main.js?v=20"></script>
+  </body>
+</html>
