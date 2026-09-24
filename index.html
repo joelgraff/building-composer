@@ -251,6 +251,7 @@
       <div class="actions">
         <button id="sample-btn" class="primary">Load footprint</button>
         <button id="load-btn">Load JSON</button>
+        <button id="save-btn">Save .bld</button>
         <button id="export-btn">Export GLB</button>
         <button id="reset-view-btn">Reset view</button>
       </div>
@@ -408,6 +409,14 @@
           <div id="volume-controls"></div>
         </div>
 
+        <details class="advanced-panel" open>
+          <summary>Roof graph & edge roles</summary>
+          <div class="panel">
+            <div id="roof-graph-summary" style="font-size:0.85rem; line-height:1.4; color:var(--text); margin-bottom:8px;">No roof graph computed.</div>
+            <div id="roof-graph-edges" style="font-size:0.8rem; line-height:1.6; color:var(--muted); max-height:180px; overflow-y:auto;"></div>
+          </div>
+        </details>
+
         <details class="advanced-panel">
           <summary>Facade summary</summary>
           <div class="panel">
@@ -446,7 +455,7 @@
       </main>
     </div>
 
-    <input id="file-input" type="file" accept="application/json" hidden />
+    <input id="file-input" type="file" accept="application/json,.json,.bld" hidden />
 
     <script type="importmap">
       {

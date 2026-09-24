@@ -68,22 +68,21 @@ export function computeFacadeLayout(footprint, config = {}) {
     }
   });
 
-  const wallRunIds = wallRuns.map((wallRun) => wallRun.id);
   const volumes = decomposeIntoVolumes(footprint);
-  const mainVolume = volumes.reduce((largest, volume) => {
-    const area = (volume.maxX - volume.minX) * (volume.maxZ - volume.minZ);
-    const largestArea = (largest.maxX - largest.minX) * (largest.maxZ - largest.minZ);
-    return area > largestArea ? volume : largest;
-  }, volumes[0]);
-  const roofZones = [{
-    id: 'roof-zone-main',
-    volumeId: mainVolume.id,
-    wallRunIds,
-    roofType: config.roofType ?? 'flat',
-    roofDirection: config.roofDirection ?? 'z',
-    roofPitchRise: config.roofPitchRise ?? 6,
-    roofPitchRun: config.roofPitchRun ?? 12,
-  }];
+  const roofGraph = buildRoofGraph(footprint, volumes, config);
+
+  const enhancedWallRuns = wallRuns.map((wallRun, index) => {
+    const edgeData = roofGraph.edges[index];
+    return {
+      ...wallRun,
+      orientation: edgeData?.orientation ?? 'horizontal',
+      role: edgeData?.role ?? 'flat',
+      pitchRise: edgeData?.pitchRise ?? 0,
+      pitchRun: edgeData?.pitchRun ?? 12,
+      roofZoneId: edgeData?.roofZoneId ?? 'roof-zone-main',
+      volumeId: edgeData?.volumeId ?? null,
+    };
+  });
 
   return {
     storyCount,
@@ -92,10 +91,11 @@ export function computeFacadeLayout(footprint, config = {}) {
     totalHeight,
     wallMaterial,
     stories,
-    wallRuns,
+    wallRuns: enhancedWallRuns,
     facadePanels,
     volumes,
-    roofZones,
+    roofZones: roofGraph.zones,
+    roofGraph,
   };
 }
 
@@ -214,4 +214,279 @@ function interpolatePoint(start, end, amount) {
     start[0] + (end[0] - start[0]) * amount,
     start[1] + (end[1] - start[1]) * amount,
   ];
+}
+
+/**
+ * Maps direction string to primary ridge axis.
+ *
+ * @param {string} direction
+ * @returns {'x' | 'z'}
+ */
+export function roofAxisForDirection(direction) {
+  if (direction === 'x-min' || direction === 'x-max') {
+    return 'z';
+  }
+  if (direction === 'z-min' || direction === 'z-max') {
+    return 'x';
+  }
+  return direction === 'x' ? 'x' : 'z';
+}
+
+/**
+ * Classify a footprint wall run edge against rectilinear volumes and roof parameters.
+ *
+ * @param {{ id?: string, start: [number, number], end: [number, number] }} edge
+ * @param {Array<object>} volumes
+ * @param {object} [config]
+ * @returns {{ volume: object|null, orientation: 'horizontal'|'vertical'|'diagonal', role: 'eave'|'rake'|'high-plate'|'flat', pitchRise: number, pitchRun: number }}
+ */
+export function classifyEdgeRole(edge, volumes, config = {}) {
+  const [x1, z1] = edge.start;
+  const [x2, z2] = edge.end;
+  const eps = 1e-4;
+
+  let orientation = 'diagonal';
+  if (Math.abs(z1 - z2) < eps) {
+    orientation = 'horizontal';
+  } else if (Math.abs(x1 - x2) < eps) {
+    orientation = 'vertical';
+  }
+
+  // Find the volume with maximum boundary overlap with this edge
+  let bestVol = null;
+  let maxOverlap = -1;
+
+  for (const vol of volumes) {
+    let overlap = 0;
+    if (orientation === 'horizontal') {
+      const z = (z1 + z2) / 2;
+      if (Math.abs(z - vol.minZ) < eps || Math.abs(z - vol.maxZ) < eps) {
+        const segMin = Math.min(x1, x2);
+        const segMax = Math.max(x1, x2);
+        overlap = Math.max(0, Math.min(segMax, vol.maxX) - Math.max(segMin, vol.minX));
+      }
+    } else if (orientation === 'vertical') {
+      const x = (x1 + x2) / 2;
+      if (Math.abs(x - vol.minX) < eps || Math.abs(x - vol.maxX) < eps) {
+        const segMin = Math.min(z1, z2);
+        const segMax = Math.max(z1, z2);
+        overlap = Math.max(0, Math.min(segMax, vol.maxZ) - Math.max(segMin, vol.minZ));
+      }
+    }
+    if (overlap > maxOverlap) {
+      maxOverlap = overlap;
+      bestVol = vol;
+    }
+  }
+
+  const vol = bestVol ?? volumes[0];
+  const roofType = (vol && config.volumeRoofTypes?.[vol.id]) ?? config.roofType ?? 'flat';
+  const ridgeDirectionOverride = vol ? config.volumeRidgeDirections?.[vol.id] : undefined;
+  const ridgeAxis = ridgeDirectionOverride ? roofAxisForDirection(ridgeDirectionOverride) : (vol?.ridgeAxis ?? 'z');
+  const highEdge = ridgeDirectionOverride ?? (ridgeAxis === 'x' ? 'z-min' : 'x-min');
+
+  const defaultPitchRise = config.roofPitchRise ?? 6;
+  const defaultPitchRun = config.roofPitchRun ?? 12;
+
+  let role = 'eave';
+  let pitchRise = defaultPitchRise;
+
+  if (roofType === 'flat') {
+    role = 'flat';
+    pitchRise = 0;
+  } else if (roofType === 'hip') {
+    role = 'eave';
+    pitchRise = defaultPitchRise;
+  } else if (roofType === 'gable') {
+    const isParallelToRidge = (orientation === 'horizontal' && ridgeAxis === 'x')
+      || (orientation === 'vertical' && ridgeAxis === 'z');
+    role = isParallelToRidge ? 'eave' : 'rake';
+    pitchRise = isParallelToRidge ? defaultPitchRise : 0;
+  } else if (roofType === 'shed') {
+    if (orientation === 'horizontal') {
+      const z = (z1 + z2) / 2;
+      if (highEdge === 'z-min') {
+        role = Math.abs(z - vol.minZ) < eps ? 'high-plate' : (Math.abs(z - vol.maxZ) < eps ? 'eave' : 'rake');
+      } else if (highEdge === 'z-max') {
+        role = Math.abs(z - vol.maxZ) < eps ? 'high-plate' : (Math.abs(z - vol.minZ) < eps ? 'eave' : 'rake');
+      } else {
+        role = 'rake';
+      }
+    } else if (orientation === 'vertical') {
+      const x = (x1 + x2) / 2;
+      if (highEdge === 'x-min') {
+        role = Math.abs(x - vol.minX) < eps ? 'high-plate' : (Math.abs(x - vol.maxX) < eps ? 'eave' : 'rake');
+      } else if (highEdge === 'x-max') {
+        role = Math.abs(x - vol.maxX) < eps ? 'high-plate' : (Math.abs(x - vol.minX) < eps ? 'eave' : 'rake');
+      } else {
+        role = 'rake';
+      }
+    }
+    pitchRise = role === 'eave' ? defaultPitchRise : 0;
+  }
+
+  // Check if edge has a specific pitch override
+  const edgeId = edge.id;
+  if (edgeId && config.edgePitchOverrides?.[edgeId] !== undefined) {
+    pitchRise = config.edgePitchOverrides[edgeId];
+  }
+
+  return {
+    volume: vol,
+    orientation,
+    role,
+    pitchRise,
+    pitchRun: defaultPitchRun,
+  };
+}
+
+/**
+ * Builds the persistent RoofGraph data structure linking footprint edges to roof zones.
+ *
+ * @param {Array<[number, number]>} footprint
+ * @param {Array<object>} volumes
+ * @param {object} [config]
+ * @returns {{ version: number, zones: Array<object>, edges: Array<object>, summary: object }}
+ */
+export function buildRoofGraph(footprint, volumes, config = {}) {
+  const wallRuns = footprint.map(([x, z], index) => {
+    const end = footprint[(index + 1) % footprint.length];
+    return {
+      id: `wall-run-${index}`,
+      index,
+      start: [x, z],
+      end,
+      length: computeSegmentLength([x, z], end),
+    };
+  });
+
+  const zones = volumes.map((volume) => {
+    const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType ?? 'flat';
+    const directionOverride = config.volumeRidgeDirections?.[volume.id];
+    const ridgeAxis = directionOverride ? roofAxisForDirection(directionOverride) : volume.ridgeAxis;
+    const highEdge = directionOverride ?? (ridgeAxis === 'x' ? 'z-min' : 'x-min');
+    const pitchRise = config.roofPitchRise ?? 6;
+    const pitchRun = config.roofPitchRun ?? 12;
+
+    return {
+      id: `roof-zone-${volume.id}`,
+      volumeId: volume.id,
+      roofType,
+      ridgeAxis,
+      highEdge,
+      pitchRise,
+      pitchRun,
+      wallRunIds: [],
+    };
+  });
+
+  const zoneMap = new Map(zones.map((z) => [z.volumeId, z]));
+
+  const edges = wallRuns.map((wallRun) => {
+    const classification = classifyEdgeRole(wallRun, volumes, config);
+    const ownerVol = classification.volume;
+    const zone = ownerVol ? zoneMap.get(ownerVol.id) : zones[0];
+    if (zone) {
+      zone.wallRunIds.push(wallRun.id);
+    }
+
+    return {
+      id: wallRun.id,
+      index: wallRun.index,
+      start: wallRun.start,
+      end: wallRun.end,
+      length: wallRun.length,
+      orientation: classification.orientation,
+      role: classification.role,
+      pitchRise: classification.pitchRise,
+      pitchRun: classification.pitchRun,
+      volumeId: ownerVol ? ownerVol.id : null,
+      roofZoneId: zone ? zone.id : null,
+    };
+  });
+
+  return {
+    version: 1,
+    zones,
+    edges,
+    summary: {
+      eavesCount: edges.filter((e) => e.role === 'eave').length,
+      rakesCount: edges.filter((e) => e.role === 'rake').length,
+      highPlatesCount: edges.filter((e) => e.role === 'high-plate').length,
+      flatCount: edges.filter((e) => e.role === 'flat').length,
+    },
+  };
+}
+
+/**
+ * Serializes the complete building state into a native .bld JSON payload.
+ *
+ * @param {object} layout
+ * @param {object} modelConfig
+ * @returns {object}
+ */
+export function serializeBuildingState(layout, modelConfig) {
+  return {
+    format: 'building-composer',
+    version: 1,
+    createdAt: new Date().toISOString(),
+    footprint: layout.wallRuns.map((w) => w.start),
+    storyCount: modelConfig.storyCount,
+    storyHeight: modelConfig.storyHeight,
+    wallMaterial: modelConfig.wallMaterial,
+    storyMaterials: modelConfig.storyMaterials ?? [],
+    panelMaterials: modelConfig.panelMaterials ?? [],
+    roofType: modelConfig.roofType,
+    roofDirection: modelConfig.roofDirection,
+    roofPitchRise: modelConfig.roofPitchRise,
+    roofPitchRun: modelConfig.roofPitchRun,
+    roofHeight: modelConfig.roofHeight,
+    roofEaveDepth: modelConfig.roofEaveDepth,
+    roofHeightMode: modelConfig.roofHeightMode,
+    volumeStoryOverrides: modelConfig.volumeStoryOverrides ?? {},
+    volumeRidgeDirections: modelConfig.volumeRidgeDirections ?? {},
+    volumeRoofTypes: modelConfig.volumeRoofTypes ?? {},
+    volumeRoofConnections: modelConfig.volumeRoofConnections ?? {},
+    edgePitchOverrides: modelConfig.edgePitchOverrides ?? {},
+    roofGraph: layout.roofGraph,
+  };
+}
+
+/**
+ * Validates and restores building configuration from a parsed .bld JSON payload.
+ *
+ * @param {object} data
+ * @returns {{ valid: boolean, state?: object, errors?: string[] }}
+ */
+export function deserializeBuildingState(data) {
+  if (!data || typeof data !== 'object') {
+    return { valid: false, errors: ['Invalid file format: expected JSON object.'] };
+  }
+  if (!Array.isArray(data.footprint) || data.footprint.length < 3) {
+    return { valid: false, errors: ['Invalid file format: footprint array missing or incomplete.'] };
+  }
+
+  return {
+    valid: true,
+    state: {
+      footprint: data.footprint,
+      storyCount: data.storyCount ?? 1,
+      storyHeight: data.storyHeight ?? 3.2,
+      wallMaterial: data.wallMaterial ?? 'wood',
+      storyMaterials: data.storyMaterials ?? [],
+      panelMaterials: data.panelMaterials ?? [],
+      roofType: data.roofType ?? 'flat',
+      roofDirection: data.roofDirection ?? 'z',
+      roofPitchRise: data.roofPitchRise ?? 6,
+      roofPitchRun: data.roofPitchRun ?? 12,
+      roofHeight: data.roofHeight ?? 2,
+      roofEaveDepth: data.roofEaveDepth ?? 0.35,
+      roofHeightMode: data.roofHeightMode ?? 'slope',
+      volumeStoryOverrides: data.volumeStoryOverrides ?? {},
+      volumeRidgeDirections: data.volumeRidgeDirections ?? {},
+      volumeRoofTypes: data.volumeRoofTypes ?? {},
+      volumeRoofConnections: data.volumeRoofConnections ?? {},
+      edgePitchOverrides: data.edgePitchOverrides ?? {},
+    },
+  };
 }

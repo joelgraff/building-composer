@@ -2,7 +2,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import { validateFootprint, normalizeFootprint, computeFootprintMetrics } from './footprint.js';
 import { createBuildingFromFootprint, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder } from './extrusion.js';
-import { computeFacadeLayout } from './facade.js';
+import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState } from './facade.js';
 import { exportGlb } from './export.js';
 
 const statusValue = document.getElementById('status-value');
@@ -40,9 +40,12 @@ const volumeControlsBox = document.getElementById('volume-controls');
 const elementSelect = document.getElementById('element-select');
 const selectedElementLabel = document.getElementById('selected-element-label');
 const facadeSummaryBox = document.getElementById('facade-summary-box');
+const roofGraphSummary = document.getElementById('roof-graph-summary');
+const roofGraphEdges = document.getElementById('roof-graph-edges');
 const sampleBtn = document.getElementById('sample-btn');
 const footprintSelect = document.getElementById('footprint-select');
 const loadBtn = document.getElementById('load-btn');
+const saveBtn = document.getElementById('save-btn');
 const exportBtn = document.getElementById('export-btn');
 const resetViewBtn = document.getElementById('reset-view-btn');
 
@@ -138,6 +141,7 @@ let modelConfig = {
   volumeRidgeDirections: {},
   volumeRoofTypes: {},
   volumeRoofConnections: {},
+  edgePitchOverrides: {},
 };
 
 const UNIT_FACTORS = Object.freeze({ imperial: 3.28084, metric: 1 });
@@ -278,6 +282,28 @@ function updateFacadeSummary(layout) {
   renderElementSelector(layout);
   renderVolumeControls(layout);
   syncSelectedRoofZoneControls(layout);
+  renderRoofGraphSummary(layout);
+}
+
+function renderRoofGraphSummary(layout) {
+  if (!roofGraphSummary || !roofGraphEdges) {
+    return;
+  }
+  if (!layout?.roofGraph) {
+    roofGraphSummary.textContent = 'No roof graph computed.';
+    roofGraphEdges.innerHTML = '';
+    return;
+  }
+  const { summary, edges, zones } = layout.roofGraph;
+  roofGraphSummary.innerHTML = `<strong>${zones.length} Roof Zone(s):</strong> ${summary.eavesCount} eave(s) · ${summary.rakesCount} rake(s) · ${summary.highPlatesCount} high plate(s) · ${summary.flatCount} flat`;
+  const edgeList = edges.map((e) => {
+    const roleColor = e.role === 'eave' ? '#1f5edc' : e.role === 'rake' ? '#d97706' : e.role === 'high-plate' ? '#7c3aed' : '#6b7280';
+    const roleBadge = `<span style="font-weight:700; color:${roleColor};">${e.role.toUpperCase()}</span>`;
+    const pitchText = e.role === 'eave' ? ` (pitch ${e.pitchRise}:12)` : '';
+    const volText = e.volumeId ? ` · ${e.volumeId.replace('-', ' ')}` : '';
+    return `Edge ${e.index + 1} (${e.orientation}): ${roleBadge}${pitchText} · ${formatLength(e.length)}${volText}`;
+  }).join('<br>');
+  roofGraphEdges.innerHTML = edgeList;
 }
 
 function renderElementSelector(layout) {
@@ -504,6 +530,9 @@ async function loadFootprint(footprintData, preserveView = true) {
     roofPitchRun: modelConfig.roofPitchRun,
     roofHeight: modelConfig.roofHeight,
     roofEaveDepth: modelConfig.roofEaveDepth,
+    volumeRoofTypes: modelConfig.volumeRoofTypes,
+    volumeRidgeDirections: modelConfig.volumeRidgeDirections,
+    edgePitchOverrides: modelConfig.edgePitchOverrides,
   });
   if (roofControlAuthority === 'pitch') {
     syncRoofHeightFromPitch(normalized, layout.volumes);
@@ -684,12 +713,31 @@ function handleFileInput(event) {
   modelConfig.volumeRidgeDirections = {};
   modelConfig.volumeRoofTypes = {};
   modelConfig.volumeRoofConnections = {};
+  modelConfig.edgePitchOverrides = {};
   selectedElementId = 'building-defaults';
 
   const reader = new FileReader();
   reader.onload = () => {
     try {
       const payload = JSON.parse(reader.result);
+      if (payload && payload.format === 'building-composer') {
+        const result = deserializeBuildingState(payload);
+        if (result.valid) {
+          Object.assign(modelConfig, result.state);
+          storyCountInput.value = modelConfig.storyCount;
+          wallMaterialSelect.value = modelConfig.wallMaterial;
+          roofTypeSelect.value = modelConfig.roofType;
+          roofDirectionSelect.value = modelConfig.roofDirection;
+          roofPitchRiseInput.value = modelConfig.roofPitchRise;
+          roofHeightModeSelect.value = modelConfig.roofHeightMode;
+          syncUnitLabels();
+          syncLengthInputs();
+          updateRoofPitchDisplay();
+          loadFootprint(result.state.footprint, false);
+          setStatus('Project (.bld) loaded successfully.', 'default');
+          return;
+        }
+      }
       loadFootprint(payload, false);
     } catch (error) {
       setStatus('Unable to parse JSON footprint file.', 'error');
@@ -698,6 +746,22 @@ function handleFileInput(event) {
 
   reader.readAsText(file);
 }
+
+saveBtn.addEventListener('click', () => {
+  if (!activeLayout || !loadedFootprint) {
+    setStatus('Load a footprint before saving project.', 'error');
+    return;
+  }
+  const payload = serializeBuildingState(activeLayout, modelConfig);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'building-model.bld';
+  link.click();
+  URL.revokeObjectURL(url);
+  setStatus('Project saved as building-model.bld', 'default');
+});
 
 exportBtn.addEventListener('click', async () => {
   if (!group.children.length) {

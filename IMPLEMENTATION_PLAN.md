@@ -390,7 +390,12 @@ The case that does resolve is narrow. An equal-height, equal-pitch hip over a si
 
 The next roof work is a resolver, not another roof type.
 
-1. Tag each footprint edge as eave or rake, and store one pitch per eave. Persist that graph with the volume assignments instead of leaving it in sidebar state.
+1. **Tag footprint edges as eave or rake, and store one pitch per eave.** (Complete)
+   - Footprint edges are classified as `eave`, `rake`, `high-plate`, or `flat` based on rectilinear volume ownership and ridge axis orientation.
+   - Built `buildRoofGraph()` in `js/facade.js`, returning `zones`, `edges`, and summary metrics.
+   - Associated wall runs with their parent roof zone and edge role.
+   - Added native `.bld` persistence (`serializeBuildingState` and `deserializeBuildingState`), enabling saving and loading the complete building and roof configuration.
+   - Added interactive Roof Graph & Edge Roles panel in UI.
 2. At a shared wall-plate elevation, solve one weighted straight skeleton, or an equivalent plane arrangement, so equal-height hips, gables, and mixed pitches share valley and ridge vertices. Replace the silent dense-field fallback with a reported failure.
 3. Where plate elevations differ, trim plane against plane so a lower shed or gable can tuck under a taller slope, or snap its ridge to a chosen ridge. Drive this from the connection control already present in the sidebar.
 4. Close every boundary that does not meet another roof face with fascia, a gable return, or a vertical closure. Offset the eave polygon before the solve so a concave plan carries a real overhang.
@@ -398,4 +403,4 @@ The next roof work is a resolver, not another roof type.
 
 ## Immediate next implementation step
 
-Step 1 of the resolver above: tag footprint edges as eave or rake, with one pitch per eave, and persist that roof graph. Facade panels remain an optional surface-detail layer.
+Step 2 of the resolver above: at a shared wall-plate elevation, solve one weighted straight skeleton or equivalent plane arrangement so equal-height hips, gables, and mixed pitches share valley and ridge vertices.
