@@ -12,15 +12,14 @@
 export function validateFootprint(vertices, options = {}) {
   const { expectedWinding = 'CCW' } = options;
   const errors = [];
-  const ring = ensureClosedRing(vertices);
+  const rawVertices = vertices.map(([x, z]) => [Number(x), Number(z)]);
+  const uniqueCount = isClosedRing(rawVertices) ? rawVertices.length - 1 : rawVertices.length;
 
-  if (ring.length < 3) {
-    errors.push('Footprint must contain at least three vertices.');
+  if (uniqueCount < 3) {
+    errors.push('Footprint must contain at least three distinct vertices.');
   }
 
-  if (!isClosedRing(ring)) {
-    errors.push('Footprint must be closed (first and last vertex must match).');
-  }
+  const ring = ensureClosedRing(rawVertices);
 
   if (ring.length >= 4 && hasSelfIntersections(ring)) {
     errors.push('Footprint contains self-intersections.');

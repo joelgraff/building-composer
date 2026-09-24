@@ -103,6 +103,18 @@ let hoveredVolumeId = null;
 let pointerDown = null;
 
 let loadedFootprint = null;
+let activeBuildingSize = new THREE.Vector3(30, 0, 30);
+
+function updateTopCameraFrustum() {
+  const halfX = Math.max(15, activeBuildingSize.x * 0.7) / 2;
+  const halfZ = Math.max(15, activeBuildingSize.z * 0.7) / 2;
+  topCamera.left = -halfX;
+  topCamera.right = halfX;
+  topCamera.top = halfZ;
+  topCamera.bottom = -halfZ;
+  topCamera.updateProjectionMatrix();
+}
+
 let footprintLoadRequest = 0;
 let windingPreference = windingSelect.value;
 let displayUnits = unitSelect.value;
@@ -552,15 +564,12 @@ async function loadFootprint(footprintData, preserveView = true) {
   }
   controls.update();
 
-  topCamera.left = -Math.max(15, size.x * 0.7) / 2;
-  topCamera.right = Math.max(15, size.x * 0.7) / 2;
-  topCamera.top = Math.max(15, size.z * 0.7) / 2;
-  topCamera.bottom = -Math.max(15, size.z * 0.7) / 2;
+  activeBuildingSize.copy(size);
+  updateTopCameraFrustum();
   topCamera.zoom = preserveView ? previousTopZoom : 1;
   topControls.target.copy(preserveView ? previousTopTarget : center);
   topCamera.position.set(topControls.target.x, 30, topControls.target.z);
   topCamera.lookAt(topControls.target.x, 0, topControls.target.z);
-  topCamera.updateProjectionMatrix();
 }
 
 async function loadSampleFootprint() {
@@ -913,11 +922,7 @@ function resizeRenderer() {
   camera.aspect = viewportWidth / viewportHeight;
   camera.updateProjectionMatrix();
 
-  topCamera.left = -22;
-  topCamera.right = 22;
-  topCamera.top = 20;
-  topCamera.bottom = -20;
-  topCamera.updateProjectionMatrix();
+  updateTopCameraFrustum();
 }
 
 function animate() {
