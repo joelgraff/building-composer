@@ -1,0 +1,97 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "Dormers on a hip roof: a gable dormer and a wall dormer on the long slope, and a small dormer in the hip end.",
+  "footprint": [
+    [
+      -8,
+      -5
+    ],
+    [
+      8,
+      -5
+    ],
+    [
+      8,
+      5
+    ],
+    [
+      -8,
+      5
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 3.2,
+  "roofType": "hip",
+  "roofDirection": "z-min",
+  "roofPitchRise": 8,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofHeight": 3.333333333333333,
+  "volumeStoryOverrides": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostSide": "maxZ",
+      "offset": -3,
+      "width": 2.4,
+      "setback": 0.9,
+      "depth": null,
+      "wallHeight": 1.4,
+      "baseHeight": null,
+      "openSides": [],
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "wall-dormer",
+      "hostVolumeId": "volume-0",
+      "hostSide": "maxZ",
+      "offset": 3,
+      "width": 2.4,
+      "setback": 0,
+      "depth": null,
+      "wallHeight": 1.2,
+      "baseHeight": null,
+      "openSides": [],
+      "roofType": "hip",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-3",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostSide": "maxX",
+      "offset": 0,
+      "width": 1.4,
+      "setback": 0.8,
+      "depth": null,
+      "wallHeight": 0.9,
+      "baseHeight": null,
+      "openSides": [],
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

@@ -9,8 +9,8 @@ import {
   resolveVolumeEaves, sideOverhangs, buildGableTrim, buildHipTrim, buildShedTrim, buildPartialEaveStrips,
 } from './eaves.js';
 import {
-  clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, volumeSolid,
-  validateRoofStructures, structureWallPolygons, structureWallSides, hostEaveProfile, hostEaveCovers,
+  clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, clipInsideConvexSolid, planPrism, volumeSolid,
+  validateRoofStructures, structureWallPolygons, structureWallSides, structureFloorPolygon, hostEaveProfile, hostEaveCovers,
 } from './roof-structures.js';
 import {
   computeVolumeEavePlanes, defaultHighEdgeForAxis, evalZoneHeight,
@@ -192,26 +192,40 @@ function withRoofStructures(result, config) {
 
   built.forEach(({ resolved }) => {
     const host = zones.get(resolved.hostVolumeId);
+    // Every other volume is solid too: a porch that runs into a taller
+    // neighbor merges into its walls and roof the same way it meets its host.
+    const others = result.roofZones.filter((zone) => zone.volumeId !== host.volumeId).map((zone) => volumeSolid(zone));
     const hostSolid = volumeSolid(host);
-    const bottomY = Math.min(resolved.sillY, host.baseY);
+    // The host's body: its walls up to their top, without the roof. A
+    // standing structure's floor stops at it, and so do its walls where the
+    // host roof over them is cut away (see standingWalls).
+    const hostBody = volumeSolid({ ...host, planes: [], slabThickness: 0, baseY: host.wallTopY });
+    const clipOutside = (triangles, solids) => solids.reduce((kept, solid) => clipOutsideConvexSolid(kept, solid), triangles);
+    const floorSolids = [hostBody, ...others];
+
+    // walls start low enough to meet the host: its roof for a dormer, its
+    // wall top (below the roof lift) for a structure standing on a base
+    const bottomY = Math.min(resolved.sillY, resolved.standing ? host.wallTopY : host.baseY);
     const walls = structureWallPolygons(resolved, bottomY);
     // A flush front wall stands on the host wall line and carries it up: it
-    // runs down to the host wall top, unclipped, closing the gap under the
-    // host roof that the (now interrupted) eave used to hide.
+    // runs down to the host wall top, clipped only by other volumes, closing
+    // the gap under the host roof that the (now interrupted) eave used to hide.
     const flushFront = resolved.flush
       ? structureWallPolygons(resolved, host.wallTopY).find((wall) => wall.wall === 'front')
       : null;
     const wallTriangles = [
-      ...clipOutsideConvexSolid(
+      ...standingWalls(
         polygonsToTriangles(walls.filter((wall) => !(flushFront && wall.wall === 'front')).map((wall) => wall.polygon)),
-        hostSolid
+        resolved,
+        { hostSolid, hostBody, others, clipOutside }
       ),
-      ...(flushFront ? polygonsToTriangles([flushFront.polygon]) : []),
+      ...(flushFront ? clipOutside(polygonsToTriangles([flushFront.polygon]), others) : []),
     ];
     const parts = [
-      ['walls', wallTriangles, materials.wall],
-      ['roof', clipOutsideConvexSolid(structureRoofTriangles(resolved, config), hostSolid), materials.roof],
-      ['eave-caps', resolved.flush ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
+      ['walls', [...wallTriangles, ...clipOutside(kneeWalls(resolved, host), others)], materials.wall],
+      ['roof', clipOutside(structureRoofTriangles(resolved, config), [hostSolid, ...others]), materials.roof],
+      ['floor', resolved.standing ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved)]), floorSolids) : [], materials.roof],
+      ['eave-caps', interruptsHostEave(resolved, host) ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
     ];
     parts.forEach(([part, triangles, material]) => {
       if (triangles.length) {
@@ -221,7 +235,10 @@ function withRoofStructures(result, config) {
       }
     });
 
-    const cut = volumeSolid(resolved);
+    // Cut every roof: the host's, and any neighbor's the structure runs into.
+    // A standing structure's solid starts at its floor, so a flat host's slab
+    // below the deck goes too; a dormer's reaches down through the host roof.
+    const cut = volumeSolid(resolved, { floorY: resolved.standing ? resolved.sillY : 0 });
     roofMeshes.forEach((mesh) => {
       const y = mesh.position.y;
       const absolute = geometryTriangles(mesh.geometry).map((tri) => tri.map(([px, py, pz]) => [px, py + y, pz]));
@@ -234,16 +251,120 @@ function withRoofStructures(result, config) {
 }
 
 /**
- * A flush structure's front wall carries the host wall up through the eave,
- * so the host eave (roof edge, fascia, and soffit) stops on either side of
- * it: the eave is cut away across the structure's width, and each cut end is
- * closed with the eave's cross-section (see hostEaveProfile). Returns the
+ * Knee walls under the host roof around the part a standing structure
+ * removes: along each edge of the removed region that no structure wall
+ * covers (where the structure's roof meets the host roof partway up a
+ * slope, along an open side, and across the gap between the host wall top
+ * and its roof), a vertical face from the host wall top up to the host roof
+ * closes off the host's attic.
+ */
+function kneeWalls(resolved, host) {
+  if (!resolved.standing) {
+    return [];
+  }
+  const sides = structureWallSides(resolved.frame);
+  const { bounds } = resolved;
+  const closedLines = Object.entries(sides)
+    .filter(([wallName]) => !resolved.openSides.includes(wallName))
+    .map(([, side]) => [side === 'minX' || side === 'maxX' ? 0 : 1, bounds[side]]);
+  const roofY = ([x, z]) => host.baseY + (host.planes?.length ? evalZoneHeight(host.planes, x, z) : host.slabThickness ?? 0);
+  const pieces = resolved.removedRoof;
+  const insidePiece = (point, piece) => piece.every(([x0, z0], i) => {
+    const [x1, z1] = piece[(i + 1) % piece.length];
+    const signedArea = piece.reduce((sum, [ax, az], k) => {
+      const [bx, bz] = piece[(k + 1) % piece.length];
+      return sum + ax * bz - bx * az;
+    }, 0);
+    return Math.sign(signedArea) * ((x1 - x0) * (point[1] - z0) - (z1 - z0) * (point[0] - x0)) >= -1e-9;
+  });
+  const knees = [];
+  pieces.forEach((piece, index) => {
+    const signedArea = piece.reduce((sum, [ax, az], k) => {
+      const [bx, bz] = piece[(k + 1) % piece.length];
+      return sum + ax * bz - bx * az;
+    }, 0);
+    piece.forEach((p0, i) => {
+      const p1 = piece[(i + 1) % piece.length];
+      if (Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) < 1e-6) {
+        return;
+      }
+      // a closed structure wall stands on this edge
+      if (closedLines.some(([k, value]) => Math.abs(p0[k] - value) < 1e-6 && Math.abs(p1[k] - value) < 1e-6)) {
+        return;
+      }
+      // the host roof is removed on both sides (a ridge or hip line between pieces)
+      const length = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+      const outward = [Math.sign(signedArea) * (p1[1] - p0[1]) / length, -Math.sign(signedArea) * (p1[0] - p0[0]) / length];
+      const probe = [(p0[0] + p1[0]) / 2 + outward[0] * 1e-4, (p0[1] + p1[1]) / 2 + outward[1] * 1e-4];
+      if (pieces.some((other, k) => k !== index && insidePiece(probe, other))) {
+        return;
+      }
+      const [y0, y1] = [roofY(p0), roofY(p1)];
+      if (Math.max(y0, y1) <= host.wallTopY + 1e-9) {
+        return;
+      }
+      knees.push([[p0[0], host.wallTopY, p0[1]], [p1[0], host.wallTopY, p1[1]], [p1[0], y1, p1[1]], [p0[0], y0, p0[1]]]);
+    });
+  });
+  return polygonsToTriangles(knees);
+}
+
+/**
+ * A structure's walls, clipped to what shows. They always stand clear of the
+ * host roof and any other volume. A structure standing on a base (a porch)
+ * also removes the host roof wherever its own roof is above it (its
+ * `removedRoof`): there its walls run on down to the host's wall top, since
+ * nothing covers them any more; elsewhere the host roof still does.
+ */
+function standingWalls(triangles, resolved, {
+  hostSolid, hostBody, others, clipOutside,
+}) {
+  const aboveRoof = clipOutside(triangles, [hostSolid, ...others]);
+  if (!resolved.standing) {
+    return aboveRoof;
+  }
+  const underHostRoof = clipInsideConvexSolid(triangles, hostSolid);
+  const underRemovedRoof = resolved.removedRoof.flatMap((piece) => clipOutside(
+    clipInsideConvexSolid(underHostRoof, planPrism(piece)),
+    [hostBody, ...others]
+  ));
+  return [...aboveRoof, ...underRemovedRoof];
+}
+
+/**
+ * Whether a structure breaks its host's eave. A flush front wall always
+ * does. A projecting porch does when it rises past the host plate where it
+ * meets the wall; a lower one tucks under the eave, or its roof passes
+ * through the soffit, which the structure's own solid already cuts.
+ */
+function interruptsHostEave(resolved, host) {
+  if (resolved.flush) {
+    return true;
+  }
+  if (!resolved.projecting) {
+    return false;
+  }
+  const { frame } = resolved;
+  const wall = host.bounds[resolved.hostSide];
+  const along = (resolved.along[0] + resolved.along[1]) / 2;
+  const [x, z] = frame.along === 'x' ? [along, wall] : [wall, along];
+  const top = resolved.planes.length
+    ? resolved.plateY + evalZoneHeight(resolved.planes, x, z)
+    : resolved.plateY + resolved.slabThickness;
+  return top >= host.baseY - 1e-9;
+}
+
+/**
+ * A structure that breaks through the host eave (see interruptsHostEave):
+ * the host eave (roof edge, fascia, and soffit) stops on either side of it.
+ * The eave is cut away across the structure's width, and each cut end is
+ * closed with the eave's cross-section (see hostEaveProfile), except where a
+ * projecting structure's own side wall already stands across it. Returns the
  * cap triangles, in absolute coordinates.
  */
 function interruptHostEave(resolved, host, roofMeshes) {
   const side = resolved.hostSide;
-  const profile = hostEaveProfile(host, side);
-  if (!profile) {
+  if (!hostEaveProfile(host, side)) {
     return [];
   }
   const { frame } = resolved;
@@ -266,9 +387,13 @@ function interruptHostEave(resolved, host, roofMeshes) {
   const point = (along, cross, height) => (frame.along === 'x'
     ? [along, host.baseY + height, cross]
     : [cross, host.baseY + height, along]);
-  return polygonsToTriangles([a0, a1]
-    .filter((along) => hostEaveCovers(host, side, along))
-    .map((along) => profile.outline.map(([cross, height]) => point(along, cross, height))));
+  const sides = structureWallSides(frame);
+  const wallAt = (end) => Object.keys(sides).find((wallName) => sides[wallName] === `${end}${frame.along.toUpperCase()}`);
+  const coveredBySideWall = (end) => resolved.projecting && !resolved.openSides.includes(wallAt(end));
+  return polygonsToTriangles([[a0, 'min'], [a1, 'max']]
+    .filter(([along, end]) => hostEaveCovers(host, side, along) && !coveredBySideWall(end))
+    .map(([along]) => along)
+    .map((along) => hostEaveProfile(host, side, along).outline.map(([cross, height]) => point(along, cross, height))));
 }
 
 /**
@@ -283,19 +408,7 @@ function interruptHostEave(resolved, host, roofMeshes) {
  */
 function structureRoofTriangles(resolved, config) {
   const sides = structureWallSides(resolved.frame);
-  const eaveConfig = {
-    ...pickEaveConfig(config),
-    volumeEaves: { ...(config.volumeEaves ?? {}), [resolved.id]: resolved.eaves ?? {} },
-  };
-  const setup = volumeEaveSetup(
-    resolved.id,
-    resolved.roofType,
-    { ridgeAxis: resolved.ridgeAxis, roofHighEdge: resolved.roofHighEdge },
-    eaveConfig,
-    resolved.roofType === 'hip' ? [] : [sides.back],
-    undefined,
-    resolved.bounds
-  );
+  const setup = structureEaveSetup(resolved, config);
   const { bounds } = resolved;
   const roofConfig = {
     roofDirection: resolved.ridgeAxis,
@@ -315,8 +428,8 @@ function structureRoofTriangles(resolved, config) {
         : createFlatRoofGeometry(bounds, setup.overhang);
   let triangles = geometryTriangles(geometry).map((tri) => tri.map(([x, y, z]) => [x, y + resolved.plateY, z]));
   geometry.dispose();
-  if (resolved.roofType === 'flat') {
-    // the slab's underside is only seen as a soffit under its overhang; inside the walls it is hidden
+  if (resolved.roofType === 'flat' && resolved.openSides.length === 0) {
+    // the slab's underside is only seen as a soffit under its overhang; inside closed walls it is hidden
     const underside = (tri) => tri.every((v) => Math.abs(v[1] - resolved.plateY) < 1e-6);
     const insideWalls = [
       { normal: [-1, 0, 0], offset: -bounds.minX }, { normal: [1, 0, 0], offset: bounds.maxX },
@@ -334,7 +447,58 @@ function structureRoofTriangles(resolved, config) {
     const k = side === 'minX' || side === 'maxX' ? 0 : 2;
     return tri.every((v) => Math.abs(v[k] - bounds[side]) < 1e-6 && v[1] >= resolved.plateY - 1e-6);
   });
-  return triangles.filter((tri) => !inWallPlane(tri));
+  return [...triangles.filter((tri) => !inWallPlane(tri)), ...openEaveHeaders(resolved, setup)];
+}
+
+/** Overhang and eave settings for a structure's roof: no overhang on its buried back side. */
+function structureEaveSetup(resolved, config) {
+  const sides = structureWallSides(resolved.frame);
+  const eaveConfig = {
+    ...pickEaveConfig(config),
+    volumeEaves: { ...(config.volumeEaves ?? {}), [resolved.id]: resolved.eaves ?? {} },
+  };
+  return volumeEaveSetup(
+    resolved.id,
+    resolved.roofType,
+    { ridgeAxis: resolved.ridgeAxis, roofHighEdge: resolved.roofHighEdge },
+    eaveConfig,
+    resolved.roofType === 'hip' ? [] : [sides.back],
+    undefined,
+    resolved.bounds
+  );
+}
+
+/**
+ * Where a side of a structure with an overhang is open (a porch), the
+ * soffit would end in mid-air at the wall line; a header closes it, from the
+ * soffit up to the plate, along the open side. Above the plate a gable or
+ * shed side keeps the roof's own closing face.
+ */
+function openEaveHeaders(resolved, setup) {
+  const sides = structureWallSides(resolved.frame);
+  const { bounds, plateY } = resolved;
+  const fascia = setup.eaves.fasciaDepth ?? 0;
+  const soffitDepth = (plane) => {
+    const depth = setup.overhang?.[plane.side] ?? 0;
+    if (depth <= 1e-9) {
+      return 0;
+    }
+    return setup.eaves.eaveSoffit === 'sloped' ? fascia : plane.slope * depth + fascia;
+  };
+  // under a rake, the deepest eave box it meets at the corners
+  const rakeDepth = Math.max(fascia, ...resolved.planes.map(soffitDepth));
+  return resolved.openSides.flatMap((wallName) => {
+    const side = sides[wallName];
+    if ((setup.overhang?.[side] ?? 0) <= 1e-9) {
+      return [];
+    }
+    const plane = resolved.planes.find((candidate) => candidate.side === side);
+    const bottom = plateY - (plane ? soffitDepth(plane) : rakeDepth);
+    const [a, b] = side === 'minX' || side === 'maxX'
+      ? [[bounds[side], bounds.minZ], [bounds[side], bounds.maxZ]]
+      : [[bounds.minX, bounds[side]], [bounds.maxX, bounds[side]]];
+    return polygonsToTriangles([[[a[0], bottom, a[1]], [b[0], bottom, b[1]], [b[0], plateY, b[1]], [a[0], plateY, a[1]]]]);
+  });
 }
 
 /**

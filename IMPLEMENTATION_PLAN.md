@@ -424,7 +424,7 @@ The exposed part of a partly shared eave side gets its own eave strip (top, fasc
 
 ## Roof-borne structures (dormers, raised porches) — plan
 
-Status: Phases 0–3 complete; phases 4–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+Status: Phases 0–4 complete; phases 4a–4d (added after the example review) and 5–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
 
 ### Core idea
 
@@ -471,7 +471,7 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
 |---|---|
 | Gable/hip/shed roof dormer (three walls above the roof plane) | `setback > host eave depth`, `baseHeight: null` |
 | Wall dormer (single wall built into the roof, front flush with the main wall) | `setback: 0`; cheek walls appear only where the dormer plate is above the host roof, so a dormer whose eaves come down to the host roof has no cheeks |
-| Sleeping porch on a lower wing, backed against the main block | host = wing, `baseHeight` = wing plate, and the roof clips into the main volume as a second host (`attachVolumeId`) |
+| Sleeping porch on a lower wing, backed against the main block | host = wing, `baseHeight: 0` (the wing plate), and a depth that runs into the main block; every other volume clips the structure, so it merges into the main block's wall and roof automatically |
 | Sleeping porch projecting from the main wall (over a ground porch or on brackets) | host = main, `setback < 0`, `baseHeight` = story-1 top, `openSides`; the exposed floor underside gets a closure face |
 
 ### Validation (`resolveRoofStructure` / `validateRoofStructures`)
@@ -566,11 +566,67 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
      - A 0.1 m setback leaves the eave alone.
    - Mutation check: removing the caps fails the closure and cap tests on all four hosts.
    - The test helper now ignores edges that round to zero length.
-4. **Porches and attached volumes.**
-   - Add `baseHeight`, open sides, and a floor-underside closure for projecting porches.
-   - Add an optional `attachVolumeId`, whose solid also clips the structure, so a porch on a wing merges into the main block's wall and roof.
-   - With open sides, the roof gets its soffit/ceiling, and posts are left to facade modifiers.
-   - Tests: a porch on the L preset's wing, and a porch projecting from the rectangle.
+4. **Porches (structures standing on a base).** Complete.
+   - A structure with a `baseHeight` is `standing`. It replaces the host roof inside its footprint instead of rising out of one face. So it may sit on any side (including a gable end), may span several faces, and has no ridge cap.
+   - Deviation from the plan: there is no `attachVolumeId`. Every structure is clipped outside *every* volume's solid, and every roof mesh is cut by the structure's solid. A porch on a wing that runs into the main block merges with its wall and roof automatically; for dormers the other solids are simply not touched.
+   - `removedRoof`: the host roof a standing structure removes, as convex pieces, one per host face. Each piece is the face's own region (where that plane is lowest) where the structure's roof is above the face. For a dormer it is `[hostContact]`.
+   - Walls (`standingWalls`):
+     - They stand clear of the host roof.
+     - Under the removed roof they run on down to the host wall top. A new exact-cut `clipInsideConvexSolid` and `planPrism` keep the part inside each piece, above the host body.
+     - Standing walls start at the host wall top.
+   - `kneeWalls`: along every edge of the removed roof that no closed structure wall covers, a vertical face runs from the host wall top up to the host roof. This happens where the structure's roof meets the host slope partway up, along open sides, and across the roof-lift gap. It closes the attic. Edges shared between pieces (a ridge) get none.
+   - Floor: the deck at the sill, clipped only by the host body and other volumes. It is also the closed underside of a projecting porch.
+   - Open sides get a header from the soffit to the plate under an overhang (`openEaveHeaders`). A rake side uses the deepest eave box it meets. A flat slab keeps its full underside when a side is open.
+   - Host eave (`interruptsHostEave`):
+     - A projecting structure breaks the eave when its roof at the wall line is at or above the host plate.
+     - A lower one tucks under the eave, or its roof passes through the soffit, which its solid cut handles.
+     - Caps go only where no side wall of the projecting structure already stands across the cut end.
+     - `hostEaveProfile` now also gives a rake's cross-section: level at the roof height there, down to the sloped or flat rake soffit.
+   - Tests (`tests/roof_structure_geometry.test.js`):
+     - A new, stricter watertightness check over every mesh (walls and foundation too) via `uncoveredEdges` in the test helpers: every open edge must lie on another, non-coplanar surface. The only exceptions are each roof's designed `ROOF_LIFT` at its own walls and a structure's open sides.
+     - Porch cases: a projecting second-floor porch through the eave (floor only outside the host, no caps, eave gone in front); tucked under the eave (host roof untouched); open (no walls outside the host, header area, caps); on the lean-to's one-story wing running into the two-story main block (nothing inside either volume, main roof cut); a porch spanning the host ridge (two pieces, no wall across the ridge); a knee wall's area; a porch on a flat roof.
+   - Mutation checks: removing knee walls fails the watertight and knee tests; removing headers fails the header test.
+   - The test helper `meshTriangles` now reads indexed geometry.
+   *Review of the first examples (2026-09-26).* Dormers (roof, wall, hip-roof, attic) are right. The porch examples were not realistic: a projecting porch with nothing under it; a porch on a wing that left slivers of the wing roof and climbed into the main roof like a dormer; a porch straddling a ridge; a rooftop porch flush with the wall. Those examples were withdrawn. The two sleeping/smoking porch arrangements to model are **over a ground-level porch** and **recessed into the roof**. The common rooftop structure is a **cupola/belvedere**. Phases 4a–4d cover this; the Phase 4 machinery (standing structures, removed roof, knee walls, headers, floors) is the base for all of them.
+
+4a. **Supports.** A projecting structure (`setback < 0`) gets `support`:
+   - `'posts'`: posts from the floor's outer corners down to the foundation top. A post size and spacing along the front are added later with facade modifiers.
+   - `'brackets'`: diagonal braces from the floor's outer edge back to the host wall. Valid only for shallow projections; a validation rule caps the depth.
+   - `'enclosed'`: walls from the floor down to grade on the projecting part, with foundation. Effectively a two-story bay.
+   - `'porch'`: the space below is a ground-floor porch. See 4b; the upper structure's floor is the lower porch's ceiling.
+   - `'none'`: only for a structure standing on something else (a wing, another structure).
+
+   Supports are plain boxes and quads outside the host, clipped outside every volume. Open sides at ground level also get posts at their open corners, from floor to plate, for any open-sided structure (ground porches included).
+
+4b. **Ground porches and stacking.**
+   - A ground-level porch is a projecting structure with its base at grade: `baseHeight` = −(plate height above the foundation top), with posts at open corners and its roof tucked under the eave or run into the wall. This is expressible now; it gains its posts from 4a.
+   - Stacking: a structure may name another *structure* as its host (`hostStructureId`). The resolved structure already has the zone-descriptor shape (bounds, plate `baseY`, planes, slab), so it can be the host solid. Its side frame, sill, removed roof, and eave cut then work unchanged.
+   - Structures resolve in dependency order, and a host structure must be resolved and built first.
+   - The sleeping-porch example becomes a ground porch plus an enclosed or screened second-floor porch standing on its roof, the upper roof tucked under the main eave or merged into it.
+
+4c. **Recessed (inset) porches.** These are subtractive: a porch carved into the host volume instead of added to it.
+   - A recess is a box on a host side (the same frame and placement fields), from a floor level up through the roof.
+   - The host roof, eave trim, and wall meshes inside the recess are cut away with `clipOutsideConvexSolid`. Walls now join the roof meshes in being cut.
+   - The recess's own back wall, side walls, and floor are built and kept *inside* the host solid (`clipInsideConvexSolid`), the mirror image of a dormer.
+   - Two forms:
+     - **Open to the sky:** a notch in the roof slope.
+     - **Covered:** a structure roof over the recess, like a dormer whose front wall is set back (an `inset` depth on any structure: its front wall moves back by `inset`, leaving an open porch with floor, side walls, and roof in front of it).
+
+     Decision (2026-09-26): the covered form, a recessed porch under a dormer roof, is the main use case and comes first. It reuses the dormer machinery. The open notch, which needs the subtractive path, is deferred.
+   - A recess that reaches the host wall breaks the eave the same way a flush wall dormer does.
+
+4d. **Cupolas and belvederes.** A structure rising out of the roof that is not joining it: it sits over the ridge (or at the center of a flat or hip roof), with its whole roof above the host's.
+   - A `mount: 'roof'` option skips the single-face rule and the ridge cap. Its walls still stop at the host roof, as a dormer's do. The host roof it covers comes from the per-face `removedRoof` union.
+   - Placement uses the same frame; a helper centers it on the ridge.
+   - Its roof is a hip (a pyramid on a square) or any roof type. Windows on every side come with facade modifiers.
+
+   New examples as each lands:
+   - a ground porch with posts;
+   - the stacked sleeping porch;
+   - a recessed porch;
+   - a cupola on a gable roof, a belvedere on a flat or hip roof;
+   - supports: posts, brackets, an enclosed base.
+
 5. **Facade surfaces.**
    - Each structure adds wall runs to `computeFacadeLayout`: `wall-run-<structureId>-front|left|right|back`, with `structureId`, `hostVolumeId`, and an **outline polygon** in wall-local (u, v) coordinates. The outline carries the sloped bottom and the gable top that clipping produced.
    - Each structure gets one story band (or its own count for a porch), with ids like `story-<structureId>-1`.

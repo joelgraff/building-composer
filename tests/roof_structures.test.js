@@ -423,6 +423,19 @@ describe('validateRoofStructures', () => {
     { hostVolumeId: 'volume-3', hostSide: 'maxZ' },
   ]);
 
+  it('only compares where structures actually stand, not their buried backs', () => {
+    const hip = createBuildingFromFootprint(RECT, {
+      storyCount: 1, storyHeight: 3, roofType: 'hip', roofDirection: 'x', roofHeight: 2.5, roofPitchRise: 6, roofPitchRun: 12,
+      volumes: computeFacadeLayout(RECT, {}).volumes,
+    }).roofZones;
+    // both rectangles run back to the middle of the roof, so they overlap there, buried
+    const results = validateRoofStructures(normalizeRoofStructures([
+      { hostVolumeId: 'volume-0', hostSide: 'minZ', offset: -3 },
+      { hostVolumeId: 'volume-0', hostSide: 'minX', width: 1, setback: 0.5, wallHeight: 0.6 },
+    ]), hip, { roofPitchRise: 6 });
+    assert.deepEqual(results.map((result) => result.errors), [[], []]);
+  });
+
   it('resolves each structure and rejects later overlaps on the same roof', () => {
     const results = validateRoofStructures(structures, roofZones, { roofPitchRise: 6 });
     assert.deepEqual(results.map((result) => result.errors.map((e) => e.code)), [[], ['overlap'], [], ['host-missing']]);

@@ -1,0 +1,100 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "Wall dormers: the front wall carries the main wall up through the eave, which stops and is capped either side.",
+  "footprint": [
+    [
+      -9,
+      -4.5
+    ],
+    [
+      9,
+      -4.5
+    ],
+    [
+      9,
+      4.5
+    ],
+    [
+      -9,
+      4.5
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 3.2,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 8,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofHeight": 3,
+  "volumeStoryOverrides": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "wall-dormer",
+      "hostVolumeId": "volume-0",
+      "hostSide": "maxZ",
+      "offset": -5.5,
+      "width": 2.4,
+      "setback": 0,
+      "depth": null,
+      "wallHeight": 1.2,
+      "baseHeight": null,
+      "openSides": [],
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "wall-dormer",
+      "hostVolumeId": "volume-0",
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 2.4,
+      "setback": 0,
+      "depth": null,
+      "wallHeight": 1.2,
+      "baseHeight": null,
+      "openSides": [],
+      "roofType": "hip",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-3",
+      "kind": "wall-dormer",
+      "hostVolumeId": "volume-0",
+      "hostSide": "maxZ",
+      "offset": 5.5,
+      "width": 3,
+      "setback": 0,
+      "depth": null,
+      "wallHeight": 1.2,
+      "baseHeight": null,
+      "openSides": [],
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 3
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

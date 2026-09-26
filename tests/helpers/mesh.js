@@ -1,11 +1,16 @@
 /** Mesh inspection helpers shared by the geometry tests. */
 
-/** The triangles of a mesh's (non-indexed) geometry, in the mesh's own frame. */
+/** The triangles of a mesh's geometry, in the mesh's own frame. */
 export function meshTriangles(mesh) {
   const pos = mesh.geometry.getAttribute('position');
+  const index = mesh.geometry.index;
+  const count = index ? index.count : pos.count;
   const out = [];
-  for (let i = 0; i < pos.count; i += 3) {
-    out.push([0, 1, 2].map((k) => [pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k)]));
+  for (let i = 0; i < count; i += 3) {
+    out.push([0, 1, 2].map((k) => {
+      const v = index ? index.getX(i + k) : i + k;
+      return [pos.getX(v), pos.getY(v), pos.getZ(v)];
+    }));
   }
   return out;
 }
@@ -57,4 +62,49 @@ export function openTriangleEdges(tris) {
     });
   });
   return [...counts].filter(([, n]) => n === 1).map(([k]) => k.split('|').map((s) => s.split(',').map(Number)));
+}
+
+const sub = (a, b) => a.map((v, i) => v - b[i]);
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const dot = (a, b) => a.reduce((sum, v, i) => sum + v * b[i], 0);
+const unitNormal = ([a, b, c]) => {
+  const n = cross(sub(b, a), sub(c, a));
+  const length = Math.hypot(...n);
+  return length > 0 ? n.map((v) => v / length) : null;
+};
+
+/** Whether `point` lies on triangle `tri` (within `tolerance`). */
+function onTriangle(point, tri, normal, tolerance) {
+  if (Math.abs(dot(sub(point, tri[0]), normal)) > tolerance) {
+    return false;
+  }
+  return [0, 1, 2].every((i) => {
+    const a = tri[i];
+    const b = tri[(i + 1) % 3];
+    return dot(cross(sub(b, a), sub(point, a)), normal) >= -tolerance * Math.hypot(...sub(b, a));
+  });
+}
+
+/**
+ * Open edges with nothing behind them: an open edge where one surface butts
+ * into the middle of another (a wall standing on a roof, a roof ending on a
+ * wall face) is closed to the eye, so it only counts if some point along it
+ * lies on no other, non-coplanar surface.
+ */
+export function uncoveredEdges(tris, edges = openTriangleEdges(tris), tolerance = 2e-3) {
+  const faces = tris.map((tri) => ({ tri, normal: unitNormal(tri) })).filter((face) => face.normal);
+  return edges.filter((edge) => {
+    // the triangles this edge is a side of (not ones it merely crosses)
+    const onSegment = (p, a, b) => {
+      const ab = sub(b, a);
+      const t = dot(sub(p, a), ab) / dot(ab, ab);
+      return t >= -1e-6 && t <= 1 + 1e-6 && Math.hypot(...sub(sub(p, a), ab.map((v) => v * t))) < tolerance;
+    };
+    const owners = faces.filter(({ tri }) => [0, 1, 2].some((i) => edge.every((p) => onSegment(p, tri[i], tri[(i + 1) % 3]))));
+    return [0.2, 0.5, 0.8].some((t) => {
+      const point = edge[0].map((v, i) => v + (edge[1][i] - v) * t);
+      return !faces.some(({ tri, normal }) => onTriangle(point, tri, normal, tolerance)
+        && owners.every((owner) => Math.abs(dot(owner.normal, normal)) < 1 - 1e-6));
+    });
+  });
 }

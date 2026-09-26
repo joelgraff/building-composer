@@ -106,6 +106,37 @@ export function clipOutsideConvexSolid(triangles, halfSpaces, epsilon = SOLID_EP
   return polygonsToTriangles(kept);
 }
 
+/**
+ * The parts of `triangles` inside a convex solid; faces lying on its
+ * boundary (within `epsilon`) count as inside.
+ */
+export function clipInsideConvexSolid(triangles, halfSpaces, epsilon = SOLID_EPSILON) {
+  return polygonsToTriangles(triangles.map((triangle) => halfSpaces.reduce((polygon, { normal, offset }) => {
+    const beyond = (point) => dot(normal, point) - offset;
+    // cut exactly on the face (so pieces kept here and by clipOutsideConvexSolid
+    // meet along the same line); a polygon no further beyond it than epsilon
+    // lies on the face and is kept whole
+    return polygon.length < 3 || Math.max(...polygon.map(beyond)) <= epsilon
+      ? polygon
+      : clipPolygon(polygon, (point) => -beyond(point));
+  }, triangle)));
+}
+
+/** The vertical prism over a convex plan polygon ([x, z] points), as half-spaces. */
+export function planPrism(polygon) {
+  const signedArea = polygon.reduce((sum, [x, z], i) => {
+    const [nx, nz] = polygon[(i + 1) % polygon.length];
+    return sum + x * nz - nx * z;
+  }, 0);
+  const turn = Math.sign(signedArea) || 1;
+  return polygon.map(([x, z], i) => {
+    const [nx, nz] = polygon[(i + 1) % polygon.length];
+    // outward normal of edge (x, z) -> (nx, nz)
+    const normal = [turn * (nz - z), 0, -turn * (nx - x)];
+    return normalizedHalfSpace(normal, normal[0] * x + normal[2] * z);
+  });
+}
+
 /** True when `point` is inside every half-space (within `epsilon`). */
 export function isInsideSolid(point, halfSpaces, epsilon = SOLID_EPSILON) {
   return halfSpaces.every(({ normal, offset }) => dot(normal, point) <= offset + epsilon);
@@ -285,6 +316,22 @@ const axisKeys = (axis) => (axis === 'x' ? ['minX', 'maxX'] : ['minZ', 'maxZ']);
 const pointOn = (frame, along, inward) => (frame.along === 'x' ? [along, inward] : [inward, along]);
 const error = (code, message) => ({ code, message });
 
+/** Every face of a host roof as a plane (a flat roof: its slab top). */
+function hostRoofFaces(host) {
+  return host.planes?.length ? host.planes : [{ constantHeight: host.slabThickness ?? 0 }];
+}
+
+/** A plan rectangle as a polygon, clipped to within the host's walls. */
+function clipToHostWalls(bounds, host) {
+  return [
+    ([x]) => x - host.bounds.minX, ([x]) => host.bounds.maxX - x,
+    ([, z]) => z - host.bounds.minZ, ([, z]) => host.bounds.maxZ - z,
+  ].reduce(
+    (polygon, distance) => clipPolygon(polygon, distance),
+    [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]]
+  );
+}
+
 /** The host roof plane a structure on `side` rises out of (flat roofs: the slab top). */
 function hostFacePlane(host, side) {
   if (!host.planes?.length) {
@@ -300,10 +347,12 @@ function hostFacePlane(host, side) {
  * roof. The result has the zone descriptor shape (`bounds`, `baseY` at its
  * plate, `planes`, `slabThickness`), so `volumeSolid` accepts it.
  *
- * A structure's roof never rises above the host ridge: with `join: 'auto'`
+ * A dormer's roof never rises above the host ridge: with `join: 'auto'`
  * a taller roof is lowered to it (reported as a warning); with
  * `'snap-ridge'` it is always set to meet it. A shed dormer too steep to meet
- * the host plane before the ridge is snapped the same way.
+ * the host plane before the ridge is snapped the same way. A structure
+ * standing on a base (`baseHeight`, a porch) replaces the host roof inside
+ * its footprint instead: it is not capped and may span several roof faces.
  *
  * @param {object} structure - a normalized record
  * @param {object|undefined} host - the host volume's roof zone descriptor
@@ -327,11 +376,15 @@ export function resolveRoofStructure(structure, host, config = {}) {
     || (structure.depth !== null && !(structure.depth > GEOMETRY_EPSILON))) {
     return fail('invalid-dimensions', 'Width, wall height, and depth must be positive.');
   }
+  // A structure standing on a base (a porch) sits on the plate and replaces
+  // the host roof inside its footprint, so it can face any side; one rising
+  // out of the roof (a dormer) needs a roof slope on its side to rise from.
+  const standing = structure.baseHeight !== null;
   const face = hostFacePlane(host, structure.hostSide);
-  if (!face) {
+  if (!face && !standing) {
     return fail('side-not-sloped', `The ${structure.hostSide} side of ${host.volumeId} is not a roof slope (a gable end or a shed's high or rake side).`);
   }
-  const sloped = !('constantHeight' in face);
+  const sloped = Boolean(face) && !('constantHeight' in face);
   if (structure.setback < -GEOMETRY_EPSILON && structure.baseHeight === null) {
     return fail('needs-base', 'A structure projecting past the host wall needs a base height.');
   }
@@ -352,7 +405,7 @@ export function resolveRoofStructure(structure, host, config = {}) {
   if (structure.depth !== null) {
     back = front + frame.sign * structure.depth;
   } else if (!sloped) {
-    return fail('depth-required', 'A structure on a flat roof needs an explicit depth.');
+    return fail('depth-required', 'A structure needs an explicit depth on a flat roof or a gable end.');
   } else if (host.roofType === 'shed') {
     back = host.bounds[frame.sign > 0 ? inwardMaxKey : inwardMinKey];
   } else {
@@ -366,7 +419,7 @@ export function resolveRoofStructure(structure, host, config = {}) {
     ? { minX: along[0], maxX: along[1], minZ: inward[0], maxZ: inward[1] }
     : { minX: inward[0], maxX: inward[1], minZ: along[0], maxZ: along[1] };
 
-  const hostFaceY = ([x, z]) => host.baseY + evalPlaneHeight(face, x, z);
+  const hostFaceY = ([x, z]) => host.baseY + evalPlaneHeight(face ?? { constantHeight: 0 }, x, z);
   const sillY = structure.baseHeight !== null
     ? host.baseY + structure.baseHeight
     : hostFaceY(pointOn(frame, alongCenter, front));
@@ -393,7 +446,9 @@ export function resolveRoofStructure(structure, host, config = {}) {
     }
   }
 
-  if (sloped) {
+  // The ridge cap and the single-face rule below apply only to structures
+  // rising out of the roof (dormers).
+  if (sloped && !standing) {
     const hostTopY = host.baseY + host.roofHeight;
     const topY = plateY + (roofType === 'flat' ? FLAT_ROOF_THICKNESS : roofHeight);
     if (roofType === 'flat' || plateY >= hostTopY - GEOMETRY_EPSILON) {
@@ -429,16 +484,40 @@ export function resolveRoofStructure(structure, host, config = {}) {
     ([x]) => x - host.bounds.minX, ([x]) => host.bounds.maxX - x,
     ([, z]) => z - host.bounds.minZ, ([, z]) => host.bounds.maxZ - z,
   ];
-  const aboveHost = planes.length
+  const aboveHost = !face ? [] : planes.length
     ? planes.map((plane) => ([x, z]) => plateY + evalPlaneHeight(plane, x, z) - hostFaceY([x, z]))
     : [(point) => plateY + slabThickness - hostFaceY(point)];
   [...within, ...aboveHost].forEach((distance) => {
     hostContact = clipPolygon(hostContact, distance);
   });
+  // The host roof the structure removes: where the host roof lies under the
+  // structure's roof. Host roof height is a min of planes, so this is a union
+  // of convex pieces, one per host face: the face's own region (where it is
+  // the lowest plane) where the structure's roof is above that face. A dormer
+  // stands on one face, so its piece is its `hostContact`.
+  const removedRoof = standing
+    ? hostRoofFaces(host).map((hostFace, index, faces) => {
+      let piece = clipToHostWalls(bounds, host);
+      faces.forEach((other, k) => {
+        if (k !== index) {
+          piece = clipPolygon(piece, ([x, z]) => evalPlaneHeight(other, x, z) - evalPlaneHeight(hostFace, x, z));
+        }
+      });
+      const faceY = ([x, z]) => host.baseY + evalPlaneHeight(hostFace, x, z);
+      (planes.length
+        ? planes.map((plane) => ([x, z]) => plateY + evalPlaneHeight(plane, x, z) - faceY([x, z]))
+        : [(point) => plateY + slabThickness - faceY(point)]
+      ).forEach((distance) => {
+        piece = clipPolygon(piece, distance);
+      });
+      return piece;
+    }).filter((piece) => piece.length >= 3)
+    : [hostContact].filter((piece) => piece.length >= 3);
+
   if (hostContact.length < 3 && structure.baseHeight === null) {
     return fail('no-contact', 'The structure does not meet the host roof.');
   }
-  if (sloped && hostContact.some(([x, z]) => evalPlaneHeight(face, x, z) > evalZoneHeight(host.planes, x, z) + GEOMETRY_EPSILON)) {
+  if (sloped && !standing && hostContact.some(([x, z]) => evalPlaneHeight(face, x, z) > evalZoneHeight(host.planes, x, z) + GEOMETRY_EPSILON)) {
     return fail('crosses-face', 'The structure crosses a hip, ridge, or valley of the host roof; it must stand on one roof face.');
   }
 
@@ -465,9 +544,13 @@ export function resolveRoofStructure(structure, host, config = {}) {
       planes,
       slabThickness,
       topY: topAt([(bounds.minX + bounds.maxX) / 2, (bounds.minZ + bounds.maxZ) / 2]),
-      hostContact: hostContact.length >= 3 ? hostContact : [],
+      hostContact: hostContact.length >= 3 && !standing ? hostContact : [],
+      removedRoof,
       // the front wall stands on the host wall line: it carries the wall up through the eave
       flush: Math.abs(structure.setback) <= GEOMETRY_EPSILON,
+      // its front wall is out past the host wall (a projecting porch)
+      projecting: structure.setback < -GEOMETRY_EPSILON,
+      standing,
       openSides: structure.openSides,
       eaves: structure.eaves,
       materials: structure.materials,
@@ -477,13 +560,42 @@ export function resolveRoofStructure(structure, host, config = {}) {
   };
 }
 
-const rectanglesOverlap = (a, b) => Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX) > GEOMETRY_EPSILON
-  && Math.min(a.maxZ, b.maxZ) - Math.max(a.minZ, b.minZ) > GEOMETRY_EPSILON;
+/**
+ * Where a structure actually stands, in plan, as convex polygons: the host
+ * roof it removes, plus any part projecting past the host wall. Its buried
+ * back (running on under the host roof to the ridge) is clipped away when it
+ * is built, so it does not count.
+ */
+function occupiedPlan(resolved, host) {
+  const { frame, bounds } = resolved;
+  const wall = host.bounds[resolved.hostSide];
+  const rectangle = [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]];
+  const outside = resolved.projecting
+    ? clipPolygon(rectangle, ([x, z]) => frame.sign * (wall - (frame.inward === 'x' ? x : z)))
+    : [];
+  return [...resolved.removedRoof, outside].filter((polygon) => polygon.length >= 3);
+}
+
+/** Whether two convex plan polygons overlap by more than a sliver (separating axis test). */
+function convexOverlap(a, b) {
+  return ![a, b].some((polygon) => polygon.some(([x0, z0], i) => {
+    const [x1, z1] = polygon[(i + 1) % polygon.length];
+    const length = Math.hypot(x1 - x0, z1 - z0);
+    if (length < GEOMETRY_EPSILON) {
+      return false;
+    }
+    const axis = [(z0 - z1) / length, (x1 - x0) / length];
+    const project = (points) => points.map(([x, z]) => x * axis[0] + z * axis[1]);
+    const [pa, pb] = [project(a), project(b)];
+    return Math.min(Math.max(...pa), Math.max(...pb)) - Math.max(Math.min(...pa), Math.min(...pb)) <= GEOMETRY_EPSILON;
+  }));
+}
 
 /**
  * Resolves every structure against the building's roof zones and checks
- * them against each other: structures on the same host may not overlap (the
- * later one in the list is rejected).
+ * them against each other: structures on the same host may not overlap where
+ * they actually stand (see occupiedPlan; the later one in the list is
+ * rejected).
  *
  * @returns {Array<{ id: string, structure: object, resolved: object|null, errors: Array<object>, warnings: Array<object> }>}
  */
@@ -493,13 +605,15 @@ export function validateRoofStructures(structures, roofZones, config = {}) {
   return (structures ?? []).map((structure) => {
     const result = resolveRoofStructure(structure, zones.get(structure.hostVolumeId), config);
     if (result.resolved) {
+      const host = zones.get(structure.hostVolumeId);
+      const plan = occupiedPlan(result.resolved, host);
       const clash = accepted.find((other) => other.hostVolumeId === result.resolved.hostVolumeId
-        && rectanglesOverlap(other.bounds, result.resolved.bounds));
+        && other.plan.some((piece) => plan.some((mine) => convexOverlap(piece, mine))));
       if (clash) {
         result.errors.push(error('overlap', `Overlaps ${clash.id} on the same roof.`));
         result.resolved = null;
       } else {
-        accepted.push(result.resolved);
+        accepted.push({ ...result.resolved, plan });
       }
     }
     return { id: structure.id, structure, ...result };
@@ -600,22 +714,43 @@ export function structureWallPolygons(resolved, bottomY) {
   });
 }
 
+/**
+ * The floor of a structure standing on a base: its rectangle at the sill,
+ * as [x, y, z] points. It is the porch deck, and the underside of any part
+ * projecting past the host wall.
+ */
+export function structureFloorPolygon(resolved) {
+  const { bounds, sillY } = resolved;
+  return [
+    [bounds.minX, sillY, bounds.minZ], [bounds.maxX, sillY, bounds.minZ],
+    [bounds.maxX, sillY, bounds.maxZ], [bounds.minX, sillY, bounds.maxZ],
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Host eaves
 // ---------------------------------------------------------------------------
 
 /**
- * The cross-section of a host roof's eave on `side`, as built by the eave
- * trim (js/eaves.js): `[inward coordinate, height above the plate]` points
- * from the wall at the roof surface, out along the roof to the fascia, down
- * the fascia, and back to the wall along the soffit. A flat roof's eave is
- * the edge of its slab. Null where the side has no eave.
+ * The cross-section of a host roof's overhang on `side` at `along` (a
+ * coordinate along the side), as built by the eave trim (js/eaves.js):
+ * `[inward coordinate, height above the plate]` points from the wall at the
+ * roof surface, out to the fascia, down it, and back to the wall along the
+ * soffit.
+ * - An eave (the slope meets the wall) drops along its slope, then down the
+ *   fascia, with a flat or roof-parallel soffit.
+ * - A rake (a gable end or a shed's side) is level across at the roof's
+ *   height there, one fascia deep with a sloped rake soffit, or down to the
+ *   flat soffit level with a flat one.
+ * - A flat roof's overhang is the edge of its slab.
+ * Null where the side has no overhang.
  *
  * @param {object} host - roof zone descriptor
  * @param {string} side
+ * @param {number} [along]
  * @returns {{ depth: number, outline: Array<[number, number]> } | null}
  */
-export function hostEaveProfile(host, side) {
+export function hostEaveProfile(host, side, along = 0) {
   const depth = host.overhang?.[side] > GEOMETRY_EPSILON
     ? host.overhang[side]
     : (host.eaves?.partial?.[side] ? host.eaves.eaveDepth ?? 0 : 0);
@@ -628,9 +763,19 @@ export function hostEaveProfile(host, side) {
     const top = host.slabThickness ?? FLAT_ROOF_THICKNESS;
     return { depth, outline: [[wall, 0], [wall, top], [out, top], [out, 0]] };
   }
-  const face = host.planes?.find((plane) => plane.side === side);
-  const drop = (face?.slope ?? 0) * depth;
   const fascia = host.eaves?.fasciaDepth ?? 0;
+  const face = host.planes?.find((plane) => plane.side === side);
+  if (!face) {
+    const [x, z] = side === 'minX' || side === 'maxX' ? [wall, along] : [along, wall];
+    const height = evalZoneHeight(host.planes, x, z);
+    const bottom = host.eaves?.rakeSoffit === 'flat'
+      ? Math.min(...host.planes.map((plane) => (host.overhang?.[plane.side] > GEOMETRY_EPSILON
+        ? -plane.slope * host.overhang[plane.side] - fascia
+        : -fascia)))
+      : height - fascia;
+    return { depth, outline: [[wall, height], [out, height], [out, bottom], [wall, bottom]] };
+  }
+  const drop = face.slope * depth;
   const soffitAtWall = host.eaves?.eaveSoffit === 'sloped' ? -fascia : -drop - fascia;
   return { depth, outline: [[wall, 0], [out, -drop], [out, -drop - fascia], [wall, soffitAtWall]] };
 }
