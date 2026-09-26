@@ -238,3 +238,39 @@ describe('eave ends and partly shared sides', () => {
     assert.ok(found > 0, 'base roof projects into the courtyard along its exposed eave');
   });
 });
+
+describe('merged gable abuts the controlling roof\'s eave', () => {
+  const norm = normalizeFootprint(uFootprint);
+  const layout = computeFacadeLayout(norm, { roofType: 'gable' });
+  const [base, leg] = layout.volumes;
+  const E = 0.5;
+  const { building } = createBuildingFromFootprint(norm, {
+    storyCount: 1, storyHeight: 3, roofType: 'gable', roofPitchRise: 6, roofPitchRun: 12, volumes: layout.volumes,
+    roofEaveDepth: E, roofRakeDepth: E, roofFasciaDepth: F,
+    volumeRoofConnections: { 'volume-1': 'merge-plane', 'volume-2': 'merge-plane' },
+  });
+  const vertices = (id) => {
+    const out = [];
+    building.traverse((c) => {
+      if (c.isMesh && c.userData?.roofType && (c.userData.volumeId === id || (id === 'assembly' && !c.userData.volumeId))) {
+        const pos = c.geometry.getAttribute('position');
+        for (let i = 0; i < pos.count; i += 1) { out.push([pos.getX(i), pos.getY(i), pos.getZ(i)]); }
+      }
+    });
+    return out;
+  };
+
+  it('the main roof keeps its eave along the whole shared side', () => {
+    const all = vertices('assembly').length ? vertices('assembly') : vertices('volume-0');
+    const slope = 0.5;
+    // eave outer edge at the far x extremes of the base's shared side (under both legs)
+    assert.ok(all.some((v) => Math.abs(v[2] - (base.maxZ + E)) < 1e-6 && Math.abs(v[0] - (base.minX - E)) < 1e-6 && Math.abs(v[1] + slope * E) < 1e-6));
+    assert.ok(all.some((v) => Math.abs(v[2] - (base.maxZ + E)) < 1e-6 && Math.abs(v[0] - (base.maxX + E)) < 1e-6));
+  });
+
+  it('the merging gable\'s eave corner sits on the valley, at the main eave line', () => {
+    const all = vertices('assembly').length ? vertices('assembly') : vertices('volume-1');
+    // leg outer eave corner: x = leg.minX - E, z = base.maxZ + E (equal slopes and depths), height = -slope*E
+    assert.ok(all.some((v) => Math.abs(v[0] - (leg.minX - E)) < 1e-6 && Math.abs(v[2] - (base.maxZ + E)) < 1e-6 && Math.abs(v[1] + 0.5 * E) < 1e-6));
+  });
+});

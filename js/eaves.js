@@ -119,7 +119,9 @@ function frameFor(axis) {
  * Fascia and soffit triangles for a gable. `merged` flags which ends have no
  * overhang because the ridge runs on into a neighbor.
  */
-export function buildGableTrim(bounds, { roofHeight, ridgeAxis, overhang, eaves }) {
+export function buildGableTrim(bounds, {
+  roofHeight, ridgeAxis, overhang, eaves, insets = { start: [0, 0], end: [0, 0] },
+}) {
   const axis = ridgeAxis === 'x' ? 'x' : 'z';
   const P = frameFor(axis);
   const [cMin, cMax] = axis === 'x' ? [bounds.minZ, bounds.maxZ] : [bounds.minX, bounds.maxX];
@@ -144,21 +146,24 @@ export function buildGableTrim(bounds, { roofHeight, ridgeAxis, overhang, eaves 
   const tris = [];
 
   // eave fascia + soffits
-  [[eMin, cMin, cLo, yLo], [eMax, cMax, cHi, yHi]].forEach(([e, cWall, cOut, yOut]) => {
+  [[eMin, cMin, cLo, yLo, 0], [eMax, cMax, cHi, yHi, 1]].forEach(([e, cWall, cOut, yOut, k]) => {
     if (e <= EPS) {
       return;
     }
-    tris.push(...quad(P(cOut, aS, yOut), P(cOut, aE, yOut), P(cOut, aE, yOut - f), P(cOut, aS, yOut - f)));
+    // where this end abuts another roof's eave the strip starts at the valley
+    const s0 = insets.start[k];
+    const s1 = insets.end[k];
+    tris.push(...quad(P(cOut, aS + s0, yOut), P(cOut, aE - s1, yOut), P(cOut, aE - s1, yOut - f), P(cOut, aS + s0, yOut - f)));
     if (eaveFlat) {
-      const along = rakeFlat ? [aMin, aMax] : [aS, aE];
+      const along = rakeFlat ? [aMin + s0, aMax - s1] : [aS + s0, aE - s1];
       tris.push(...quad(P(cWall, along[0], yOut - f), P(cOut, along[0], yOut - f), P(cOut, along[1], yOut - f), P(cWall, along[1], yOut - f)));
     } else {
-      tris.push(...quad(P(cWall, aMin, -f), P(cOut, aMin, yOut - f), P(cOut, aMax, yOut - f), P(cWall, aMax, -f)));
+      tris.push(...quad(P(cWall, aMin + s0, -f), P(cOut, aMin + s0, yOut - f), P(cOut, aMax - s1, yOut - f), P(cWall, aMax - s1, -f)));
     }
     // an eave strip that ends flush with the wall (no rake overhang there) is boxed in with an end cap
     const outline = [[cWall, 0], [cOut, yOut], [cOut, yOut - f], [cWall, eaveFlat ? yOut - f : -f]];
-    [[rStart, aMin, axis === 'x' ? 'minX' : 'minZ'], [rEnd, aMax, axis === 'x' ? 'maxX' : 'maxZ']].forEach(([r, aWall, endSide]) => {
-      if (r <= EPS) {
+    [[rStart, aMin, axis === 'x' ? 'minX' : 'minZ', s0], [rEnd, aMax, axis === 'x' ? 'maxX' : 'maxZ', s1]].forEach(([r, aWall, endSide, inset]) => {
+      if (r <= EPS && inset <= EPS) {
         tris.push(...endCap(P, aWall, outline, eaves.backing?.[endSide]));
       }
     });

@@ -177,6 +177,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
   );
   const connections = resolveRoofConnections(roofVolumes, { ...config, volumePlateHeights });
   const adjacentSides = adjacentSidesByVolume(roofVolumes, volumePlateHeights);
+  const setups = buildRoofSetups(roofVolumes, config, connections, adjacentSides, (volume) => config.volumeRoofTypes?.[volume.id] ?? roofType);
 
   roofVolumes.forEach((volume) => {
     const volumeStoryCount = overrides[volume.id] ?? storyCount;
@@ -202,15 +203,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
 
     const roofDirectionForVolume = volume.ridgeAxis;
     const params = volumeRoofParams(volume.id, halfSpanForBounds(wallBounds, roofDirectionForVolume), config);
-    const setup = volumeEaveSetup(
-      volume.id,
-      roofTypeForVolume,
-      { ridgeAxis: roofDirectionForVolume, roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(roofDirectionForVolume) },
-      config,
-      Object.keys(volumeConnections ?? {}),
-      adjacentSides.get(volume.id),
-      { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ }
-    );
+    const setup = setups.get(volume.id);
     const roofHeightForVolume = roofTypeForVolume === 'flat'
       ? 0
       : (extendedRoofHeight ?? params.roofHeight);
@@ -220,6 +213,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
       roofHeight: roofHeightForVolume,
       overhang: setup.overhang,
       eaves: setup.eaves,
+      abut: eaveAbutments(volumeConnections, setups),
       roofPitchRise: params.pitchRise,
       roofPitchRun: params.pitchRun,
       connections: volumeConnections,
@@ -513,6 +507,7 @@ function createVolumeRoofAssembly(volumes, config) {
     : new Map();
   const connections = resolveRoofConnections(roofVolumes, config);
   const adjacentSides = adjacentSidesByVolume(roofVolumes);
+  const setups = buildRoofSetups(roofVolumes, config, connections, adjacentSides, (volume) => config.volumeRoofTypes?.[volume.id] ?? config.roofType);
 
   const chunks = roofVolumes.map((volume) => {
     const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
@@ -523,15 +518,7 @@ function createVolumeRoofAssembly(volumes, config) {
       volumeConnections
     );
     const params = paramsFor(volume, bounds);
-    const setup = volumeEaveSetup(
-      volume.id,
-      roofType,
-      { ridgeAxis: volume.ridgeAxis, roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis) },
-      config,
-      Object.keys(volumeConnections ?? {}),
-      adjacentSides.get(volume.id),
-      { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ }
-    );
+    const setup = setups.get(volume.id);
     const gableMerge = roofType === 'gable' ? gableMergeGeometry(volume, bounds, volumeConnections, params.roofHeight) : null;
     const roofConfig = {
       roofDirection: volume.ridgeAxis,
@@ -539,6 +526,7 @@ function createVolumeRoofAssembly(volumes, config) {
       roofHeight: extendedRoofHeight ?? (gableMerge?.any ? gableMerge.roofHeight : params.roofHeight),
       overhang: setup.overhang,
       eaves: setup.eaves,
+      abut: eaveAbutments(volumeConnections, setups),
       roofPitchRise: params.pitchRise,
       roofPitchRun: params.pitchRun,
       ridgeEndpoints: gableMerge?.any
@@ -863,7 +851,7 @@ export function resolveRoofConnections(volumes, config) {
   const resolutions = new Map(volumes.map((volume) => [volume.id, {}]));
 
   findVolumeAdjacencies(volumes).forEach(({ volumeAId, sideA, volumeBId, sideB }) => {
-    [[volumeAId, sideA, volumeBId], [volumeBId, sideB, volumeAId]].forEach(([ownId, side, neighborId]) => {
+    [[volumeAId, sideA, volumeBId, sideB], [volumeBId, sideB, volumeAId, sideA]].forEach(([ownId, side, neighborId, neighborSide]) => {
       // Merging is opt-in: a side stays standalone unless the user explicitly
       // chose "Merge into adjacent roof" for it (the UI defaults every side
       // to 'standalone' the first time it becomes selectable, so this only
@@ -887,7 +875,7 @@ export function resolveRoofConnections(volumes, config) {
       if (own.roofType === 'gable') {
         const resolution = resolveGableEndMerge(own, neighbor, side, Math.max(0, plateGap));
         if (resolution) {
-          resolutions.get(ownId)[side] = resolution;
+          resolutions.get(ownId)[side] = { ...resolution, neighborId, neighborSide };
         }
         return;
       }
@@ -1459,6 +1447,53 @@ function volumeEaveSetup(volumeId, roofType, orientation, config, mergedSides, a
   return { overhang, eaves: { ...eaves, backing, partial } };
 }
 
+/**
+ * Overhang setup for every volume. A roof keeps its eave along a side that
+ * another gable merges into (the merging roof abuts it, see `eaveAbutments`),
+ * instead of losing the overhang along the shared wall.
+ */
+function buildRoofSetups(roofVolumes, config, connections, adjacentSides, roofTypeOf) {
+  const absorbed = new Map(roofVolumes.map((volume) => [volume.id, new Set()]));
+  findVolumeAdjacencies(roofVolumes).forEach(({
+    volumeAId, sideA, volumeBId, sideB,
+  }) => {
+    [[volumeAId, sideA, volumeBId, sideB], [volumeBId, sideB, volumeAId, sideA]].forEach(([own, ownSide, other, otherSide]) => {
+      if (connections.get(own)?.[ownSide]?.gableEnd) {
+        absorbed.get(other).add(otherSide);
+      }
+    });
+  });
+  return new Map(roofVolumes.map((volume) => {
+    const adjacency = adjacentSides.get(volume.id);
+    const remaining = adjacency
+      ? new Map([...adjacency].filter(([side]) => !absorbed.get(volume.id).has(side)))
+      : undefined;
+    return [volume.id, volumeEaveSetup(
+      volume.id,
+      roofTypeOf(volume),
+      { ridgeAxis: volume.ridgeAxis, roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis) },
+      config,
+      Object.keys(connections.get(volume.id) ?? {}),
+      remaining,
+      { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ }
+    )];
+  }));
+}
+
+/** Eave depth/slope of the roofs a merged gable's ends abut, keyed by end. */
+function eaveAbutments(volumeConnections, setups) {
+  const abut = {};
+  Object.values(volumeConnections ?? {}).forEach((resolution) => {
+    if (resolution.gableEnd && resolution.neighborId) {
+      const depth = setups.get(resolution.neighborId)?.overhang?.[resolution.neighborSide] ?? 0;
+      if (depth > 1e-9) {
+        abut[resolution.gableEnd] = { depth, slope: resolution.facingSlope };
+      }
+    }
+  });
+  return abut;
+}
+
 /** Per-side overhang from `config.overhang`, or a uniform scalar `roofOverhang`. */
 function overhangOf(config) {
   if (config.overhang) {
@@ -1492,13 +1527,29 @@ function createGableRoofGeometry(bounds, config) {
   const yHigh = -slope * eMax;
   const aStart = aMin - rStart;
   const aEnd = aMax + rEnd;
+  // Where a merged end abuts the eave of the roof it merges into, the slope's
+  // eave corner sits on the valley with that roof's plane (inset from the wall).
+  const abut = config.abut ?? {};
+  const insetFor = (end, eave) => (abut[end] && eave > 1e-9 && slope > 0
+    ? Math.min(abut[end].depth, (slope * eave) / abut[end].slope)
+    : 0);
+  const insets = {
+    start: [insetFor('start', eMin), insetFor('start', eMax)],
+    end: [insetFor('end', eMin), insetFor('end', eMax)],
+  };
   const W = axis === 'x' ? (c, a, y) => [a, y, c] : (c, a, y) => [c, y, a];
   const ridgeEndpoints = config.ridgeEndpoints;
   const startPeakY = ridgeEndpoints?.start?.[2] ?? peakY;
   const endPeakY = ridgeEndpoints?.end?.[2] ?? peakY;
   const corners = axis === 'x'
-    ? [W(cMin - eMin, aStart, yLow), W(cMin - eMin, aEnd, yLow), W(cMax + eMax, aEnd, yHigh), W(cMax + eMax, aStart, yHigh)]
-    : [W(cMin - eMin, aStart, yLow), W(cMax + eMax, aStart, yHigh), W(cMax + eMax, aEnd, yHigh), W(cMin - eMin, aEnd, yLow)];
+    ? [
+      W(cMin - eMin, aStart + insets.start[0], yLow), W(cMin - eMin, aEnd - insets.end[0], yLow),
+      W(cMax + eMax, aEnd - insets.end[1], yHigh), W(cMax + eMax, aStart + insets.start[1], yHigh),
+    ]
+    : [
+      W(cMin - eMin, aStart + insets.start[0], yLow), W(cMax + eMax, aStart + insets.start[1], yHigh),
+      W(cMax + eMax, aEnd - insets.end[1], yHigh), W(cMin - eMin, aEnd - insets.end[0], yLow),
+    ];
   const ridgeStart = ridgeEndpoints?.start
     ? [ridgeEndpoints.start[0], startPeakY, ridgeEndpoints.start[1]]
     : W(centerCross, aStart, peakY);
@@ -1521,7 +1572,7 @@ function createGableRoofGeometry(bounds, config) {
   ];
   if (config.eaves) {
     appendTriangles(positions, indices, buildGableTrim(bounds, {
-      roofHeight: peakY, ridgeAxis: axis, overhang: ov, eaves: config.eaves,
+      roofHeight: peakY, ridgeAxis: axis, overhang: ov, eaves: config.eaves, insets,
     }));
     const eaveSlopes = axis === 'x' ? { minZ: slope, maxZ: slope } : { minX: slope, maxX: slope };
     appendTriangles(positions, indices, buildPartialEaveStrips(bounds, eaveSlopes, config.eaves));
