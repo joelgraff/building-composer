@@ -1,3 +1,5 @@
+import { normalizeRoofStructures } from './roof-structures.js';
+
 /**
  * Facade subdivision helpers for Task 3.
  *
@@ -500,6 +502,7 @@ export function serializeBuildingState(layout, modelConfig) {
     rakeSoffit: modelConfig.rakeSoffit,
     volumeEaves: modelConfig.volumeEaves ?? {},
     edgePitchOverrides: modelConfig.edgePitchOverrides ?? {},
+    roofStructures: modelConfig.roofStructures ?? [],
     roofGraph: layout.roofGraph,
   };
 }
@@ -508,7 +511,7 @@ export function serializeBuildingState(layout, modelConfig) {
  * Validates and restores building configuration from a parsed .bld JSON payload.
  *
  * @param {object} data
- * @returns {{ valid: boolean, state?: object, errors?: string[] }}
+ * @returns {{ valid: boolean, state?: object, errors?: string[], warnings?: string[] }}
  */
 export function deserializeBuildingState(data) {
   if (!data || typeof data !== 'object') {
@@ -518,8 +521,22 @@ export function deserializeBuildingState(data) {
     return { valid: false, errors: ['Invalid file format: footprint array missing or incomplete.'] };
   }
 
+  // Structures are placed on a volume of the footprint's decomposition; one
+  // whose host is gone (the file was edited, or decomposition changed) is
+  // dropped rather than guessed onto another volume.
+  const volumeIds = new Set(decomposeIntoVolumes(data.footprint).map((volume) => volume.id));
+  const warnings = [];
+  const roofStructures = normalizeRoofStructures(data.roofStructures).filter((structure) => {
+    if (volumeIds.has(structure.hostVolumeId)) {
+      return true;
+    }
+    warnings.push(`Dropped roof structure ${structure.id}: host volume ${structure.hostVolumeId} does not exist.`);
+    return false;
+  });
+
   return {
     valid: true,
+    warnings,
     state: {
       footprint: data.footprint,
       storyCount: data.storyCount ?? 1,
@@ -545,6 +562,7 @@ export function deserializeBuildingState(data) {
       rakeSoffit: data.rakeSoffit ?? 'sloped',
       volumeEaves: data.volumeEaves ?? {},
       edgePitchOverrides: data.edgePitchOverrides ?? {},
+      roofStructures,
     },
   };
 }

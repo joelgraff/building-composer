@@ -154,6 +154,7 @@ let modelConfig = {
   volumeRoofShapes: {},
   volumeEaves: {},
   edgePitchOverrides: {},
+  roofStructures: [],
 };
 let currentVolumeCount = 1;
 
@@ -692,6 +693,7 @@ async function loadSampleFootprint() {
   modelConfig.volumeRoofConnections = {};
   modelConfig.volumeRoofShapes = {};
   modelConfig.volumeEaves = {};
+  modelConfig.roofStructures = [];
   selectedElementId = 'building-defaults';
   const presetFiles = {
     sample: 'sample_footprint.json',
@@ -801,6 +803,7 @@ function handleFileInput(event) {
   modelConfig.volumeRoofShapes = {};
   modelConfig.volumeEaves = {};
   modelConfig.edgePitchOverrides = {};
+  modelConfig.roofStructures = [];
   selectedElementId = 'building-defaults';
 
   const reader = new FileReader();
@@ -821,7 +824,9 @@ function handleFileInput(event) {
           syncLengthInputs();
           updateRoofPitchDisplay();
           loadFootprint(result.state.footprint, false);
-          setStatus('Project (.bld) loaded successfully.', 'default');
+          setStatus(result.warnings.length
+            ? `Project (.bld) loaded. ${result.warnings.join(' ')}`
+            : 'Project (.bld) loaded successfully.', 'default');
           return;
         }
       }

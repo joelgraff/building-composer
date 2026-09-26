@@ -424,7 +424,7 @@ The exposed part of a partly shared eave side gets its own eave strip (top, fasc
 
 ## Roof-borne structures (dormers, raised porches) — plan
 
-Status: Phase 0 complete; phases 1–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+Status: Phases 0–1 complete; phases 2–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
 
 ### Core idea
 
@@ -457,7 +457,7 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
   roofType: 'gable',  // flat | gable | hip | shed, with the same builders as volumes
   ridge: 'perpendicular' | 'parallel',  // relative to host side; shed uses highEdge 'back' by default
   roofShape: { mode: 'slope', pitchRise: 8 } | { mode: 'height', height },  // as volumeRoofShapes
-  join: 'auto' | 'snap-ridge',  // auto = clip into host plane; snap = lower/rebuild to meet host ridge
+  join: 'auto' | 'snap-ridge',  // auto = clip into host plane, lowered to the ridge only if it would pass it; snap = always meet the ridge
   eaves: { ...volumeEaves fields },          // per-structure overrides over building defaults
   materials: { wall, roof },                 // optional, falls back to host then building
 }
@@ -474,12 +474,12 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
 | Sleeping porch on a lower wing, backed against the main block | host = wing, `baseHeight` = wing plate, and the roof clips into the main volume as a second host (`attachVolumeId`) |
 | Sleeping porch projecting from the main wall (over a ground porch or on brackets) | host = main, `setback < 0`, `baseHeight` = story-1 top, `openSides`; the exposed floor underside gets a closure face |
 
-### Validation (`validateRoofStructure`)
+### Validation (`resolveRoofStructure` / `validateRoofStructures`)
 
 - The host must be an existing volume. `hostSide` must be a sloped face (an eave side of a gable, hip, or shed, or any side of a flat roof), not a gable end.
 - The structure must sit inside that one face: the region where the `hostSide` plane is the minimum. It must not straddle a hip, valley, or another volume. This is what lets the other host planes be ignored locally.
-- The structure's ridge must stay below the host ridge. With `join: 'snap-ridge'` it is lowered to the host ridge instead, the same rule `gableMergeGeometry` applies.
-- A shed whose slope is at least the host's slope never meets the host plane. It is snapped to the ridge (the existing 2b rule) or rejected.
+- The structure's roof never rises above the host ridge. With `join: 'auto'` a roof that would is lowered onto it, with a `ridge-capped` warning; this is the same rule `gableMergeGeometry` applies. With `'snap-ridge'` it is always set to meet the ridge. A plate at or above the ridge, or a flat roof above it, is an error.
+- A shed whose slope is too steep to meet the host plane before the ridge line is snapped to the ridge in the same way (the existing 2b rule).
 - Structures on the same face must not overlap.
 - A structure whose host no longer exists after a footprint change is dropped on load with a reported warning.
 
@@ -503,7 +503,30 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
      - Each descriptor's planes match the rendered roof surface (rectangular gable, hip, shed, and flat; the U assembly; a merged shed; a lowered merged gable ridge; independent story counts).
      - `volumeSolid` membership.
    - Mesh helpers were extracted to `tests/helpers/mesh.js`.
-1. **Data model, placement, validation, persistence.** Add `structureBounds`, `validateRoofStructure`, and `.bld` round-trip. Nothing is rendered yet. Tests cover the frame math for all four host sides and every validation rule.
+1. **Data model, placement, validation, persistence.** Complete. Nothing is rendered yet.
+   - The plane primitives moved to a THREE-free `js/roof-planes.js`. `extrusion.js` re-exports `computeVolumeEavePlanes` and `evalZoneHeight`.
+   - `js/roof-structures.js` adds:
+     - `STRUCTURE_PRESETS` (dormer, wall-dormer, porch).
+     - `normalizeRoofStructure(s)`: preset defaults, and unique `structure-N` ids.
+     - `createRoofStructure` and `structureFrame`.
+     - `resolveRoofStructure(structure, hostZone, config)`, which returns the plan bounds, `sillY`/`plateY`, the structure's own roof planes (with the ridge cap applied), and `hostContact`. `hostContact` is the exact convex plan polygon where the structure stands in the host roof, which Phase 2 will cut out.
+     - `validateRoofStructures(list, roofZones, config)`, which also rejects structures overlapping on the same host.
+   - Error codes: `host-missing`, `host-inexact`, `invalid-dimensions`, `side-not-sloped`, `needs-base`, `outside-host`, `depth-required` (flat hosts), `outside-face`, `above-ridge`, `no-contact`, `crosses-face`, `overlap`. Warning code: `ridge-capped`.
+   - A resolved structure has the zone-descriptor shape, so `volumeSolid` accepts it.
+   - Defaults:
+     - Auto depth runs to the host ridge line, or to the high wall on a shed host.
+     - Slope-mode pitch comes from the building default. A shed's pitch runs over its full depth.
+     - Height mode is the ridge rise for a gable or hip, and the rise at the back for a shed.
+   - `.bld` files store `roofStructures`. On load, a structure whose host volume is not in the footprint's decomposition is dropped, and the load status reports a warning.
+   - `main.js` carries `modelConfig.roofStructures` and resets it wherever the per-volume overrides are reset.
+   - Tests:
+     - Records and ids.
+     - The frame on all four sides.
+     - A dormer's contact pentagon and ridge end, checked against hand-worked values (the ridge end matches the gable-merge rule).
+     - Wall dormer, ridge cap and snap, a shed dormer meeting the host plane, and hip-end fit versus crossing the hip lines.
+     - A flat host, a porch base, and every error code.
+     - Overlap, and `.bld` round-trip, dropped hosts, and older files without structures.
+   - Note: zone ids come from the `volumes` passed to `createBuildingFromFootprint`. Without them the single rectangle is `volume-main`. The app always passes them.
 2. **Roof dormers (setback clears the host eave).**
    - Build walls as rectangles plus gable-end polygons, from below the host plane up to the plate, and clip them outside the host.
    - Build the roof with the existing builders on bounds extended back to the host ridge line, with no overhang on the back side, then clip it outside the host.

@@ -2,10 +2,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { normalizeFootprint } from '../js/footprint.js';
-import { computeFacadeLayout } from '../js/facade.js';
+import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState } from '../js/facade.js';
 import { createBuildingFromFootprint, evalZoneHeight } from '../js/extrusion.js';
 import {
   clipOutsideConvexSolid, isInsideSolid, volumeSolid, FLAT_ROOF_THICKNESS,
+  normalizeRoofStructure, normalizeRoofStructures, createRoofStructure, STRUCTURE_PRESETS,
+  resolveRoofStructure, validateRoofStructures,
 } from '../js/roof-structures.js';
 import { meshTriangles, totalArea, openTriangleEdges } from './helpers/mesh.js';
 
@@ -246,5 +248,217 @@ describe('volumeSolid', () => {
     const flatSolid = volumeSolid(flat);
     assert.equal(isInsideSolid([0, flat.baseY + FLAT_ROOF_THICKNESS - 0.001, 0], flatSolid), true);
     assert.equal(isInsideSolid([0, flat.baseY + FLAT_ROOF_THICKNESS + 0.01, 0], flatSolid), false);
+  });
+});
+
+describe('roof structure records', () => {
+  it('fill missing fields from the kind\'s preset and reject unplaceable input', () => {
+    const dormer = normalizeRoofStructure({ hostVolumeId: 'volume-0', hostSide: 'minZ' });
+    assert.equal(dormer.kind, 'dormer');
+    assert.equal(dormer.width, STRUCTURE_PRESETS.dormer.width);
+    assert.equal(dormer.depth, null);
+    assert.equal(dormer.baseHeight, null);
+    assert.equal(dormer.roofType, 'gable');
+    assert.equal(dormer.join, 'auto');
+    const porch = normalizeRoofStructure({ kind: 'porch', hostVolumeId: 'volume-1', hostSide: 'maxX', openSides: ['front', 'sideways', 'back'], roofType: 'dome' });
+    assert.equal(porch.baseHeight, 0);
+    assert.deepEqual(porch.openSides, ['front', 'back']);
+    assert.equal(porch.roofType, 'shed', 'unknown roof types fall back to the preset');
+    assert.equal(normalizeRoofStructure({ hostSide: 'minZ' }), null);
+    assert.equal(normalizeRoofStructure({ hostVolumeId: 'volume-0', hostSide: 'north' }), null);
+  });
+
+  it('get unique ids, keeping valid ones', () => {
+    const list = normalizeRoofStructures([
+      { id: 'structure-2', hostVolumeId: 'volume-0', hostSide: 'minZ' },
+      { hostVolumeId: 'volume-0', hostSide: 'maxZ' },
+      { id: 'structure-2', hostVolumeId: 'volume-0', hostSide: 'minX' },
+      null,
+    ]);
+    assert.deepEqual(list.map((structure) => structure.id), ['structure-2', 'structure-1', 'structure-3']);
+    const created = createRoofStructure('wall-dormer', { hostVolumeId: 'volume-0', hostSide: 'minZ' }, list);
+    assert.equal(created.id, 'structure-4');
+    assert.equal(created.setback, 0);
+  });
+});
+
+describe('resolveRoofStructure', () => {
+  // 20 x 10 rectangle, plate at 0.6 + 3 + 0.02; gable ridge along x, 2.5 high (slope 0.5)
+  const PLATE = 3.62;
+  const zoneFor = (config) => createBuildingFromFootprint(RECT, {
+    storyCount: 1, storyHeight: 3, foundationDepth: 0.6, roofHeight: 2.5, roofPitchRise: 6, roofPitchRun: 12, ...config,
+  }).roofZones[0];
+  const gableHost = zoneFor({ roofType: 'gable', roofDirection: 'x' });
+  const hipHost = zoneFor({ roofType: 'hip', roofDirection: 'x' });
+  const flatHost = zoneFor({ roofType: 'flat' });
+  const building = { roofPitchRise: 6, roofPitchRun: 12 };
+  const dormer = (fields, host = gableHost) => resolveRoofStructure(
+    normalizeRoofStructure({ id: 'd', hostVolumeId: host.volumeId, hostSide: 'minZ', ...fields }),
+    host,
+    building
+  );
+  const near = (a, b, message) => assert.ok(Math.abs(a - b) < 1e-9, `${message ?? ''} expected ${b}, got ${a}`);
+  const polygonArea = (polygon) => Math.abs(polygon.reduce((sum, [x, z], i) => {
+    const [nx, nz] = polygon[(i + 1) % polygon.length];
+    return sum + x * nz - nx * z;
+  }, 0)) / 2;
+
+  it('places a gable dormer on the slope, sill on the roof, and finds where it meets the host', () => {
+    const { resolved, errors, warnings } = dormer({});
+    assert.deepEqual(errors, []);
+    assert.deepEqual(warnings, []);
+    assert.deepEqual(resolved.bounds, { minX: -1.2, maxX: 1.2, minZ: -4.1, maxZ: 0 }, 'runs back to the host ridge line');
+    near(resolved.sillY, PLATE + 0.45, 'sill: host roof 0.9 m in at slope 0.5');
+    near(resolved.plateY, PLATE + 0.45 + 1.4);
+    assert.equal(resolved.ridgeAxis, 'z', 'perpendicular ridge runs into the roof');
+    near(resolved.roofHeight, 0.6, '1.2 m half span at 6:12');
+    // eaves meet the host at z = -1.3, the ridge at z = -0.1 (same as the gable merge rule)
+    near(polygonArea(resolved.hostContact), 2.4 * 2.8 + 0.5 * 2.4 * 1.2, 'contact pentagon area');
+    const ridgeEnd = resolved.hostContact.reduce((best, point) => (point[1] > best[1] ? point : best));
+    near(ridgeEnd[0], 0);
+    near(ridgeEnd[1], -0.1);
+  });
+
+  it('works the same way from every side (frame)', () => {
+    const zHost = zoneFor({ roofType: 'gable', roofDirection: 'z' });
+    const cases = [
+      [gableHost, 'minZ', { minX: 1.8, maxX: 4.2, minZ: -4.1, maxZ: 0 }],
+      [gableHost, 'maxZ', { minX: 1.8, maxX: 4.2, minZ: 0, maxZ: 4.1 }],
+      [zHost, 'minX', { minX: -9.1, maxX: 0, minZ: 1.8, maxZ: 4.2 }],
+      [zHost, 'maxX', { minX: 0, maxX: 9.1, minZ: 1.8, maxZ: 4.2 }],
+    ];
+    cases.forEach(([host, hostSide, expected]) => {
+      const { resolved, errors } = resolveRoofStructure(
+        normalizeRoofStructure({ id: 'd', hostVolumeId: host.volumeId, hostSide, offset: 3 }),
+        host,
+        building
+      );
+      assert.deepEqual(errors, [], hostSide);
+      Object.entries(expected).forEach(([key, value]) => near(resolved.bounds[key], value, `${hostSide} ${key}`));
+      const slope = hostSide === 'minZ' || hostSide === 'maxZ' ? 0.5 : 0.25;
+      near(resolved.sillY, PLATE + 0.9 * slope, `${hostSide} sill`);
+    });
+  });
+
+  it('starts a wall dormer at the host plate', () => {
+    const { resolved } = dormer({ kind: 'wall-dormer' });
+    near(resolved.front, -5);
+    near(resolved.sillY, PLATE);
+    near(resolved.plateY, PLATE + 1.2);
+  });
+
+  it('lowers a roof that would rise above the host ridge, or snaps to it on request', () => {
+    const capped = dormer({ wallHeight: 1.8 });
+    assert.deepEqual(capped.warnings.map((w) => w.code), ['ridge-capped']);
+    near(capped.resolved.topY, PLATE + 2.5, 'ridge lands on the host ridge');
+    const snapped = dormer({ join: 'snap-ridge' });
+    assert.deepEqual(snapped.warnings, []);
+    near(snapped.resolved.roofHeight, 2.5 - 0.45 - 1.4, 'raised to the host ridge');
+    assert.deepEqual(dormer({ wallHeight: 2.2 }).errors.map((e) => e.code), ['above-ridge']);
+  });
+
+  it('builds a shed dormer sloping up into the roof', () => {
+    const { resolved, warnings } = dormer({ roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 1 } });
+    assert.deepEqual(warnings, []);
+    assert.equal(resolved.roofHighEdge, 'z-max');
+    // 1.85 + (z + 4.1) / 12 = 0.5 (z + 5)
+    const meet = (1.85 + 4.1 / 12 - 2.5) / (0.5 - 1 / 12);
+    near(Math.max(...resolved.hostContact.map(([, z]) => z)), meet, 'ends where it meets the host plane');
+    near(polygonArea(resolved.hostContact), 2.4 * (meet + 4.1));
+    const steep = dormer({ roofType: 'shed' });
+    assert.deepEqual(steep.warnings.map((w) => w.code), ['ridge-capped'], 'a shed steeper than the host snaps to the ridge');
+  });
+
+  it('allows a small dormer in a hip end but not one that crosses the hip lines', () => {
+    const small = dormer({ hostSide: 'minX', width: 1, setback: 0.5, wallHeight: 0.6 }, hipHost);
+    assert.deepEqual(small.errors, []);
+    assert.deepEqual(dormer({ hostSide: 'minX' }, hipHost).errors, [], 'a standard dormer fits the 5 m deep hip end');
+    assert.deepEqual(dormer({ hostSide: 'minX', width: 4 }, hipHost).errors.map((e) => e.code), ['crosses-face']);
+  });
+
+  it('stands a structure on a flat roof at the slab top', () => {
+    const { resolved, errors } = dormer({ depth: 3, roofType: 'flat' }, flatHost);
+    assert.deepEqual(errors, []);
+    near(resolved.sillY, PLATE + FLAT_ROOF_THICKNESS);
+    assert.deepEqual(dormer({}, flatHost).errors.map((e) => e.code), ['depth-required']);
+  });
+
+  it('stands a porch on its base height', () => {
+    const { resolved, errors } = dormer({ kind: 'porch' });
+    assert.deepEqual(errors, []);
+    near(resolved.sillY, PLATE);
+    near(resolved.back - resolved.front, 2.4);
+  });
+
+  it('reports what makes a structure unplaceable', () => {
+    const code = (fields, host) => dormer(fields, host).errors.map((e) => e.code);
+    assert.deepEqual(code({ hostSide: 'minX' }), ['side-not-sloped'], 'a gable end');
+    assert.deepEqual(code({ offset: 9.5 }), ['outside-host']);
+    assert.deepEqual(code({ setback: -1 }), ['needs-base']);
+    assert.deepEqual(code({ setback: 6 }), ['outside-face']);
+    assert.deepEqual(code({ width: 0 }), ['invalid-dimensions']);
+    assert.deepEqual(code({}, { ...gableHost, exact: false }), ['host-inexact']);
+    assert.deepEqual(resolveRoofStructure(normalizeRoofStructure({ hostVolumeId: 'volume-9', hostSide: 'minZ' }), undefined).errors.map((e) => e.code), ['host-missing']);
+  });
+
+  it('resolves to a solid (the zone descriptor shape)', () => {
+    const { resolved } = dormer({});
+    const solid = volumeSolid(resolved, { floorY: resolved.sillY });
+    const ridge = resolved.plateY + resolved.roofHeight;
+    assert.equal(isInsideSolid([0, ridge - 0.01, -3], solid), true);
+    assert.equal(isInsideSolid([0, ridge + 0.01, -3], solid), false);
+    assert.equal(isInsideSolid([1.1, ridge - 0.01, -3], solid), false, 'above the dormer slope near its eave');
+  });
+});
+
+describe('validateRoofStructures', () => {
+  const { roofZones } = createBuildingFromFootprint(RECT, {
+    storyCount: 1, storyHeight: 3, roofType: 'gable', roofDirection: 'x', roofHeight: 2.5, roofPitchRise: 6, roofPitchRun: 12,
+    volumes: computeFacadeLayout(RECT, {}).volumes,
+  });
+  const structures = normalizeRoofStructures([
+    { hostVolumeId: 'volume-0', hostSide: 'minZ', offset: -4 },
+    { hostVolumeId: 'volume-0', hostSide: 'minZ', offset: -3 },
+    { hostVolumeId: 'volume-0', hostSide: 'maxZ', offset: -4 },
+    { hostVolumeId: 'volume-3', hostSide: 'maxZ' },
+  ]);
+
+  it('resolves each structure and rejects later overlaps on the same roof', () => {
+    const results = validateRoofStructures(structures, roofZones, { roofPitchRise: 6 });
+    assert.deepEqual(results.map((result) => result.errors.map((e) => e.code)), [[], ['overlap'], [], ['host-missing']]);
+    assert.deepEqual(results.map((result) => Boolean(result.resolved)), [true, false, true, false]);
+  });
+});
+
+describe('roof structure persistence', () => {
+  const norm = normalizeFootprint(RECT);
+  const layout = computeFacadeLayout(norm, {});
+  const roofStructures = normalizeRoofStructures([
+    { kind: 'dormer', hostVolumeId: 'volume-0', hostSide: 'minZ', offset: 2, roofType: 'hip', roofShape: { mode: 'height', height: 0.8 } },
+    { kind: 'porch', hostVolumeId: 'volume-0', hostSide: 'maxZ', eaves: { eaveDepth: 0.2 } },
+  ]);
+
+  it('round-trips through .bld', () => {
+    const saved = JSON.parse(JSON.stringify(serializeBuildingState(layout, { roofStructures })));
+    const loaded = deserializeBuildingState(saved);
+    assert.equal(loaded.valid, true);
+    assert.deepEqual(loaded.warnings, []);
+    assert.deepEqual(loaded.state.roofStructures, roofStructures);
+  });
+
+  it('drops structures whose host volume is gone, with a warning', () => {
+    const saved = JSON.parse(JSON.stringify(serializeBuildingState(layout, {
+      roofStructures: [...roofStructures, { id: 'structure-9', hostVolumeId: 'volume-4', hostSide: 'minX' }],
+    })));
+    const loaded = deserializeBuildingState(saved);
+    assert.deepEqual(loaded.state.roofStructures.map((structure) => structure.id), ['structure-1', 'structure-2']);
+    assert.equal(loaded.warnings.length, 1);
+    assert.match(loaded.warnings[0], /structure-9/);
+  });
+
+  it('loads older files without structures', () => {
+    const saved = JSON.parse(JSON.stringify(serializeBuildingState(layout, {})));
+    delete saved.roofStructures;
+    assert.deepEqual(deserializeBuildingState(saved).state.roofStructures, []);
   });
 });
