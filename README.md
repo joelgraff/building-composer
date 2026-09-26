@@ -47,6 +47,13 @@ npm test
   - Dual control authority: edit roof pitch ratio (rise per 12 run) or geometric roof rise.
   - Straight skeleton WebAssembly solver (`straight-skeleton` CGAL library) for multi-volume equal-height hip roofs, with automatic fall-through to gridded distance fields.
   - Gable valley avoidance: automatically orients attached wing ridges perpendicular to spanning blocks.
+  - Per-volume pitch and roof rise: select a volume to override the building default.
+  - **Merge into adjacent roof** (opt-in per volume): a shed or gable joins its neighbor by intersecting the neighbor's roof plane below the ridge, or snapping to the ridge if it would rise above it. Works across different story counts once the roof clears the taller neighbor's eave, and roof faces always stay planar.
+
+- **Eaves**:
+  - Separate eave depth and rake overhang, plus a fascia (default six inches) hanging below every roof edge.
+  - Flat or roof-parallel soffits (eaves default flat, rakes default parallel), with boxed corners where they meet.
+  - Every setting is a building default that any volume can override; a main roof keeps its eave where a gable merges into it.
 
 - **Roof Graph & Edge Roles**:
   - Automatically identifies and tags exterior perimeter edges by their architectural roof role:
@@ -61,7 +68,7 @@ npm test
   - Secondary top-down orthographic plan view synchronized with camera controls and dynamic bounding frustum.
 
 - **Native Persistence & Interchange**:
-  - **Save Project (`.bld`)**: Serializes complete footprint, volumes, roof graph, story overrides, materials, and edge pitches into a native JSON document.
+  - **Save Project (`.bld`)**: Serializes complete footprint, volumes, roof graph, story overrides, materials, edge pitches, per-volume roof shapes, and eave settings into a native JSON document.
   - **Load Project**: Restores saved `.bld` files or raw footprint JSON arrays.
   - **GLB Export**: One-click binary GLTF/GLB export via Three.js `GLTFExporter`, cleanly omitting editor-only visual guides, outlines, and pick targets.
 
@@ -71,17 +78,20 @@ npm test
 building-composer/
 ├── data/                  # Preset footprint JSON fixtures (Rectangle, U, L, etc.)
 ├── js/
+│   ├── eaves.js           # Eave/rake overhang, fascia, and soffit geometry
 │   ├── export.js          # GLTF/GLB binary export logic
-│   ├── extrusion.js       # 3D procedural geometry builders for walls, roofs, foundation
+│   ├── extrusion.js       # 3D procedural geometry builders for walls, roofs, foundation; roof merge resolver
 │   ├── facade.js          # Facade layout, volume decomposition, roof graph, .bld persistence
 │   ├── footprint.js       # 2D polygon validation, normalization, and metrics
 │   ├── main.js            # UI controller, scene management, dual viewport rendering
 │   └── materials.js       # Shared PBR material definitions and palette presets
 ├── tests/
+│   ├── eaves.test.js      # Overhang, fascia/soffit, and closure tests
 │   ├── extrusion.test.js  # Massing, extrusion, and NaN validation tests
 │   ├── facade.test.js     # Facade layout and volume decomposition tests
 │   ├── footprint.test.js  # Validation, winding, and metrics tests
-│   └── roof_graph.test.js # Edge role classification and serialization tests
+│   ├── roof_graph.test.js # Edge role classification and serialization tests
+│   └── roof_resolver.test.js # Roof merge, planarity, and story-count tests
 ├── index.html             # App shell, toolbar, sidebar panels, and viewport canvases
 ├── ARCHITECTURE.md        # Architectural specification and data model
 └── IMPLEMENTATION_PLAN.md # Milestone roadmap and execution log
