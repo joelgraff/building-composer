@@ -80,6 +80,36 @@ export function sideOverhangs(roofType, { ridgeAxis = 'x', roofHighEdge }, eaves
 const quad = (a, b, c, d) => [[a, b, c], [a, c, d]];
 const fan = (points) => points.slice(1, -1).map((_, i) => [points[0], points[i + 1], points[i + 2]]);
 
+// Sutherland-Hodgman on the first coordinate: keep points where sign*(c - limit) >= 0.
+function clipByCross(polygon, limit, sign) {
+  const out = [];
+  polygon.forEach((current, i) => {
+    const previous = polygon[(i + polygon.length - 1) % polygon.length];
+    const dCurrent = sign * (current[0] - limit);
+    const dPrevious = sign * (previous[0] - limit);
+    if ((dCurrent >= 0) !== (dPrevious >= 0)) {
+      const t = dPrevious / (dPrevious - dCurrent);
+      out.push(previous.map((value, k) => value + (current[k] - value) * t));
+    }
+    if (dCurrent >= 0) {
+      out.push(current);
+    }
+  });
+  return out;
+}
+
+/**
+ * End cap for an eave strip whose along-side has no overhang: the (cross, y)
+ * outline of the overhang box placed at `along`. The part of it lying against
+ * a neighbor's wall (`backing` = [lo, hi] in cross coordinates) needs no face.
+ */
+function endCap(P, along, outline, backing) {
+  const pieces = backing
+    ? [clipByCross(outline, Math.min(...backing), -1), clipByCross(outline, Math.max(...backing), 1)]
+    : [outline];
+  return pieces.filter((piece) => piece.length >= 3).flatMap((piece) => fan(piece.map(([c, y]) => P(c, along, y))));
+}
+
 /** Maps (cross, along, y) to world [x, y, z] for a ridge/slope running along `axis`. */
 function frameFor(axis) {
   return axis === 'x' ? (c, a, y) => [a, y, c] : (c, a, y) => [c, y, a];
@@ -125,6 +155,13 @@ export function buildGableTrim(bounds, { roofHeight, ridgeAxis, overhang, eaves 
     } else {
       tris.push(...quad(P(cWall, aMin, -f), P(cOut, aMin, yOut - f), P(cOut, aMax, yOut - f), P(cWall, aMax, -f)));
     }
+    // an eave strip that ends flush with the wall (no rake overhang there) is boxed in with an end cap
+    const outline = [[cWall, 0], [cOut, yOut], [cOut, yOut - f], [cWall, eaveFlat ? yOut - f : -f]];
+    [[rStart, aMin, axis === 'x' ? 'minX' : 'minZ'], [rEnd, aMax, axis === 'x' ? 'maxX' : 'maxZ']].forEach(([r, aWall, endSide]) => {
+      if (r <= EPS) {
+        tris.push(...endCap(P, aWall, outline, eaves.backing?.[endSide]));
+      }
+    });
   });
 
   // rake fascia + soffits at each overhanging end
@@ -162,6 +199,10 @@ export function buildGableTrim(bounds, { roofHeight, ridgeAxis, overhang, eaves 
         const yStart = e > EPS ? yOut : 0;
         strip(cStart, yStart, cRidge, roofHeight, yStart - f, roofHeight - f);
         tris.push(...quad(P(cStart, aWall, yStart - f), P(cStart, aOut, yStart - f), P(cRidge, aOut, roofHeight - f), P(cRidge, aWall, roofHeight - f)));
+        if (e <= EPS) {
+          // the rake box ends at the eave line
+          tris.push(...quad(P(cWall, aWall, 0), P(cWall, aOut, 0), P(cWall, aOut, -f), P(cWall, aWall, -f)));
+        }
       }
     });
   });
@@ -232,6 +273,15 @@ export function buildShedTrim(bounds, { roofHeight, roofHighEdge, overhang, eave
     }
   }
   const flatLevel = e > EPS ? yE - f : -f;
+  if (e > EPS) {
+    const outline = [[sLow, 0], [sOut, yE], [sOut, yE - f], [sLow, eaveFlat ? yE - f : -f]];
+    const lateralSides = slopeAlongX ? ['minZ', 'maxZ'] : ['minX', 'maxX'];
+    [[rA, lMin, lateralSides[0]], [rB, lMax, lateralSides[1]]].forEach(([r, lWall, lateralSide]) => {
+      if (r <= EPS) {
+        tris.push(...endCap(P, lWall, outline, eaves.backing?.[lateralSide]));
+      }
+    });
+  }
   [[rA, lMin, lA], [rB, lMax, lB]].forEach(([r, lWall, lOut]) => {
     if (r <= EPS) {
       return;
@@ -247,6 +297,9 @@ export function buildShedTrim(bounds, { roofHeight, roofHighEdge, overhang, eave
       }
       return;
     }
+    if (e <= EPS) {
+      tris.push(...quad(F(sLow, lWall, 0), F(sLow, lOut, 0), F(sLow, lOut, -f), F(sLow, lWall, -f)));
+    }
     const strip = (s0, y0, s1, y1, b0, b1) => {
       tris.push(...quad(F(s0, lOut, y0), F(s1, lOut, y1), F(s1, lOut, b1), F(s0, lOut, b0)));
     };
@@ -261,6 +314,43 @@ export function buildShedTrim(bounds, { roofHeight, roofHighEdge, overhang, eave
       strip(sStart, yStart, sHigh, roofHeight, yStart - f, roofHeight - f);
       tris.push(...quad(F(sStart, lWall, yStart - f), F(sStart, lOut, yStart - f), F(sHigh, lOut, roofHeight - f), F(sHigh, lWall, roofHeight - f)));
     }
+  });
+  return tris;
+}
+
+/**
+ * Eave strips for the exposed part of an eave side that is partly shared with
+ * another volume (`eaves.partial[side]` = intervals along the side). Each strip
+ * is the roof plane continued past the wall, with fascia, soffit, and end caps
+ * where no neighbor wall closes the end. `slopes[side]` is the roof slope there.
+ */
+export function buildPartialEaveStrips(bounds, slopes, eaves) {
+  const tris = [];
+  const f = eaves.fasciaDepth;
+  const e = eaves.eaveDepth;
+  Object.entries(eaves.partial ?? {}).forEach(([side, intervals]) => {
+    const slope = slopes[side];
+    if (!(slope >= 0) || e <= EPS) {
+      return;
+    }
+    const alongX = side === 'minZ' || side === 'maxZ';
+    const wall = bounds[side];
+    const out = wall + (side === 'minX' || side === 'minZ' ? -e : e);
+    const yE = -slope * e;
+    const W = (t, c, y) => (alongX ? [t, y, c] : [c, y, t]);
+    const eaveFlat = eaves.eaveSoffit !== 'sloped';
+    intervals.forEach(({ a0, a1, cap0, cap1 }) => {
+      tris.push(...quad(W(a0, wall, 0), W(a1, wall, 0), W(a1, out, yE), W(a0, out, yE)));
+      tris.push(...quad(W(a0, out, yE), W(a1, out, yE), W(a1, out, yE - f), W(a0, out, yE - f)));
+      const wallBottom = eaveFlat ? yE - f : -f;
+      tris.push(...quad(W(a0, wall, wallBottom), W(a1, wall, wallBottom), W(a1, out, yE - f), W(a0, out, yE - f)));
+      const outline = [[wall, 0], [out, yE], [out, yE - f], [wall, wallBottom]];
+      [[a0, cap0], [a1, cap1]].forEach(([t, needed]) => {
+        if (needed) {
+          tris.push(...fan(outline.map(([c, y]) => W(t, c, y))));
+        }
+      });
+    });
   });
   return tris;
 }

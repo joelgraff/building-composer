@@ -205,3 +205,36 @@ describe('soffit style variants stay closed', () => {
     });
   });
 });
+
+describe('eave ends and partly shared sides', () => {
+  it('boxes in an eave whose rake overhang is zero', () => {
+    const mesh = roofMesh({ roofType: 'gable', roofDirection: 'x', roofEaveDepth: 0.5, roofRakeDepth: 0, roofFasciaDepth: F });
+    const wallEdge = (edge) => edge.every((p) => Math.abs(Math.abs(p[0]) - 10) < 1e-6)
+      || edge.every((p) => Math.abs(Math.abs(p[2]) - 5) < 1e-6);
+    openEdges(mesh).forEach((edge) => assert.ok(wallEdge(edge), `open end ${JSON.stringify(edge)}`));
+    // a cap at each of the four eave ends: the fascia-height box is visible at x = +-10
+    assert.ok(triangles(mesh).some((tri) => tri.every((v) => Math.abs(v[0] - 10) < 1e-6) && tri.some((v) => Math.abs(v[2] - 5.5) < 1e-6)));
+  });
+
+  it('the exposed part of a shared eave gets its own strip, closed against the neighbors', () => {
+    const norm = normalizeFootprint(uFootprint);
+    const layout = computeFacadeLayout(norm, { roofType: 'gable' });
+    const { building } = createBuildingFromFootprint(norm, {
+      storyCount: 1, storyHeight: 3, roofType: 'gable', roofPitchRise: 6, roofPitchRun: 12, volumes: layout.volumes,
+      volumeStoryOverrides: { 'volume-0': 2 }, roofEaveDepth: 0.5, roofFasciaDepth: F,
+    });
+    const base = layout.volumes[0];
+    let found = 0;
+    building.traverse((child) => {
+      if (child.isMesh && child.userData?.volumeId === 'volume-0' && child.userData?.roofType) {
+        const pos = child.geometry.getAttribute('position');
+        for (let i = 0; i < pos.count; i += 1) {
+          if (Math.abs(pos.getZ(i) - (base.maxZ + 0.5)) < 1e-6 && Math.abs(pos.getX(i)) < 6 + 1e-6 && pos.getY(i) < 0) {
+            found += 1;
+          }
+        }
+      }
+    });
+    assert.ok(found > 0, 'base roof projects into the courtyard along its exposed eave');
+  });
+});

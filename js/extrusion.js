@@ -6,7 +6,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { createMaterials, MATERIAL_PALETTE } from './materials.js';
 import { roofAxisForDirection, findVolumeAdjacencies } from './facade.js';
 import {
-  resolveVolumeEaves, sideOverhangs, buildGableTrim, buildHipTrim, buildShedTrim,
+  resolveVolumeEaves, sideOverhangs, buildGableTrim, buildHipTrim, buildShedTrim, buildPartialEaveStrips,
 } from './eaves.js';
 
 let straightSkeletonBuilder = null;
@@ -176,7 +176,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
     roofVolumes.map((volume) => [volume.id, (overrides[volume.id] ?? storyCount) * storyHeight])
   );
   const connections = resolveRoofConnections(roofVolumes, { ...config, volumePlateHeights });
-  const adjacentSides = adjacentSidesByVolume(roofVolumes);
+  const adjacentSides = adjacentSidesByVolume(roofVolumes, volumePlateHeights);
 
   roofVolumes.forEach((volume) => {
     const volumeStoryCount = overrides[volume.id] ?? storyCount;
@@ -207,7 +207,9 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
       roofTypeForVolume,
       { ridgeAxis: roofDirectionForVolume, roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(roofDirectionForVolume) },
       config,
-      new Set([...(adjacentSides.get(volume.id) ?? []), ...Object.keys(volumeConnections ?? {})])
+      Object.keys(volumeConnections ?? {}),
+      adjacentSides.get(volume.id),
+      { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ }
     );
     const roofHeightForVolume = roofTypeForVolume === 'flat'
       ? 0
@@ -526,7 +528,9 @@ function createVolumeRoofAssembly(volumes, config) {
       roofType,
       { ridgeAxis: volume.ridgeAxis, roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis) },
       config,
-      new Set([...(adjacentSides.get(volume.id) ?? []), ...Object.keys(volumeConnections ?? {})])
+      Object.keys(volumeConnections ?? {}),
+      adjacentSides.get(volume.id),
+      { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ }
     );
     const gableMerge = roofType === 'gable' ? gableMergeGeometry(volume, bounds, volumeConnections, params.roofHeight) : null;
     const roofConfig = {
@@ -1381,23 +1385,78 @@ function pickEaveConfig(config) {
 }
 
 /** Sides of each volume that touch another volume (no overhang there). */
-function adjacentSidesByVolume(volumes) {
-  const sides = new Map(volumes.map((volume) => [volume.id, new Set()]));
+function adjacentSidesByVolume(volumes, plates) {
+  const sides = new Map(volumes.map((volume) => [volume.id, new Map()]));
+  const byId = new Map(volumes.map((volume) => [volume.id, volume]));
   findVolumeAdjacencies(volumes).forEach((adjacency) => {
-    sides.get(adjacency.volumeAId)?.add(adjacency.sideA);
-    sides.get(adjacency.volumeBId)?.add(adjacency.sideB);
+    const plate = (id) => plates?.[id] ?? 0;
+    const link = (id, side, neighborId) => {
+      const bySide = sides.get(id);
+      if (!bySide) {
+        return;
+      }
+      if (!bySide.has(side)) {
+        bySide.set(side, []);
+      }
+      const neighbor = byId.get(neighborId);
+      const acrossX = side === 'minX' || side === 'maxX';
+      bySide.get(side).push({
+        min: adjacency.overlapMin,
+        max: adjacency.overlapMax,
+        // the neighbor's whole wall face, which closes anything up against it
+        wall: acrossX ? [neighbor.minZ, neighbor.maxZ] : [neighbor.minX, neighbor.maxX],
+        // the neighbor's wall backs an eave end only if it reaches up to this roof's plate
+        backs: plate(neighborId) >= plate(id) - 1e-6,
+      });
+    };
+    link(adjacency.volumeAId, adjacency.sideA, adjacency.volumeBId);
+    link(adjacency.volumeBId, adjacency.sideB, adjacency.volumeAId);
   });
   return sides;
 }
 
 /**
  * Overhang and eave settings for one volume's roof. Shared walls and merged
- * sides never overhang.
+ * sides never overhang along their shared length; the exposed remainder of a
+ * partly shared eave side gets its own eave strip (`eaves.partial`), and
+ * `eaves.backing` lists neighbor walls that already close an eave end.
  */
-function volumeEaveSetup(volumeId, roofType, orientation, config, zeroSides) {
+function volumeEaveSetup(volumeId, roofType, orientation, config, mergedSides, adjacency, bounds) {
   const eaves = resolveVolumeEaves(volumeId, config);
-  const { overhang } = sideOverhangs(roofType, orientation, eaves, zeroSides ?? new Set());
-  return { overhang, eaves };
+  const zeroSides = new Set([...(adjacency?.keys() ?? []), ...(mergedSides ?? [])]);
+  const { overhang, roles } = sideOverhangs(roofType, orientation, eaves, zeroSides);
+  const backing = {};
+  const partial = {};
+  adjacency?.forEach((links, side) => {
+    const covered = links.filter((link) => link.backs);
+    if (covered.length) {
+      backing[side] = [Math.min(...covered.map((link) => link.wall[0])), Math.max(...covered.map((link) => link.wall[1]))];
+    }
+    if (roles[side] !== 'eave' || !bounds || (mergedSides ?? []).includes(side) || roofType === 'hip' || eaves.eaveDepth <= 1e-9) {
+      return;
+    }
+    const alongX = side === 'minZ' || side === 'maxZ';
+    const [lo, hi] = alongX ? [bounds.minX, bounds.maxX] : [bounds.minZ, bounds.maxZ];
+    const sorted = links.map((link) => [link.min, link.max]).sort((x, y) => x[0] - y[0]);
+    const intervals = [];
+    let cursor = lo;
+    sorted.forEach(([min, max]) => {
+      if (min > cursor + 1e-6) {
+        intervals.push({ a0: cursor, a1: min });
+      }
+      cursor = Math.max(cursor, max);
+    });
+    if (hi > cursor + 1e-6) {
+      intervals.push({ a0: cursor, a1: hi });
+    }
+    const wallTouching = (t) => links.some((link) => link.backs && (Math.abs(link.max - t) < 1e-6 || Math.abs(link.min - t) < 1e-6));
+    if (intervals.length) {
+      partial[side] = intervals.map((interval) => ({
+        ...interval, cap0: !wallTouching(interval.a0), cap1: !wallTouching(interval.a1),
+      }));
+    }
+  });
+  return { overhang, eaves: { ...eaves, backing, partial } };
 }
 
 /** Per-side overhang from `config.overhang`, or a uniform scalar `roofOverhang`. */
@@ -1464,6 +1523,8 @@ function createGableRoofGeometry(bounds, config) {
     appendTriangles(positions, indices, buildGableTrim(bounds, {
       roofHeight: peakY, ridgeAxis: axis, overhang: ov, eaves: config.eaves,
     }));
+    const eaveSlopes = axis === 'x' ? { minZ: slope, maxZ: slope } : { minX: slope, maxX: slope };
+    appendTriangles(positions, indices, buildPartialEaveStrips(bounds, eaveSlopes, config.eaves));
   }
   return createIndexedGeometry(positions, indices);
 }
@@ -1585,6 +1646,9 @@ export function createShedRoofGeometry(bounds, config) {
     appendTriangles(positions, indices, buildShedTrim(bounds, {
       roofHeight: peakY, roofHighEdge: highEdge, overhang: ov, eaves: config.eaves,
     }));
+    const lowSide = { 'x-min': 'maxX', 'x-max': 'minX', 'z-min': 'maxZ', 'z-max': 'minZ' }[highEdge];
+    const shedSpan = lowSide === 'minX' || lowSide === 'maxX' ? maxX - minX : maxZ - minZ;
+    appendTriangles(positions, indices, buildPartialEaveStrips(bounds, { [lowSide]: shedSpan > 1e-9 ? peakY / shedSpan : 0 }, config.eaves));
   }
   return createIndexedGeometry(positions, indices);
 }

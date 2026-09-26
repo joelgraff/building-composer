@@ -420,8 +420,8 @@ Known limits: hip and flat roofs do not act as the merging (lower/joining) roof;
 
 `js/eaves.js` resolves per-volume eave/rake depth, fascia depth, and soffit styles (`volumeEaves` over building defaults; persisted in `.bld`), classifies each side as eave/rake/none per roof type, and builds fascia and soffit faces. The analytic roof builders continue the roof planes past the walls instead of enlarging a flat rectangle. Sidebar controls: eave depth, rake overhang, fascia depth, eave soffit and rake soffit styles, editing the selected volume or the building defaults. Tests: `tests/eaves.test.js` (including closure checks for every soffit style combination).
 
-Known limits: a side only *partly* shared with another volume is treated as fully shared (no overhang along its exposed part); hip overhang is all-or-nothing; the skeleton-hip and sampled-field fallbacks and flat roofs have no fascia/soffit trim (flat roofs overhang as a slab); eave/fascia are not yet part of merged-roof clipping.
+The exposed part of a partly shared eave side gets its own eave strip (top, fascia, soffit), and any eave strip that ends flush with a wall (zero rake overhang, a shared or merged side) gets an end cap unless a neighbor's wall already closes it. Known limits: exposed strips that run into a corner do not yet join the perpendicular rake overhang, and only gable and shed eaves get strips (a hip that touches another volume loses its overhang entirely); hip overhang is all-or-nothing; the skeleton-hip and sampled-field fallbacks and flat roofs have no fascia/soffit trim (flat roofs overhang as a slab); eave/fascia are not yet part of merged-roof clipping.
 
 ## Immediate next implementation step
 
-Partial-side overhang (exposed portions of shared sides), then steps 3–5 of the resolver above (trimming plane against plane at differing elevations is done for shed/gable; hip and wall cut-to-roof remain).
+Steps 3–5 of the resolver above (trimming plane against plane at differing elevations is done for shed/gable; hip and wall cut-to-roof remain).
