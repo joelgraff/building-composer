@@ -2,7 +2,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import { validateFootprint, normalizeFootprint, computeFootprintMetrics } from './footprint.js';
 import { createBuildingFromFootprint, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder } from './extrusion.js';
-import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState } from './facade.js';
+import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection } from './facade.js';
 import { exportGlb } from './export.js';
 
 const statusValue = document.getElementById('status-value');
@@ -141,8 +141,10 @@ let modelConfig = {
   volumeRidgeDirections: {},
   volumeRoofTypes: {},
   volumeRoofConnections: {},
+  volumeRoofShapes: {},
   edgePitchOverrides: {},
 };
+let currentVolumeCount = 1;
 
 const UNIT_FACTORS = Object.freeze({ imperial: 3.28084, metric: 1 });
 
@@ -243,6 +245,7 @@ function syncRoofHeightFromPitch(footprint, volumes = []) {
     volumes
   );
   roofHeightInput.value = (modelConfig.roofHeight * unitFactor()).toFixed(1);
+  roofPitchRiseInput.value = String(modelConfig.roofPitchRise);
   updateRoofPitchDisplay();
 }
 
@@ -337,31 +340,75 @@ function syncSelectedRoofZoneControls(layout) {
     ? modelConfig.volumeRidgeDirections[volume.id] ?? (volume.ridgeAxis === 'x' ? 'z-min' : 'x-min')
     : modelConfig.roofDirection;
   const roofType = volume ? modelConfig.volumeRoofTypes[volume.id] ?? modelConfig.roofType : modelConfig.roofType;
-  const canMerge = volume && roofType === 'shed' && adjacentVolumeForHighEdge(volume, layout.volumes, roofDirectionSelect.value);
+  const canMerge = volume && (
+    (roofType === 'shed' && adjacentVolumeForHighEdge(volume, layout.volumes, roofDirectionSelect.value))
+    || (roofType === 'gable' && gableEndTouchesNeighbor(volume, layout.volumes))
+  );
+  if (volume && layout.volumes.length > 1) {
+    syncVolumeRoofShapeInputs(volume);
+  }
   roofConnectionField.style.display = canMerge ? '' : 'none';
   if (canMerge) {
-    modelConfig.volumeRoofConnections[volume.id] = 'standalone';
-    roofConnectionSelect.value = 'standalone';
+    // Default to "standalone" only the first time this volume becomes
+    // mergeable; once the user (or a prior render) has set a value, leave it
+    // alone. Resetting it on every render here previously overwrote the
+    // user's "merge-plane" choice on the very next rebuild.
+    if (modelConfig.volumeRoofConnections[volume.id] === undefined) {
+      modelConfig.volumeRoofConnections[volume.id] = 'standalone';
+    }
+    roofConnectionSelect.value = modelConfig.volumeRoofConnections[volume.id];
   }
 }
 
+function volumeShapeTarget() {
+  return selectedElementId !== 'building-defaults' && currentVolumeCount > 1 ? selectedElementId : null;
+}
+
+function syncVolumeRoofShapeInputs(volume) {
+  const direction = modelConfig.volumeRidgeDirections[volume.id];
+  const axis = direction ? roofAxisForDirection(direction) : volume.ridgeAxis;
+  const halfSpan = Math.max(0.01, (axis === 'x' ? volume.maxZ - volume.minZ : volume.maxX - volume.minX) / 2);
+  const shape = modelConfig.volumeRoofShapes[volume.id];
+  const run = modelConfig.roofPitchRun;
+  const heightMode = (shape?.mode ?? modelConfig.roofHeightMode) === 'height';
+  let pitchRise;
+  let height;
+  if (heightMode) {
+    height = shape?.mode === 'height' ? shape.height : modelConfig.roofHeight;
+    pitchRise = (height / halfSpan) * run;
+  } else {
+    pitchRise = shape?.mode === 'slope' ? shape.pitchRise : modelConfig.roofPitchRise;
+    height = halfSpan * (pitchRise / run);
+  }
+  roofPitchRiseInput.value = Number.isInteger(pitchRise) ? String(pitchRise) : pitchRise.toFixed(2);
+  roofHeightInput.value = (height * unitFactor()).toFixed(1);
+  updateRoofPitchDisplay(pitchRise);
+}
+
+function gableEndTouchesNeighbor(volume, volumes) {
+  const direction = modelConfig.volumeRidgeDirections[volume.id];
+  const ridgeAxis = direction ? roofAxisForDirection(direction) : volume.ridgeAxis;
+  const endSides = ridgeAxis === 'x' ? ['minX', 'maxX'] : ['minZ', 'maxZ'];
+  return findVolumeAdjacencies(volumes).some((adjacency) => (
+    (adjacency.volumeAId === volume.id && endSides.includes(adjacency.sideA))
+    || (adjacency.volumeBId === volume.id && endSides.includes(adjacency.sideB))
+  ));
+}
+
 function adjacentVolumeForHighEdge(volume, volumes, highEdge) {
-  const epsilon = 1e-6;
-  return volumes.find((candidate) => {
-    if (candidate.id === volume.id) {
-      return false;
-    }
-    if (highEdge === 'x-min' || highEdge === 'x-max') {
-      const edge = highEdge === 'x-min' ? volume.minX : volume.maxX;
-      const adjacentEdge = highEdge === 'x-min' ? candidate.maxX : candidate.minX;
-      return Math.abs(edge - adjacentEdge) < epsilon
-        && Math.min(volume.maxZ, candidate.maxZ) - Math.max(volume.minZ, candidate.minZ) > epsilon;
-    }
-    const edge = highEdge === 'z-min' ? volume.minZ : volume.maxZ;
-    const adjacentEdge = highEdge === 'z-min' ? candidate.maxZ : candidate.minZ;
-    return Math.abs(edge - adjacentEdge) < epsilon
-      && Math.min(volume.maxX, candidate.maxX) - Math.max(volume.minX, candidate.minX) > epsilon;
-  }) ?? null;
+  const side = { 'x-min': 'minX', 'x-max': 'maxX', 'z-min': 'minZ', 'z-max': 'maxZ' }[highEdge];
+  if (!side) {
+    return null;
+  }
+  const adjacency = findVolumeAdjacencies(volumes).find((candidate) => (
+    (candidate.volumeAId === volume.id && candidate.sideA === side)
+    || (candidate.volumeBId === volume.id && candidate.sideB === side)
+  ));
+  if (!adjacency) {
+    return null;
+  }
+  const neighborId = adjacency.volumeAId === volume.id ? adjacency.volumeBId : adjacency.volumeAId;
+  return volumes.find((candidate) => candidate.id === neighborId) ?? null;
 }
 
 function renderVolumeControls(layout) {
@@ -413,22 +460,26 @@ function renderMaterialControls(layout) {
   `).join('');
 }
 
+function disposeObject3D(object) {
+  if (object.geometry) {
+    object.geometry.dispose();
+  }
+  if (object.material) {
+    if (Array.isArray(object.material)) {
+      object.material.forEach((mat) => mat.dispose());
+    } else {
+      object.material.dispose();
+    }
+  }
+}
+
 function clearModel() {
   pickTargets = [];
   hoveredVolumeId = null;
   clearHoverCue();
   while (group.children.length > 0) {
     const child = group.children.pop();
-    if (child.geometry) {
-      child.geometry.dispose();
-    }
-    if (child.material) {
-      if (Array.isArray(child.material)) {
-        child.material.forEach((mat) => mat.dispose());
-      } else {
-        child.material.dispose();
-      }
-    }
+    child.traverse(disposeObject3D);
   }
 }
 
@@ -532,8 +583,10 @@ async function loadFootprint(footprintData, preserveView = true) {
     roofEaveDepth: modelConfig.roofEaveDepth,
     volumeRoofTypes: modelConfig.volumeRoofTypes,
     volumeRidgeDirections: modelConfig.volumeRidgeDirections,
+    volumeRoofShapes: modelConfig.volumeRoofShapes,
     edgePitchOverrides: modelConfig.edgePitchOverrides,
   });
+  currentVolumeCount = layout.volumes.length;
   if (roofControlAuthority === 'pitch') {
     syncRoofHeightFromPitch(normalized, layout.volumes);
   } else {
@@ -564,6 +617,7 @@ async function loadFootprint(footprintData, preserveView = true) {
     volumeRidgeDirections: modelConfig.volumeRidgeDirections,
     volumeRoofTypes: modelConfig.volumeRoofTypes,
     volumeRoofConnections: modelConfig.volumeRoofConnections,
+    volumeRoofShapes: modelConfig.volumeRoofShapes,
     roofHeightMode: modelConfig.roofHeightMode,
     foundationDepth: 0.7,
     roofOverhang: 0.35,
@@ -607,6 +661,7 @@ async function loadSampleFootprint() {
   modelConfig.volumeRidgeDirections = {};
   modelConfig.volumeRoofTypes = {};
   modelConfig.volumeRoofConnections = {};
+  modelConfig.volumeRoofShapes = {};
   selectedElementId = 'building-defaults';
   const presetFiles = {
     sample: 'sample_footprint.json',
@@ -713,6 +768,7 @@ function handleFileInput(event) {
   modelConfig.volumeRidgeDirections = {};
   modelConfig.volumeRoofTypes = {};
   modelConfig.volumeRoofConnections = {};
+  modelConfig.volumeRoofShapes = {};
   modelConfig.edgePitchOverrides = {};
   selectedElementId = 'building-defaults';
 
@@ -833,6 +889,15 @@ roofDirectionSelect.addEventListener('change', () => {
 });
 
 roofPitchRiseInput.addEventListener('input', () => {
+  const targetVolume = volumeShapeTarget();
+  if (targetVolume) {
+    const pitchRise = Math.max(1, Math.min(24, Math.round(Number(roofPitchRiseInput.value) || 1)));
+    modelConfig.volumeRoofShapes[targetVolume] = { mode: 'slope', pitchRise };
+    if (loadedFootprint) {
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
   roofControlAuthority = 'pitch';
   modelConfig.roofHeightMode = 'slope';
   roofHeightModeSelect.value = 'slope';
@@ -844,6 +909,15 @@ roofPitchRiseInput.addEventListener('input', () => {
 });
 
 roofHeightInput.addEventListener('input', () => {
+  const targetVolume = volumeShapeTarget();
+  if (targetVolume) {
+    const height = Math.max(0.1, (Number(roofHeightInput.value) || 0.1) / unitFactor());
+    modelConfig.volumeRoofShapes[targetVolume] = { mode: 'height', height };
+    if (loadedFootprint) {
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
   modelConfig.roofHeight = Math.max(0.1, (Number(roofHeightInput.value) || 0.1) / unitFactor());
   roofControlAuthority = 'height';
   modelConfig.roofHeightMode = 'height';

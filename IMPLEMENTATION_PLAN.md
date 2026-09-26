@@ -298,15 +298,13 @@ Current slice:
   independent roof-zone partitioning is deferred.
 - Volumes can be selected directly in the 3D view. Hovering uses an amber mass
   and roof-perimeter cue; clicking synchronizes the selected-target controls.
-- Planned roof-shell connections distinguish deterministic **Snap to ridge**
-  from optional **Merge into roof plane**. Snap explicitly controls the joined
-  ridge's slope and height and supports orthogonal or parallel gables. Merge
-  applies only to shed and gable roofs, projecting beyond the parent-volume
-  boundary to intersect an adjacent roof plane. Both modes must either form a
-  valid connection or close the roof with fascia, end, or vertical return faces.
-- Standalone shed shells are implemented: the high side receives a vertical
-  return and each sloped end receives a triangular closure to the wall top.
-  Shed-to-roof-plane merge and ridge snap remain planned connection modes.
+- Roof-shell connections are implemented as one opt-in **Merge into adjacent
+  roof** option per volume (see [Roof merge resolver](#roof-merge-resolver)).
+  Every roof otherwise stays a closed standalone shell.
+- Standalone shed shells: the high side receives a vertical return and each
+  sloped end receives a triangular closure to the wall top.
+- Pitch and roof rise can be set per volume; unset volumes follow the
+  building default.
 - The Roof zone panel exposes a **Multi-volume ridge** mode for these roofs:
   **Hold pitch constant** preserves the selected pitch and allows ridges to
   vary by volume width; **Hold roof rise constant** derives each volume's
@@ -396,11 +394,28 @@ The next roof work is a resolver, not another roof type.
    - Associated wall runs with their parent roof zone and edge role.
    - Added native `.bld` persistence (`serializeBuildingState` and `deserializeBuildingState`), enabling saving and loading the complete building and roof configuration.
    - Added interactive Roof Graph & Edge Roles panel in UI.
-2. At a shared wall-plate elevation, solve one weighted straight skeleton, or an equivalent plane arrangement, so equal-height hips, gables, and mixed pitches share valley and ridge vertices. Replace the silent dense-field fallback with a reported failure.
+2. At a shared wall-plate elevation, solve one weighted straight skeleton, or an equivalent plane arrangement, so equal-height hips, gables, and mixed pitches share valley and ridge vertices. Replace the silent dense-field fallback with a reported failure. (Partially complete — see below.)
 3. Where plate elevations differ, trim plane against plane so a lower shed or gable can tuck under a taller slope, or snap its ridge to a chosen ridge. Drive this from the connection control already present in the sidebar.
 4. Close every boundary that does not meet another roof face with fascia, a gable return, or a vertical closure. Offset the eave polygon before the solve so a concave plan carries a real overhang.
 5. Cut wall tops and the top story to the resolved roof so gable ends are wall faces. Mansard, dormers, and other forms wait until this shell is closed.
 
+### Roof merge resolver
+
+Every roof zone is expressed as infinite "eave planes" (`computeVolumeEavePlanes`, `js/extrusion.js`): flat 1, shed 1, gable 2, hip 4. `resolveRoofConnections` uses `findVolumeAdjacencies()` (`js/facade.js`) and each volume's own pitch/rise (`volumeRoofParams`, driven by `volumeRoofShapes`) to decide, per volume side, how a roof joins its neighbor. Merging is **opt-in** (`volumeRoofConnections[id] === 'merge-plane'`, the sidebar's **Merge into adjacent roof**, offered on volumes with a shed high edge or a gable end touching a neighbor); the UI defaults to standalone. Behavior:
+
+- **Shed, slope across the wall.** Keeps its own slope and runs on into the neighbor until it meets the neighbor's rising plane below the ridge (a valley-style join, nothing to close). If its plane would still be above the neighbor's plane at the ridge, it snaps to the ridge: the plane is rebuilt through the ridge point and the shed's own far eave, and its boundary (`extendTo`) moves to the ridge.
+- **Shed, slope along the wall** (rake against the neighbor). Keeps its plane and adds a triangle to the valley (`rakeTriangle`); the whole plane is lowered (still planar) if it would exceed the ridge.
+- **Gable end.** The ridge keeps its own height and ends where it meets the neighbor's plane; if it would exceed the neighbor's ridge the whole ridge is lowered to it, so both slopes stay single planes. The gable end face at a merged end is dropped.
+- **Coplanar merge.** Where the neighbor is genuinely sloped along the whole wall (its gable end), corners clamp to the neighbor's plane and the closure is dropped.
+- **Different story counts.** `volumePlateHeights` gives each volume's plate; a roof only interacts with a *taller* neighbor (`plateGap`), and only above that neighbor's eave. Below it, the roof is standalone against the wall. `createMultiVolumeBuilding` uses the same resolver.
+- **Clipping.** Roof surface a merge carries past the shared wall below the neighbor's eave lies inside the neighbor's walls and z-fights with coplanar wall faces; `clipInsideNeighbor` removes it (Sutherland-Hodgman polygon clip).
+
+Superseded approaches worth not repeating: recomputing only a height at the unmoved wall (leaves a hole once the closure is dropped, or a visible seam if it is kept); tilting a gable ridge toward the neighbor's ridge (bends each slope out of plane); automatic ridge-to-ridge nudging for gables (now opt-in).
+
+Also in this slice: roof faces are flat-shaded (indexed builders shared vertices so normals smoothed across closure faces and shaded near-black); `clearModel` disposes nested groups; `.bld` files persist `volumeRoofConnections` and `volumeRoofShapes`.
+
+Known limits: hip and flat roofs do not act as the merging (lower/joining) roof; a hip neighbor's boundary is always at its eave, so only ridge-directed joins apply against it; non-footprint attached elements (dormers, porch roofs, widow's walks) are not designed yet — the eave-plane/zone model is expected to extend to an "attached" roof zone. Tests: `tests/roof_resolver.test.js`.
+
 ## Immediate next implementation step
 
-Step 2 of the resolver above: at a shared wall-plate elevation, solve one weighted straight skeleton or equivalent plane arrangement so equal-height hips, gables, and mixed pitches share valley and ridge vertices.
+Eaves: eave depth cannot currently be changed for multi-volume roofs (they are built with zero overhang) and soffit faces are not generated. See the roof section above ("The surface stops at the wall plate") and rework overhang as a resolved offset with soffit faces.

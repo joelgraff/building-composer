@@ -114,8 +114,9 @@ roof assemblies.
 single selected target rather than repeated panels. The **Selected element**
 picker selects Building defaults or a volume's massing/roof-zone pair. A
 selected volume exposes its own story count in **Massing volumes** and its own
-roof form and ridge direction in **Roof zone**; pitch, rise, and eave depth
-remain building-level controls. The selected volume is shown in the 3D and top
+roof form, ridge direction, pitch, and roof rise in **Roof zone** (a volume
+without its own pitch/rise follows the building default; eave depth remains a
+building-level control). The selected volume is shown in the 3D and top
 views with a subtle translucent cyan tint and a cyan roof-perimeter outline;
 the volume's internal box edges are intentionally omitted to avoid visual
 clutter. Massing volumes and roof zones are currently a deliberate one-to-one
@@ -124,20 +125,33 @@ manipulation targets in the 3D view: hovering highlights the volume and its
 roof perimeter in amber, while clicking makes it the selected cyan target and
 synchronizes the property controls.
 
-**Roof shell connections (planned).** Every roof must ultimately form a closed
-shell: boundaries that do not connect to another roof face receive fascia,
-gable-end, or vertical return faces. Two future connection modes have distinct
-semantics. **Snap to ridge** is deterministic: it explicitly controls both the
-connecting ridge's height and slope, and can join orthogonal or parallel gable
-ridges. **Merge into roof plane** applies only to shed and gable roofs; it
-projects a roof beyond its parent-volume boundary to intersect an adjacent roof
-plane when that produces a valid shell. A merge is preferred where feasible but
-is not required: a standalone, fully closed roof shell remains valid.
+**Roof shell connections.** Every roof must form a closed shell: boundaries
+that do not connect to another roof face receive fascia, gable-end, or vertical
+return faces. A volume can opt in (per-volume **Roof connection: Merge into
+adjacent roof**; the default is a standalone shell, which is always valid) to
+join a neighbor. Each roof zone is modelled as infinite eave planes (flat 1,
+shed 1, gable 2, hip 4) so neighbors can be intersected analytically:
+
+- A **shed** whose slope crosses the shared wall keeps its own slope and runs
+  on into the neighbor until it meets the neighbor's rising roof plane; if it
+  would project above the neighbor's ridge it snaps to the ridge (its plane is
+  rebuilt through the ridge and its own far eave). A shed whose slope runs
+  *along* the wall adds a triangle of roof to the valley, lowering the whole
+  plane if it would exceed the ridge.
+- A **gable** joins at a gable end: its ridge keeps its own height and ends
+  where it meets the neighbor's plane; if it would exceed the neighbor's ridge
+  the whole ridge is lowered to it. Ridges stay level so every roof face
+  remains a single plane.
+- A merged edge has no closing face, since the roof continues into the
+  neighbor. Surface a merge carries past the shared wall below the neighbor's
+  eave is clipped away.
+- Across different story counts (different wall-plate elevations) a roof only
+  interacts with a taller neighbor, and only above that neighbor's eave; below
+  it the roof butts the wall as a standalone roof.
 
 **Standalone shed shell.** Shed roofs emit a sloped roof plane, vertical
 high-side return, and triangular end closures down to the supporting wall top.
-This closes the standalone shed form; shed-to-roof-plane merge and ridge snap
-remain future connection operations.
+A shed is the half-gable special case: one of a gable's two slopes.
 
 The skeleton path applies when equal-height multi-volume hip roofs are rendered.
 Independent story-height overrides still use separate roofs because their

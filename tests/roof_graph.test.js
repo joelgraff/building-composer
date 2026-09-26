@@ -8,6 +8,7 @@ import {
   computeFacadeLayout,
   serializeBuildingState,
   deserializeBuildingState,
+  findVolumeAdjacencies,
 } from '../js/facade.js';
 
 const sampleFootprint = JSON.parse(readFileSync('./data/sample_footprint.json', 'utf8'));
@@ -137,5 +138,32 @@ describe('Roof Graph & Edge Role Classification', () => {
     assert.equal(deserialized.state.wallMaterial, 'brick');
     assert.equal(deserialized.state.roofPitchRise, 8);
     assert.equal(deserialized.state.edgePitchOverrides['wall-run-0'], 8);
+  });
+
+  it('finds exactly the leg-to-spanning adjacencies for a U-shaped footprint, no leg-to-leg', () => {
+    const norm = normalizeFootprint(uFootprint);
+    const volumes = decomposeIntoVolumes(norm);
+    assert.equal(volumes.length, 3);
+    const [base, leftLeg, rightLeg] = volumes;
+
+    const adjacencies = findVolumeAdjacencies(volumes);
+    assert.equal(adjacencies.length, 2);
+
+    const involvesLegs = adjacencies.every((adj) => {
+      const ids = [adj.volumeAId, adj.volumeBId];
+      return ids.includes(base.id) && (ids.includes(leftLeg.id) || ids.includes(rightLeg.id));
+    });
+    assert.ok(involvesLegs, 'every adjacency should be between the base and one leg');
+
+    const legLegAdjacency = adjacencies.some((adj) => {
+      const ids = [adj.volumeAId, adj.volumeBId];
+      return ids.includes(leftLeg.id) && ids.includes(rightLeg.id);
+    });
+    assert.equal(legLegAdjacency, false, 'the two legs do not touch and must not be reported as adjacent');
+
+    adjacencies.forEach((adj) => {
+      assert.equal(adj.axis, 'x');
+      assert.ok(adj.overlapMax - adj.overlapMin > 0);
+    });
   });
 });

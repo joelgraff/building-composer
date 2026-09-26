@@ -189,6 +189,52 @@ export function decomposeIntoVolumes(footprint) {
   });
 }
 
+/**
+ * Finds every pair of rectangular volumes that share a coincident rectangle
+ * side with a positive-length overlap, i.e. volumes whose walls physically
+ * touch along a real span (not just at a single corner point).
+ *
+ * @param {Array<{ id: string, minX: number, maxX: number, minZ: number, maxZ: number }>} volumes
+ * @returns {Array<{ volumeAId: string, sideA: 'minX'|'maxX'|'minZ'|'maxZ', volumeBId: string, sideB: 'minX'|'maxX'|'minZ'|'maxZ', axis: 'x'|'z', overlapMin: number, overlapMax: number }>}
+ */
+export function findVolumeAdjacencies(volumes) {
+  const epsilon = 1e-6;
+  const adjacencies = [];
+
+  for (let i = 0; i < volumes.length; i += 1) {
+    for (let j = i + 1; j < volumes.length; j += 1) {
+      const a = volumes[i];
+      const b = volumes[j];
+
+      [['minX', 'maxX'], ['maxX', 'minX']].forEach(([sideA, sideB]) => {
+        if (Math.abs(a[sideA] - b[sideB]) < epsilon) {
+          const overlapMin = Math.max(a.minZ, b.minZ);
+          const overlapMax = Math.min(a.maxZ, b.maxZ);
+          if (overlapMax - overlapMin > epsilon) {
+            adjacencies.push({
+              volumeAId: a.id, sideA, volumeBId: b.id, sideB, axis: 'z', overlapMin, overlapMax,
+            });
+          }
+        }
+      });
+
+      [['minZ', 'maxZ'], ['maxZ', 'minZ']].forEach(([sideA, sideB]) => {
+        if (Math.abs(a[sideA] - b[sideB]) < epsilon) {
+          const overlapMin = Math.max(a.minX, b.minX);
+          const overlapMax = Math.min(a.maxX, b.maxX);
+          if (overlapMax - overlapMin > epsilon) {
+            adjacencies.push({
+              volumeAId: a.id, sideA, volumeBId: b.id, sideB, axis: 'x', overlapMin, overlapMax,
+            });
+          }
+        }
+      });
+    }
+  }
+
+  return adjacencies;
+}
+
 function isPointInPolygon(x, z, footprint) {
   let inside = false;
   for (let i = 0, j = footprint.length - 1; i < footprint.length; j = i, i += 1) {
@@ -447,6 +493,7 @@ export function serializeBuildingState(layout, modelConfig) {
     volumeRidgeDirections: modelConfig.volumeRidgeDirections ?? {},
     volumeRoofTypes: modelConfig.volumeRoofTypes ?? {},
     volumeRoofConnections: modelConfig.volumeRoofConnections ?? {},
+    volumeRoofShapes: modelConfig.volumeRoofShapes ?? {},
     edgePitchOverrides: modelConfig.edgePitchOverrides ?? {},
     roofGraph: layout.roofGraph,
   };
@@ -486,6 +533,7 @@ export function deserializeBuildingState(data) {
       volumeRidgeDirections: data.volumeRidgeDirections ?? {},
       volumeRoofTypes: data.volumeRoofTypes ?? {},
       volumeRoofConnections: data.volumeRoofConnections ?? {},
+      volumeRoofShapes: data.volumeRoofShapes ?? {},
       edgePitchOverrides: data.edgePitchOverrides ?? {},
     },
   };

@@ -4,6 +4,7 @@
 
 import * as THREE from '../node_modules/three/build/three.module.js';
 import { createMaterials, MATERIAL_PALETTE } from './materials.js';
+import { roofAxisForDirection, findVolumeAdjacencies } from './facade.js';
 
 let straightSkeletonBuilder = null;
 
@@ -49,7 +50,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
 
   if (hasVolumeOverrides) {
     return createMultiVolumeBuilding(volumes, overrides, {
-      storyCount, storyHeight, foundationDepth, roofEaveDepth, roofType, roofHeight, roofPitchRise, roofPitchRun, roofHeightMode: config.roofHeightMode, volumeRidgeDirections: config.volumeRidgeDirections, volumeRoofTypes: config.volumeRoofTypes, volumeRoofConnections: config.volumeRoofConnections,
+      storyCount, storyHeight, foundationDepth, roofEaveDepth, roofType, roofHeight, roofPitchRise, roofPitchRun, roofHeightMode: config.roofHeightMode, volumeRidgeDirections: config.volumeRidgeDirections, volumeRoofTypes: config.volumeRoofTypes, volumeRoofConnections: config.volumeRoofConnections, volumeRoofShapes: config.volumeRoofShapes,
     });
   }
 
@@ -100,6 +101,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
       volumeRidgeDirections: config.volumeRidgeDirections,
       volumeRoofTypes: config.volumeRoofTypes,
       volumeRoofConnections: config.volumeRoofConnections,
+      volumeRoofShapes: config.volumeRoofShapes,
       roofHeightMode: config.roofHeightMode,
     }),
     materials.roof
@@ -156,7 +158,6 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
   const {
     storyCount, storyHeight, foundationDepth, roofEaveDepth, roofType, roofHeight, roofPitchRise, roofPitchRun,
   } = config;
-  const mode = config.roofHeightMode ?? 'slope';
   const directedVolumes = applyVolumeRidgeDirections(volumes, config.volumeRidgeDirections ?? {});
   const hasGableVolume = directedVolumes.some((volume) => (config.volumeRoofTypes?.[volume.id] ?? roofType) === 'gable');
   const roofVolumes = hasGableVolume
@@ -166,36 +167,56 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
   const group = new THREE.Group();
   const foundationHeight = foundationDepth;
   let maxTotalHeight = 0;
+  const volumePlateHeights = Object.fromEntries(
+    roofVolumes.map((volume) => [volume.id, (overrides[volume.id] ?? storyCount) * storyHeight])
+  );
+  const connections = resolveRoofConnections(roofVolumes, { ...config, volumePlateHeights });
 
   roofVolumes.forEach((volume) => {
     const volumeStoryCount = overrides[volume.id] ?? storyCount;
     const totalHeight = volumeStoryCount * storyHeight;
     maxTotalHeight = Math.max(maxTotalHeight, totalHeight);
-    const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
+    const roofTypeForVolume = config.volumeRoofTypes?.[volume.id] ?? roofType;
+    const volumeConnections = connections.get(volume.id);
+    const hasMerge = Object.keys(volumeConnections ?? {}).length > 0;
+    const { bounds, extendedRoofHeight } = applyRoofExtension(
+      { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ },
+      roofTypeForVolume,
+      volumeConnections
+    );
+    const wallBounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
 
-    const walls = new THREE.Mesh(createBoxWallGeometry(bounds, totalHeight), materials.wall);
+    const walls = new THREE.Mesh(createBoxWallGeometry(wallBounds, totalHeight), materials.wall);
     walls.position.y = foundationHeight;
     walls.userData = { volumeId: volume.id };
     group.add(walls);
 
-    const foundation = new THREE.Mesh(createBoxWallGeometry(bounds, foundationHeight), materials.foundation);
+    const foundation = new THREE.Mesh(createBoxWallGeometry(wallBounds, foundationHeight), materials.foundation);
     foundation.userData = { volumeId: volume.id };
     group.add(foundation);
 
     const roofDirectionForVolume = volume.ridgeAxis;
-    const halfSpan = halfSpanForBounds(bounds, roofDirectionForVolume);
-    const roofTypeForVolume = config.volumeRoofTypes?.[volume.id] ?? roofType;
+    const params = volumeRoofParams(volume.id, halfSpanForBounds(wallBounds, roofDirectionForVolume), config);
     const roofHeightForVolume = roofTypeForVolume === 'flat'
       ? 0
-      : (mode === 'height' ? roofHeight : halfSpan * (roofPitchRise / roofPitchRun));
+      : (extendedRoofHeight ?? params.roofHeight);
     const roofConfig = {
       roofDirection: roofDirectionForVolume,
       roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(roofDirectionForVolume),
       roofHeight: roofHeightForVolume,
-      roofOverhang: roofEaveDepth,
-      roofPitchRise: mode === 'height' ? roofHeight : roofPitchRise,
-      roofPitchRun: mode === 'height' ? halfSpan : roofPitchRun,
+      roofOverhang: hasMerge ? 0 : roofEaveDepth,
+      roofPitchRise: params.pitchRise,
+      roofPitchRun: params.pitchRun,
+      connections: volumeConnections,
     };
+    if (roofTypeForVolume === 'gable') {
+      const gableMerge = gableMergeGeometry(volume, bounds, volumeConnections, roofHeightForVolume);
+      if (gableMerge.any) {
+        roofConfig.roofHeight = gableMerge.roofHeight;
+        roofConfig.ridgeEndpoints = gableMerge.endpoints;
+        roofConfig.mergedEnds = gableMerge.mergedEnds;
+      }
+    }
     const roofGeometry = roofTypeForVolume === 'gable'
       ? createGableRoofGeometry(bounds, roofConfig)
       : roofTypeForVolume === 'hip'
@@ -203,7 +224,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
         : roofTypeForVolume === 'shed'
           ? createShedRoofGeometry(bounds, roofConfig)
         : createFlatRoofGeometry(bounds, roofEaveDepth);
-    const roof = new THREE.Mesh(roofGeometry, materials.roof);
+    const roof = new THREE.Mesh(flatShaded(clipInsideNeighbor(roofGeometry, volumeConnections)), materials.roof);
     roof.position.y = foundationHeight + totalHeight + 0.02;
     roof.userData = {
       volumeId: volume.id,
@@ -211,9 +232,9 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
       roofDirection: roofDirectionForVolume,
       roofHeight: roofHeightForVolume,
       roofPitch: {
-        rise: roofPitchRise,
-        run: roofPitchRun,
-        degrees: roofPitchDegrees(roofPitchRise, roofPitchRun),
+        rise: params.mode === 'height' ? roofHeightForVolume : params.pitchRise,
+        run: params.mode === 'height' ? params.pitchRun : params.pitchRun,
+        degrees: roofPitchDegrees(params.pitchRise, params.pitchRun),
       },
     };
     group.add(roof);
@@ -223,6 +244,55 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
   return { building: group, foundationHeight, totalHeight: maxTotalHeight };
 }
 
+/**
+ * Resolves the roof shape parameters for one volume. A volume can override
+ * the building-wide roof shape with its own pitch (`{ mode: 'slope',
+ * pitchRise }`) or fixed roof rise (`{ mode: 'height', height }`) via
+ * `config.volumeRoofShapes`; everything else follows the building defaults.
+ * `halfSpan` is the volume's own half-width across its ridge.
+ */
+function volumeRoofParams(volumeId, halfSpan, config) {
+  const shape = config.volumeRoofShapes?.[volumeId];
+  const mode = shape?.mode ?? config.roofHeightMode ?? 'slope';
+  const pitchRun = config.roofPitchRun ?? 12;
+  if (mode === 'height') {
+    const height = shape?.mode === 'height' ? shape.height : (config.roofHeight ?? 2);
+    return { mode, roofHeight: height, pitchRise: height, pitchRun: halfSpan };
+  }
+  const pitchRise = shape?.mode === 'slope' ? shape.pitchRise : (config.roofPitchRise ?? 6);
+  return { mode, roofHeight: halfSpan * (pitchRise / pitchRun), pitchRise, pitchRun };
+}
+
+/**
+ * A ridge-snap connection (see resolveRoofConnections) physically relocates
+ * a shed's boundary on that side out to the neighbor's actual ridge
+ * coordinate — not just a taller corner within the same rectangle — so the
+ * shed's own roof plane genuinely runs from its far eave to the neighbor's
+ * ridge, the way a real saltbox's rear slope does.
+ */
+function applyRoofExtension(bounds, roofType, connections) {
+  let extended = bounds;
+  let extendedRoofHeight;
+  if (roofType === 'shed' && connections) {
+    Object.entries(connections).forEach(([side, resolution]) => {
+      if (resolution.extendTo !== undefined) {
+        extended = { ...extended, [side]: resolution.extendTo };
+        extendedRoofHeight = resolution.height;
+      } else if (resolution.rakeTriangle) {
+        extendedRoofHeight = resolution.height;
+      }
+    });
+  }
+  return { bounds: extended, extendedRoofHeight };
+}
+
+// Indexed roof builders share vertices between differently-oriented faces, so
+// computeVertexNormals smooths across them and steep closure faces shade
+// wrongly (near-black). Unrolling to per-face vertices gives flat shading.
+function flatShaded(geometry) {
+  return mergeFlatGeometries([geometry]);
+}
+
 function roofHeightForBounds(bounds, roofDirection, pitchRise, pitchRun) {
   return halfSpanForBounds(bounds, roofDirection) * (pitchRise / pitchRun);
 }
@@ -230,16 +300,6 @@ function roofHeightForBounds(bounds, roofDirection, pitchRise, pitchRun) {
 function halfSpanForBounds(bounds, roofDirection) {
   const span = roofDirection === 'x' ? (bounds.maxZ - bounds.minZ) : (bounds.maxX - bounds.minX);
   return Math.max(0.01, span / 2);
-}
-
-function roofAxisForDirection(direction) {
-  if (direction === 'x-min' || direction === 'x-max') {
-    return 'z';
-  }
-  if (direction === 'z-min' || direction === 'z-max') {
-    return 'x';
-  }
-  return direction === 'x' ? 'x' : 'z';
 }
 
 function defaultHighEdgeForAxis(axis) {
@@ -309,13 +369,18 @@ function createRoofGeometry(footprint, config) {
     return createFlatRoofGeometry(bounds, config.roofOverhang);
   }
 
+  const hasVolumeShapeOverride = Object.keys(config.volumeRoofShapes ?? {}).length > 0
+    && config.volumes?.length > 1;
+  if (hasVolumeShapeOverride && (config.roofType !== 'flat' || hasSlopedVolumeRoof)) {
+    return createVolumeRoofAssembly(config.volumes, config);
+  }
   if (config.roofType === 'gable' || config.roofType === 'hip' || config.roofType === 'shed' || hasSlopedVolumeRoof) {
     if (bounds) {
-      return config.roofType === 'gable'
+      return flatShaded(config.roofType === 'gable'
         ? createGableRoofGeometry(bounds, config)
         : config.roofType === 'hip'
           ? createHipRoofGeometry(bounds, config)
-          : createShedRoofGeometry(bounds, config);
+          : createShedRoofGeometry(bounds, config));
     }
     if (config.roofType === 'hip'
       && config.roofHeightMode === 'height'
@@ -409,57 +474,56 @@ function createStraightSkeletonHipGeometry(footprint, config) {
  * distinct, larger follow-up (see Task 9 notes in IMPLEMENTATION_PLAN.md).
  */
 function createVolumeRoofAssembly(volumes, config) {
-  const pitchRise = config.roofPitchRise ?? 6;
-  const pitchRun = config.roofPitchRun ?? 12;
-  const mode = config.roofHeightMode ?? 'slope';
-  const roofHeight = config.roofHeight ?? 2;
   const directedVolumes = applyVolumeRidgeDirections(volumes, config.volumeRidgeDirections ?? {});
   const hasGableVolume = directedVolumes.some((volume) => (config.volumeRoofTypes?.[volume.id] ?? config.roofType) === 'gable');
   const roofVolumes = hasGableVolume
     ? resolveGableRidgeDirections(directedVolumes)
     : directedVolumes;
+  const paramsFor = (volume, bounds) => volumeRoofParams(volume.id, halfSpanForBounds(bounds, volume.ridgeAxis), config);
   const ridgeHeights = new Map(roofVolumes.map((volume) => {
     const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
-    const halfSpan = halfSpanForBounds(volume, volume.ridgeAxis);
-    const height = roofType === 'flat'
-      ? 0
-      : (mode === 'height' ? roofHeight : halfSpan * (pitchRise / pitchRun));
+    const height = roofType === 'flat' ? 0 : paramsFor(volume, volume).roofHeight;
     return [volume.id, height];
   }));
-  const ridgeEndpoints = (mode === 'height' || hasGableVolume)
+  const anyHeightMode = roofVolumes.some((volume) => paramsFor(volume, volume).mode === 'height');
+  // Ridge-to-ridge joins are opt-in now (see resolveRoofConnections); only the
+  // older equal-rise hip/height-mode connection still nudges endpoints itself.
+  const ridgeEndpoints = anyHeightMode
     ? buildConnectedConstantRiseRidges(roofVolumes, config.roofType === 'hip', ridgeHeights)
     : new Map();
+  const connections = resolveRoofConnections(roofVolumes, config);
 
   const chunks = roofVolumes.map((volume) => {
     const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
-    const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
-    const halfSpan = halfSpanForBounds(bounds, volume.ridgeAxis);
-    const roofConfig = mode === 'height'
-      ? {
-        roofDirection: volume.ridgeAxis,
-        roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis),
-        roofHeight,
-        roofOverhang: 0,
-        roofPitchRise: roofHeight,
-        roofPitchRun: halfSpan,
-        ridgeEndpoints: (roofType === 'gable' || mode === 'height') ? ridgeEndpoints.get(volume.id) : undefined,
-      }
-      : {
-        roofDirection: volume.ridgeAxis,
-        roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis),
-        roofHeight: halfSpan * (pitchRise / pitchRun),
-        roofOverhang: 0,
-        roofPitchRise: pitchRise,
-        roofPitchRun: pitchRun,
-        ridgeEndpoints: roofType === 'gable' ? ridgeEndpoints.get(volume.id) : undefined,
-      };
-    return roofType === 'flat'
+    const volumeConnections = connections.get(volume.id);
+    const { bounds, extendedRoofHeight } = applyRoofExtension(
+      { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ },
+      roofType,
+      volumeConnections
+    );
+    const params = paramsFor(volume, bounds);
+    const gableMerge = roofType === 'gable' ? gableMergeGeometry(volume, bounds, volumeConnections, params.roofHeight) : null;
+    const roofConfig = {
+      roofDirection: volume.ridgeAxis,
+      roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis),
+      roofHeight: extendedRoofHeight ?? (gableMerge?.any ? gableMerge.roofHeight : params.roofHeight),
+      roofOverhang: 0,
+      roofPitchRise: params.pitchRise,
+      roofPitchRun: params.pitchRun,
+      ridgeEndpoints: gableMerge?.any
+        ? gableMerge.endpoints
+        : (roofType !== 'gable' && params.mode === 'height' ? ridgeEndpoints.get(volume.id) : undefined),
+      mergedEnds: gableMerge?.mergedEnds,
+      connections: volumeConnections,
+    };
+    const chunk = roofType === 'flat'
       ? createFlatRoofGeometry(bounds, 0)
       : roofType === 'gable'
         ? createGableRoofGeometry(bounds, roofConfig)
         : roofType === 'hip'
           ? createHipRoofGeometry(bounds, roofConfig)
           : createShedRoofGeometry(bounds, roofConfig);
+    return clipInsideNeighbor(chunk, volumeConnections);
   });
   return mergeFlatGeometries(chunks);
 }
@@ -502,6 +566,475 @@ function resolveGableRidgeDirections(volumes) {
     }
     return { ...volume, ridgeAxis: primary.ridgeAxis === 'x' ? 'z' : 'x' };
   });
+}
+
+const MERGE_HEIGHT_EPSILON = 0.02;
+
+function makeEavePlane(bounds, side, slope) {
+  const axis = side === 'minX' || side === 'maxX' ? 'x' : 'z';
+  const sign = side === 'minX' || side === 'minZ' ? 1 : -1;
+  return { side, axis, sign, constant: bounds[side], slope };
+}
+
+function evalPlaneHeight(plane, x, z) {
+  if ('constantHeight' in plane) {
+    return plane.constantHeight;
+  }
+  const coord = plane.axis === 'x' ? x : z;
+  return (plane.offset ?? 0) + plane.slope * plane.sign * (coord - plane.constant);
+}
+
+export function evalZoneHeight(planes, x, z) {
+  if (!planes || planes.length === 0) {
+    return 0;
+  }
+  return Math.min(...planes.map((plane) => evalPlaneHeight(plane, x, z)));
+}
+
+/**
+ * Derives the infinite sloped "eave planes" that define a roof zone's own
+ * surface height at any point in its rectangle, so a neighboring zone can
+ * ask "how tall is your roof here" without needing that zone's finished
+ * mesh. A zone's height at a point is the min across its own planes: for
+ * hip, min-of-4-sides is exactly the classic hip profile (cross-slope
+ * capped by the end-triangle slope); for gable, min-of-2-eave-sides gives
+ * the ridge with flat gable ends; for shed, a single plane spans the whole
+ * rectangle from its one low eave. Mirrors the exact height formulas
+ * createGableRoofGeometry/createHipRoofGeometry/createShedRoofGeometry use,
+ * so a neighbor's plane always agrees with what that neighbor actually
+ * renders.
+ */
+export function computeVolumeEavePlanes(bounds, roofType, config) {
+  const roofHeight = config.roofHeight ?? 0;
+  if (roofType === 'flat' || !(roofHeight > 0)) {
+    return [];
+  }
+
+  if (roofType === 'hip') {
+    const pitchRatio = (config.roofPitchRise ?? 0) / (config.roofPitchRun ?? 12);
+    return ['minX', 'maxX', 'minZ', 'maxZ'].map((side) => makeEavePlane(bounds, side, pitchRatio));
+  }
+
+  const ridgeAxis = config.roofDirection === 'x' ? 'x' : 'z';
+
+  if (roofType === 'gable') {
+    const halfSpan = ridgeAxis === 'x' ? (bounds.maxZ - bounds.minZ) / 2 : (bounds.maxX - bounds.minX) / 2;
+    const slope = halfSpan > 0 ? roofHeight / halfSpan : 0;
+    const sides = ridgeAxis === 'x' ? ['minZ', 'maxZ'] : ['minX', 'maxX'];
+    return sides.map((side) => makeEavePlane(bounds, side, slope));
+  }
+
+  if (roofType === 'shed') {
+    const highEdge = config.roofHighEdge ?? defaultHighEdgeForAxis(ridgeAxis);
+    const lowSide = { 'x-min': 'maxX', 'x-max': 'minX', 'z-min': 'maxZ', 'z-max': 'minZ' }[highEdge];
+    const span = lowSide === 'minX' || lowSide === 'maxX' ? bounds.maxX - bounds.minX : bounds.maxZ - bounds.minZ;
+    const slope = span > 0 ? roofHeight / span : 0;
+    return [makeEavePlane(bounds, lowSide, slope)];
+  }
+
+  return [];
+}
+
+function sideCorners(bounds, side) {
+  if (side === 'minX' || side === 'maxX') {
+    return [[bounds[side], bounds.minZ], [bounds[side], bounds.maxZ]];
+  }
+  return [[bounds.minX, bounds[side]], [bounds.maxX, bounds[side]]];
+}
+
+/**
+ * A shed whose plane slopes *along* the shared wall (its high edge is on a
+ * side, so the wall is one of its rakes) meets the neighbor's eave-side roof
+ * plane along a straight valley. Where the shed's roof is above the
+ * neighbor's eave (`gap` above this roof's plate) it keeps its own plane and
+ * runs on into the neighbor as a triangle whose far edge is that valley; the
+ * part below the neighbor's eave just butts its wall, as a standalone roof.
+ * If the shed would rise above the neighbor's ridge, the whole plane is
+ * lowered (staying planar) so its high corner lands on the ridge.
+ */
+function resolveShedRakeMerge(own, neighbor, side, gap, ridgePlanes) {
+  const mergeAxis = side === 'minX' || side === 'maxX' ? 'x' : 'z';
+  const ownPlane = own.planes[0];
+  const planeAxis = ownPlane.axis;
+  const wallCoord = own.bounds[side];
+  const facingPlane = ridgePlanes.reduce((best, plane) => (
+    Math.abs(plane.constant - wallCoord) < Math.abs(best.constant - wallCoord) ? plane : best
+  ));
+  const ridgeCoord = (ridgePlanes[0].constant + ridgePlanes[1].constant) / 2;
+  const direction = Math.sign(ridgeCoord - wallCoord);
+  const lowKey = planeAxis === 'x' ? ['minX', 'maxX'] : ['minZ', 'maxZ'];
+  const aLow = ownPlane.constant;
+  const aHigh = Math.abs(own.bounds[lowKey[0]] - aLow) < Math.abs(own.bounds[lowKey[1]] - aLow)
+    ? own.bounds[lowKey[1]]
+    : own.bounds[lowKey[0]];
+  const span = Math.abs(aHigh - aLow);
+  const cap = neighbor.ridgeHeight + gap;
+  const peak = Math.min(own.ridgeHeight, cap);
+  if (span <= MERGE_HEIGHT_EPSILON || facingPlane.slope <= 1e-9 || peak <= gap + MERGE_HEIGHT_EPSILON) {
+    return null;
+  }
+  const crossing = aLow + (aHigh - aLow) * (gap / peak);
+  const reach = (peak - gap) / facingPlane.slope;
+  const point = (a, along, height) => (mergeAxis === 'z' ? [a, height, along] : [along, height, a]);
+  return {
+    mode: 'merged',
+    suppressClosure: true,
+    override: true,
+    height: peak,
+    plateGap: gap,
+    clip: { axis: mergeAxis, wall: wallCoord, direction, gap },
+    rakeTriangle: [
+      point(crossing, wallCoord, gap),
+      point(aHigh, wallCoord, peak),
+      point(aHigh, wallCoord + direction * reach, peak),
+    ],
+    neighborPlanes: [],
+  };
+}
+
+/**
+ * A gable meets a neighbor at one of its two gable ends (the sides across its
+ * ridge). If the neighbor has a rising roof plane facing that end (a gable or
+ * hip whose eave is on the shared wall), the gable's ridge keeps running into
+ * it: at the ridge height the gable's own slopes meet the neighbor's plane
+ * along valley lines (`kind: 'intersect'`, ridge ends where its height meets
+ * that plane), and if the gable's ridge is higher than the neighbor's ridge it
+ * instead snaps up to the neighbor's ridge point (`kind: 'snap'`).
+ */
+function resolveGableEndMerge(own, neighbor, side, gap = 0) {
+  const sideAxis = side === 'minX' || side === 'maxX' ? 'x' : 'z';
+  if (own.ridgeAxis !== sideAxis || own.ridgeHeight <= MERGE_HEIGHT_EPSILON + gap
+    || neighbor.ridgeHeight <= MERGE_HEIGHT_EPSILON) {
+    return null;
+  }
+  const ridgePlanes = neighbor.planes.filter((plane) => plane.axis === sideAxis);
+  if (ridgePlanes.length !== 2) {
+    return null;
+  }
+  const wallCoord = own.bounds[side];
+  const facingPlane = ridgePlanes.reduce((best, plane) => (
+    Math.abs(plane.constant - wallCoord) < Math.abs(best.constant - wallCoord) ? plane : best
+  ));
+  const ridgeCoord = (ridgePlanes[0].constant + ridgePlanes[1].constant) / 2;
+  const direction = Math.sign(ridgeCoord - wallCoord);
+  const runToRidge = Math.abs(ridgeCoord - wallCoord);
+  if (facingPlane.slope <= 1e-9 || runToRidge <= MERGE_HEIGHT_EPSILON) {
+    return null;
+  }
+  const end = side === 'minX' || side === 'minZ' ? 'start' : 'end';
+  const intersects = own.ridgeHeight <= neighbor.ridgeHeight + gap + 1e-9;
+  const height = intersects ? own.ridgeHeight : neighbor.ridgeHeight + gap;
+  return {
+    mode: 'merged',
+    gableEnd: end,
+    kind: intersects ? 'intersect' : 'snap',
+    suppressClosure: true,
+    clip: { axis: sideAxis, wall: wallCoord, direction, gap },
+    along: wallCoord + direction * ((height - gap) / facingPlane.slope),
+    height,
+    plateGap: gap,
+    ridgeCap: neighbor.ridgeHeight + gap,
+    wallCoord,
+    direction,
+    facingSlope: facingPlane.slope,
+    neighborPlanes: [],
+  };
+}
+
+/**
+ * Ridge endpoints / merged-end flags for a gable whose ends were merged (see
+ * resolveGableEndMerge), in the shape createGableRoofGeometry expects.
+ */
+function gableMergeGeometry(volume, bounds, connections, ridgeHeight) {
+  const merges = Object.values(connections ?? {}).filter((resolution) => resolution.gableEnd);
+  // A gable's roof faces stay planar only if its ridge is level, so the whole
+  // ridge is capped at the lowest neighbor ridge it joins (its configured
+  // height is ignored where it would project above); each end then runs to
+  // where that level ridge meets the neighbor's plane.
+  const height = merges.reduce((lowest, resolution) => Math.min(lowest, resolution.ridgeCap), ridgeHeight);
+  const endpoints = {};
+  const mergedEnds = {};
+  merges.forEach((resolution) => {
+    mergedEnds[resolution.gableEnd] = true;
+    const cross = volume.ridgeAxis === 'x'
+      ? (bounds.minZ + bounds.maxZ) / 2
+      : (bounds.minX + bounds.maxX) / 2;
+    const along = resolution.wallCoord + resolution.direction * ((height - resolution.plateGap) / resolution.facingSlope);
+    endpoints[resolution.gableEnd] = volume.ridgeAxis === 'x'
+      ? [along, cross, height]
+      : [cross, along, height];
+  });
+  return { endpoints, mergedEnds, roofHeight: height, any: merges.length > 0 };
+}
+
+/**
+ * Decides, per volume and per rectangle side, whether that side's roof edge
+ * should merge into an adjacent volume's roof, or stay a standalone,
+ * independently closed edge. Merging is an optimization, not a requirement:
+ * a side is only considered when its own roof is genuinely sloped there
+ * (something to merge). Merging is opt-in: nothing merges unless
+ * `config.volumeRoofConnections[volumeId] === 'merge-plane'` for that volume
+ * (the sidebar's "Merge into adjacent roof" option — the UI defaults every
+ * side to 'standalone' the moment it becomes selectable, so a side only
+ * merges on a deliberate choice). Once opted in, a side tries two things in
+ * order, matching ARCHITECTURE.md's two connection semantics — this is a
+ * single unified "merge" behavior, not two separately selectable modes:
+ *
+ * 1. **Coplanar plane merge.** If the neighbor's own roof surface is
+ *    genuinely sloped along the whole shared wall too (e.g. a gable's end
+ *    face) — the two surfaces are already at the same height at every point
+ *    on that wall, so the shed's plane can just clamp to the neighbor's own
+ *    plane (never projecting above it) with no gap: the closure face on that
+ *    side is dropped, since the neighbor's own surface picks up right where
+ *    it left off.
+ * 2. **Ridge snap.** Otherwise (the common case: the shared wall is the
+ *    neighbor's flat eave, with its actual ridge set back further away) —
+ *    if the neighbor has a real ridge at all, treat that ridge and our own
+ *    far/low eave as the two ends of one continuous span, and rebuild our
+ *    plane through both, so extending it back through the wall lands
+ *    exactly on the neighbor's ridge point (not just its height). Because
+ *    the neighbor's own surface does *not* reach this height at the wall
+ *    (it's still down at its own eave there), this is a real vertical rise
+ *    that needs a physical closing face — like a real building's knee wall
+ *    closing the gap between a lean-to's low wall and where its roof ties
+ *    into the taller structure above — so unlike case 1, the closure face
+ *    on that side is kept, just built to the new, taller derived height.
+ *
+ * If neither applies (no ridge, or too short a combined span) the side
+ * stays standalone.
+ *
+ * @param {Array<object>} volumes - directed volumes (ridgeAxis/roofHighEdge already resolved)
+ * @param {object} config - same config passed to createVolumeRoofAssembly
+ * @returns {Map<string, Record<string, { mode: 'merged', neighborPlanes: Array<object>, override?: boolean, suppressClosure?: boolean }>>}
+ */
+export function resolveRoofConnections(volumes, config) {
+  const planesByVolumeId = new Map(volumes.map((volume) => {
+    const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
+    const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
+    const params = volumeRoofParams(volume.id, halfSpanForBounds(bounds, volume.ridgeAxis), config);
+    const roofHeight = roofType === 'flat' ? 0 : params.roofHeight;
+    const planeConfig = {
+      roofDirection: volume.ridgeAxis,
+      roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis),
+      roofHeight,
+      roofPitchRise: params.pitchRise,
+      roofPitchRun: params.pitchRun,
+    };
+    return [volume.id, {
+      bounds,
+      roofType,
+      ridgeAxis: volume.ridgeAxis,
+      ridgeHeight: roofHeight,
+      planes: computeVolumeEavePlanes(bounds, roofType, planeConfig),
+    }];
+  }));
+
+  const resolutions = new Map(volumes.map((volume) => [volume.id, {}]));
+
+  findVolumeAdjacencies(volumes).forEach(({ volumeAId, sideA, volumeBId, sideB }) => {
+    [[volumeAId, sideA, volumeBId], [volumeBId, sideB, volumeAId]].forEach(([ownId, side, neighborId]) => {
+      // Merging is opt-in: a side stays standalone unless the user explicitly
+      // chose "Merge into adjacent roof" for it (the UI defaults every side
+      // to 'standalone' the first time it becomes selectable, so this only
+      // engages on a deliberate choice, matching a standalone shell being an
+      // equally valid, unforced outcome).
+      if (config.volumeRoofConnections?.[ownId] !== 'merge-plane') {
+        return;
+      }
+      // Independent story counts put the two roofs on different plates. A
+      // roof only interacts with a *taller* neighbor, and only once it rises
+      // above that neighbor's eave (`plateGap` up): below that it just butts
+      // against the neighbor's wall and stays standalone. A taller roof never
+      // reaches a lower neighbor's roof at all.
+      const plates = config.volumePlateHeights;
+      const plateGap = plates ? (plates[neighborId] ?? 0) - (plates[ownId] ?? 0) : 0;
+      if (plateGap < -1e-6) {
+        return;
+      }
+      const own = planesByVolumeId.get(ownId);
+      const neighbor = planesByVolumeId.get(neighborId);
+      if (own.roofType === 'gable') {
+        const resolution = resolveGableEndMerge(own, neighbor, side, Math.max(0, plateGap));
+        if (resolution) {
+          resolutions.get(ownId)[side] = resolution;
+        }
+        return;
+      }
+      const corners = sideCorners(own.bounds, side);
+      const ownHeights = corners.map(([x, z]) => evalZoneHeight(own.planes, x, z));
+      if (Math.max(...ownHeights) <= MERGE_HEIGHT_EPSILON + Math.max(0, plateGap)) {
+        return;
+      }
+      const gap = Math.max(0, plateGap);
+
+      // 1. Coplanar plane merge: the neighbor is genuinely sloped along the
+      // whole shared wall (e.g. a gable end face).
+      const neighborHeights = corners.map(([x, z]) => evalZoneHeight(neighbor.planes, x, z));
+      if (Math.min(...neighborHeights) > MERGE_HEIGHT_EPSILON) {
+        resolutions.get(ownId)[side] = {
+          mode: 'merged',
+          neighborPlanes: gap > 0 ? neighbor.planes.map((plane) => ({ ...plane, offset: (plane.offset ?? 0) + gap })) : neighbor.planes,
+          suppressClosure: true,
+        };
+        return;
+      }
+
+      // 2. Ridge snap fallback: the shared wall is the neighbor's flat eave,
+      // but it has a real ridge set back further in that carries a genuine
+      // height worth reaching up to.
+      if (neighbor.ridgeHeight <= MERGE_HEIGHT_EPSILON) {
+        return;
+      }
+      const mergeAxis = side === 'minX' || side === 'maxX' ? 'x' : 'z';
+      const neighborRidgePlanes = neighbor.planes.filter((plane) => plane.axis === mergeAxis);
+      const ownSpanPlanes = own.planes.filter((plane) => plane.axis === mergeAxis);
+      if (neighborRidgePlanes.length === 2 && ownSpanPlanes.length === 1) {
+        const ridgeCoord = (neighborRidgePlanes[0].constant + neighborRidgePlanes[1].constant) / 2;
+        const ownPlane = ownSpanPlanes[0];
+
+        // 2a. Keep the shed's own configured slope and let it run on into the
+        // neighbor until it meets the neighbor's rising roof plane. When that
+        // crossing lands at or below the ridge, that is the merge: the shed
+        // keeps its pitch and its roof simply ends where it intersects the
+        // neighbor's plane (a valley-style join), with nothing left to close.
+        const wallCoord = own.bounds[side];
+        const facingPlane = neighborRidgePlanes.reduce((best, plane) => (
+          Math.abs(plane.constant - wallCoord) < Math.abs(best.constant - wallCoord) ? plane : best
+        ));
+        const wallHeight = ownPlane.slope * ownPlane.sign * (wallCoord - ownPlane.constant);
+        const slopeGap = facingPlane.slope - ownPlane.slope;
+        const runToRidge = Math.abs(ridgeCoord - wallCoord);
+        // Heights above are on this roof's own plate; the neighbor's eave sits
+        // `gap` above it, so only the part above that competes with its roof.
+        if (wallHeight - gap > MERGE_HEIGHT_EPSILON && slopeGap > 1e-9) {
+          const run = (wallHeight - gap) / slopeGap;
+          if (run <= runToRidge) {
+            const extendTo = wallCoord + Math.sign(ridgeCoord - wallCoord) * run;
+            resolutions.get(ownId)[side] = {
+              mode: 'merged',
+              override: true,
+              suppressClosure: true,
+              clip: { axis: mergeAxis, wall: wallCoord, direction: Math.sign(ridgeCoord - wallCoord), gap },
+              intersectsPlane: true,
+              extendTo,
+              height: wallHeight + ownPlane.slope * run,
+              neighborPlanes: [{ ...ownPlane }],
+            };
+            return;
+          }
+        }
+
+        // 2b. The shed's own slope would still be above the neighbor's plane
+        // when it reaches the ridge, i.e. it would project above the ridge:
+        // snap to the ridge instead, with a plane rebuilt through the ridge
+        // point and the shed's own far eave.
+        const combinedSpan = Math.abs(ownPlane.constant - ridgeCoord);
+        if (combinedSpan > MERGE_HEIGHT_EPSILON && wallHeight > gap + MERGE_HEIGHT_EPSILON) {
+          // This is not just a height clamp at the existing wall: the roof's
+          // own boundary is physically relocated from the wall out to the
+          // neighbor's actual ridge coordinate (`extendTo`), the way a real
+          // saltbox's rear slope is one continuous surface running from the
+          // ridge, over the wall, to its own low eave — so there is no edge
+          // left at the old wall to close at all (the "high edge" now *is*
+          // the ridge, same as any roof's ridge needs no vertical closure).
+          // The extended surface passes directly over the neighbor's own
+          // rear-facing portion (hidden beneath it, since a plane through
+          // the same ridge point with a shallower slope — reaching all the
+          // way to this shed's own far eave instead of just the neighbor's
+          // near eave — is always higher there), so nothing needs clipping.
+          resolutions.get(ownId)[side] = {
+            mode: 'merged',
+            override: true,
+            suppressClosure: true,
+            clip: { axis: mergeAxis, wall: wallCoord, direction: Math.sign(ridgeCoord - wallCoord), gap },
+            extendTo: ridgeCoord,
+            height: neighbor.ridgeHeight + gap,
+            neighborPlanes: [{
+              axis: ownPlane.axis, sign: ownPlane.sign, constant: ownPlane.constant,
+              slope: (neighbor.ridgeHeight + gap) / combinedSpan,
+            }],
+          };
+        }
+        return;
+      }
+      // A shed whose slope runs along the shared wall (its rake meets the
+      // neighbor) merges through a triangle of extra roof instead.
+      if (neighborRidgePlanes.length === 2 && ownSpanPlanes.length === 0 && own.planes.length === 1) {
+        const resolution = resolveShedRakeMerge(own, neighbor, side, gap, neighborRidgePlanes);
+        if (resolution) {
+          resolutions.get(ownId)[side] = resolution;
+        }
+        return;
+      }
+      // Fallback for shapes without a clean single ridge line on this axis
+      // (e.g. a flat or shed neighbor): just target its own peak height.
+      resolutions.get(ownId)[side] = {
+        mode: 'merged', override: true, suppressClosure: false, neighborPlanes: [{ constantHeight: neighbor.ridgeHeight + gap }],
+      };
+    });
+  });
+
+  return resolutions;
+}
+
+/**
+ * Roof surface that a merge carries into the taller neighbor lies inside that
+ * neighbor's walls below its eave (`gap` above this roof's plate), where it is
+ * hidden at best and z-fights with the wall where the faces are coplanar (a
+ * flush outer wall). Cut it away: drop everything past the shared wall
+ * (`axis`/`wall`/`direction`) that is lower than `gap`.
+ */
+function clipInsideNeighbor(geometry, connections) {
+  const clips = Object.values(connections ?? {}).map((resolution) => resolution.clip).filter(Boolean);
+  if (clips.length === 0 || clips.every((clip) => clip.gap <= MERGE_HEIGHT_EPSILON)) {
+    return geometry;
+  }
+  const position = geometry.getAttribute('position');
+  const index = geometry.index;
+  const count = index ? index.count : position.count;
+  let polygons = [];
+  for (let i = 0; i < count; i += 3) {
+    polygons.push([0, 1, 2].map((k) => {
+      const v = index ? index.getX(i + k) : i + k;
+      return [position.getX(v), position.getY(v), position.getZ(v)];
+    }));
+  }
+  clips.forEach(({ axis, wall, direction, gap }) => {
+    const beyond = (v) => direction * ((axis === 'x' ? v[0] : v[2]) - wall);
+    polygons = polygons.flatMap((polygon) => {
+      const near = clipPolygon(polygon, (v) => -beyond(v));
+      const far = clipPolygon(clipPolygon(polygon, beyond), (v) => v[1] - gap);
+      return [near, far].filter((poly) => poly.length >= 3);
+    });
+  });
+  const positions = [];
+  polygons.forEach((polygon) => {
+    for (let k = 1; k < polygon.length - 1; k += 1) {
+      [polygon[0], polygon[k], polygon[k + 1]].forEach((v) => positions.push(...v));
+    }
+  });
+  const clipped = new THREE.BufferGeometry();
+  clipped.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  clipped.computeVertexNormals();
+  return clipped;
+}
+
+// Sutherland-Hodgman against the half-space where distance(v) >= 0.
+function clipPolygon(polygon, distance) {
+  const out = [];
+  polygon.forEach((current, i) => {
+    const previous = polygon[(i + polygon.length - 1) % polygon.length];
+    const dCurrent = distance(current);
+    const dPrevious = distance(previous);
+    if ((dCurrent >= 0) !== (dPrevious >= 0)) {
+      const t = dPrevious / (dPrevious - dCurrent);
+      out.push(previous.map((value, k) => value + (current[k] - value) * t));
+    }
+    if (dCurrent >= 0) {
+      out.push(current);
+    }
+  });
+  return out;
 }
 
 function mergeFlatGeometries(geometries) {
@@ -834,56 +1367,104 @@ function createGableRoofGeometry(bounds, config) {
       ridgeEndpoints?.start?.[0] ?? centerX, startPeakY, ridgeEndpoints?.start?.[1] ?? minZ,
       ridgeEndpoints?.end?.[0] ?? centerX, endPeakY, ridgeEndpoints?.end?.[1] ?? maxZ,
     ];
-  const indices = config.roofDirection === 'x'
-    ? [0, 1, 5, 0, 5, 4, 3, 4, 5, 3, 5, 2, 0, 4, 3, 1, 2, 5]
-    : [0, 4, 5, 0, 5, 3, 1, 2, 5, 1, 5, 4, 0, 1, 4, 3, 5, 2];
+  const slopes = config.roofDirection === 'x'
+    ? [0, 1, 5, 0, 5, 4, 3, 4, 5, 3, 5, 2]
+    : [0, 4, 5, 0, 5, 3, 1, 2, 5, 1, 5, 4];
+  const startEnd = config.roofDirection === 'x' ? [0, 4, 3] : [0, 1, 4];
+  const endEnd = config.roofDirection === 'x' ? [1, 2, 5] : [3, 5, 2];
+  // A merged end has no gable-end face: the ridge runs on into the
+  // neighbor's roof, so the two slopes simply continue to their valley lines.
+  const indices = [
+    ...slopes,
+    ...(config.mergedEnds?.start ? [] : startEnd),
+    ...(config.mergedEnds?.end ? [] : endEnd),
+  ];
   return createIndexedGeometry(positions, indices);
 }
 
-function createShedRoofGeometry(bounds, config) {
+export function createShedRoofGeometry(bounds, config) {
   const minX = bounds.minX - config.roofOverhang;
   const maxX = bounds.maxX + config.roofOverhang;
   const minZ = bounds.minZ - config.roofOverhang;
   const maxZ = bounds.maxZ + config.roofOverhang;
   const peakY = config.roofHeight;
   const highEdge = config.roofHighEdge ?? defaultHighEdgeForAxis(config.roofDirection);
-  const roofCorners = highEdge === 'x-min'
+  const cornerDefs = highEdge === 'x-min'
     ? [
-      minX, peakY, minZ,
-      maxX, 0, minZ,
-      maxX, 0, maxZ,
-      minX, peakY, maxZ,
+      { x: minX, z: minZ, height: peakY, sides: ['minX', 'minZ'] },
+      { x: maxX, z: minZ, height: 0, sides: ['maxX', 'minZ'] },
+      { x: maxX, z: maxZ, height: 0, sides: ['maxX', 'maxZ'] },
+      { x: minX, z: maxZ, height: peakY, sides: ['minX', 'maxZ'] },
     ]
     : highEdge === 'x-max'
       ? [
-        minX, 0, minZ,
-        maxX, peakY, minZ,
-        maxX, peakY, maxZ,
-        minX, 0, maxZ,
+        { x: minX, z: minZ, height: 0, sides: ['minX', 'minZ'] },
+        { x: maxX, z: minZ, height: peakY, sides: ['maxX', 'minZ'] },
+        { x: maxX, z: maxZ, height: peakY, sides: ['maxX', 'maxZ'] },
+        { x: minX, z: maxZ, height: 0, sides: ['minX', 'maxZ'] },
       ]
       : highEdge === 'z-min'
         ? [
-      minX, peakY, minZ,
-      maxX, peakY, minZ,
-      maxX, 0, maxZ,
-      minX, 0, maxZ,
+          { x: minX, z: minZ, height: peakY, sides: ['minX', 'minZ'] },
+          { x: maxX, z: minZ, height: peakY, sides: ['maxX', 'minZ'] },
+          { x: maxX, z: maxZ, height: 0, sides: ['maxX', 'maxZ'] },
+          { x: minX, z: maxZ, height: 0, sides: ['minX', 'maxZ'] },
         ]
         : [
-          minX, 0, minZ,
-          maxX, 0, minZ,
-          maxX, peakY, maxZ,
-          minX, peakY, maxZ,
+          { x: minX, z: minZ, height: 0, sides: ['minX', 'minZ'] },
+          { x: maxX, z: minZ, height: 0, sides: ['maxX', 'minZ'] },
+          { x: maxX, z: maxZ, height: peakY, sides: ['maxX', 'maxZ'] },
+          { x: minX, z: maxZ, height: peakY, sides: ['minX', 'maxZ'] },
         ];
-  const positions = [...roofCorners];
-  for (let index = 0; index < 4; index += 1) {
-    positions.push(roofCorners[index * 3], 0, roofCorners[index * 3 + 2]);
-  }
+
+  // A side merges into a neighbor only when resolveRoofConnections found a
+  // connection for it (see its docstring for the two cases). Every merged
+  // side's corners get repositioned to the neighbor's height; only a truly
+  // coplanar merge (the neighbor's own surface is already at that height
+  // right there) also skips the vertical/triangular closure — a ridge-snap
+  // connection is a real vertical rise with nothing behind it, so its
+  // closure stays, just built to the new, taller height (like a knee wall
+  // closing the gap between a lean-to's own wall and the taller roof it
+  // ties into).
+  const connections = config.connections ?? {};
+  const mergedSides = new Set(
+    Object.keys(connections).filter((side) => connections[side]?.mode === 'merged' && !connections[side]?.rakeTriangle)
+  );
+  const closureSuppressedSides = new Set(
+    Object.keys(connections).filter((side) => connections[side]?.mode === 'merged' && connections[side]?.suppressClosure)
+  );
+
+  const corners = cornerDefs.map((corner) => {
+    const mergingSides = corner.sides.filter((side) => mergedSides.has(side));
+    if (mergingSides.length === 0 || corner.height <= 1e-8) {
+      return corner;
+    }
+    // An `override` connection (snap-ridge) deterministically replaces this
+    // corner's height with a plane derived to pass through the neighbor's
+    // own ridge, rather than merely capping our own configured height.
+    const overrideSide = mergingSides.find((side) => connections[side].override);
+    if (overrideSide) {
+      return { ...corner, height: evalZoneHeight(connections[overrideSide].neighborPlanes, corner.x, corner.z) };
+    }
+    const clampedHeight = mergingSides.reduce(
+      (height, side) => Math.min(height, evalZoneHeight(connections[side].neighborPlanes, corner.x, corner.z)),
+      corner.height
+    );
+    return { ...corner, height: clampedHeight };
+  });
+
+  const positions = corners.flatMap((corner) => [corner.x, corner.height, corner.z]);
+  corners.forEach((corner) => positions.push(corner.x, 0, corner.z));
 
   const indices = [0, 1, 2, 0, 2, 3];
   for (let index = 0; index < 4; index += 1) {
     const next = (index + 1) % 4;
-    const height = roofCorners[index * 3 + 1];
-    const nextHeight = roofCorners[next * 3 + 1];
+    const edgeSide = cornerDefs[index].sides.find((side) => cornerDefs[next].sides.includes(side));
+    if (closureSuppressedSides.has(edgeSide)) {
+      continue;
+    }
+    const height = corners[index].height;
+    const nextHeight = corners[next].height;
     if (height > 1e-8 && nextHeight > 1e-8) {
       indices.push(index, next, next + 4, index, next + 4, index + 4);
     } else if (height > 1e-8) {
@@ -892,6 +1473,13 @@ function createShedRoofGeometry(bounds, config) {
       indices.push(index, next, next + 4);
     }
   }
+  Object.values(connections).forEach((resolution) => {
+    if (resolution?.rakeTriangle) {
+      const first = positions.length / 3;
+      resolution.rakeTriangle.forEach((vertex) => positions.push(...vertex));
+      indices.push(first, first + 1, first + 2);
+    }
+  });
   return createIndexedGeometry(positions, indices);
 }
 
