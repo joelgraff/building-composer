@@ -422,6 +422,128 @@ Known limits: hip and flat roofs do not act as the merging (lower/joining) roof;
 
 The exposed part of a partly shared eave side gets its own eave strip (top, fascia, soffit), and any eave strip that ends flush with a wall (zero rake overhang, a shared or merged side) gets an end cap unless a neighbor's wall already closes it. A roof that another *gable* merges into keeps its eave along the whole shared side; the merging gable's eave corner is inset onto the valley with the main roof's eave plane and its fascia/soffit start at the main eave line (`buildRoofSetups`/`eaveAbutments` in `js/extrusion.js`), so the two eaves meet as one continuous shell. Known limits: unequal slopes/depths between the two roofs meet at a small step; shed merges still zero the shared side; exposed strips that run into a corner do not yet join the perpendicular rake overhang, and only gable and shed eaves get strips (a hip that touches another volume loses its overhang entirely); hip overhang is all-or-nothing; the skeleton-hip and sampled-field fallbacks and flat roofs have no fascia/soffit trim (flat roofs overhang as a slab); eave/fascia are not yet part of merged-roof clipping.
 
+## Roof-borne structures (dormers, raised porches) — plan
+
+Status: Phase 0 complete; phases 1–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+
+### Core idea
+
+A roof structure is a small rectangular **structure volume** with its own raised plate. Its walls, roof, and eaves reuse the existing per-volume machinery. It relates to the building through two operations on convex solids:
+
+1. **Keep outside the host.** A host volume's solid is its wall box capped by its roof planes (`computeVolumeEavePlanes`). Min-of-planes is concave, so the solid is convex. The structure's walls, roof, and trim are built too large (walls reach down below the host roof, and the roof runs back past where it meets the host), then clipped to the part outside the host solid. That one clip produces the cheek-wall bottoms along the host slope, the valleys, the point where a gable ridge dies into the host plane, and a shed dormer's rear intersection line, for every roof type, with no special case per type. For a gable, the result matches `resolveGableEndMerge`/`gableMergeGeometry`, and a test should check the two against each other.
+2. **Cut the host.** The host's roof mesh and trim are clipped to the part outside the structure's solid (its wall box capped by its own roof planes, also convex). That opens a hole exactly where the structure stands. On a single host face, the hole outline is the wall rectangle clipped by the half-planes `dormerPlane_i(x,z) ≥ hostFace(x,z)`, which gives an exact convex polygon that tests can compare against.
+
+Both operations use one primitive, **clip triangles outside a convex solid**: the difference of convex solids, split into pieces with Sutherland-Hodgman, one half-space per face. This generalizes the `clipPolygon`/`clipInsideNeighbor` code that already exists. A small tolerance puts coplanar faces inside the solid, so a porch's back wall against the main wall is dropped and does not z-fight.
+
+Clipping works on the finished triangle soup, so it does not care how the host's roof mesh was built. The host's *solid*, however, comes from its resolved zone descriptor, and only the analytic per-volume builders produce one. So the straight-skeleton hip, the sampled field, and a flat cap over a non-rectangular footprint cannot host structures yet. Eave interruption (below) needs the analytic builders too.
+
+### Data model
+
+Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.bld`, with a default of `[]`. Placement is in the host side's local frame, so the data does not depend on orientation, and a structure survives story-count and roof-type edits:
+
+```js
+{
+  id: 'structure-1',
+  kind: 'dormer' | 'wall-dormer' | 'porch',  // UI preset label only; geometry is uniform
+  hostVolumeId: 'volume-0',                  // volume whose roof it sits in or on
+  hostSide: 'minZ',                          // wall/roof face it looks out of
+  offset: 0,          // center along the side, from the side's midpoint (m)
+  width: 2.4,
+  setback: 0.9,       // front wall distance in from the host wall; 0 = flush wall dormer; < 0 projects past the wall
+  depth: null,        // null = auto: run back until fully inside the host (clip ends it)
+  wallHeight: 1.4,    // plate above the front sill (sill = host roof at the setback line, or baseHeight)
+  baseHeight: null,   // null = rises out of the host roof; number = floor level above host plate (porch deck)
+  openSides: [],      // porch: sides with no wall (posts and railings come later as facade modifiers)
+  roofType: 'gable',  // flat | gable | hip | shed, with the same builders as volumes
+  ridge: 'perpendicular' | 'parallel',  // relative to host side; shed uses highEdge 'back' by default
+  roofShape: { mode: 'slope', pitchRise: 8 } | { mode: 'height', height },  // as volumeRoofShapes
+  join: 'auto' | 'snap-ridge',  // auto = clip into host plane; snap = lower/rebuild to meet host ridge
+  eaves: { ...volumeEaves fields },          // per-structure overrides over building defaults
+  materials: { wall, roof },                 // optional, falls back to host then building
+}
+```
+
+`structureBounds(structure, hostVolume)` converts this into a world `{minX, maxX, minZ, maxZ}` and the absolute plate height. The sill height comes from evaluating the host face plane at the setback line. Because these are plain rectangles with a plate, `volumeRoofParams`, `volumeEaveSetup`, `resolveVolumeEaves` (keyed by structure id), and the gable, hip, shed, and flat builders are reused unchanged.
+
+**How the examples map to this model:**
+
+| Example | Parameters |
+|---|---|
+| Gable/hip/shed roof dormer (three walls above the roof plane) | `setback > host eave depth`, `baseHeight: null` |
+| Wall dormer (single wall built into the roof, front flush with the main wall) | `setback: 0`; cheek walls appear only where the dormer plate is above the host roof, so a dormer whose eaves come down to the host roof has no cheeks |
+| Sleeping porch on a lower wing, backed against the main block | host = wing, `baseHeight` = wing plate, and the roof clips into the main volume as a second host (`attachVolumeId`) |
+| Sleeping porch projecting from the main wall (over a ground porch or on brackets) | host = main, `setback < 0`, `baseHeight` = story-1 top, `openSides`; the exposed floor underside gets a closure face |
+
+### Validation (`validateRoofStructure`)
+
+- The host must be an existing volume. `hostSide` must be a sloped face (an eave side of a gable, hip, or shed, or any side of a flat roof), not a gable end.
+- The structure must sit inside that one face: the region where the `hostSide` plane is the minimum. It must not straddle a hip, valley, or another volume. This is what lets the other host planes be ignored locally.
+- The structure's ridge must stay below the host ridge. With `join: 'snap-ridge'` it is lowered to the host ridge instead, the same rule `gableMergeGeometry` applies.
+- A shed whose slope is at least the host's slope never meets the host plane. It is snapped to the ridge (the existing 2b rule) or rejected.
+- Structures on the same face must not overlap.
+- A structure whose host no longer exists after a footprint change is dropped on load with a reported warning.
+
+### Phases
+
+0. **Prep refactor (no behavior change).** Complete.
+   - `createBuildingFromFootprint` now also returns `roofZones`: one resolved descriptor per volume, from `roofZoneDescriptor` in `js/extrusion.js`. It is produced by the single-rectangle path, `createVolumeRoofAssembly`, and `createMultiVolumeBuilding`.
+   - A descriptor holds `{ volumeId, roofType, bounds (walls), roofBounds (a merged shed's extended rectangle), ridgeAxis, roofHighEdge, roofHeight, planes, slabThickness, overhang, eaves, exact, baseY }`.
+   - Planes carry the *final* heights after merges: a merged gable's lowered ridge, and a snapped or intersecting shed's slope.
+   - `exact: false` marks a hip whose ridge ends were moved to meet a neighbor's, and a shed corner clamped onto a neighbor's plane. Structures should not be hosted on these.
+   - Roof meshes stay in their plate frame, and `baseY` records the offset.
+   - The skeleton-hip, sampled-field, and non-rectangular flat paths return no zones.
+   - New `js/roof-structures.js` (no THREE dependency): `clipPolygon` (moved from `extrusion.js`), `clipOutsideConvexSolid`, `volumeSolid`, `isInsideSolid`, `FLAT_ROOF_THICKNESS`.
+     - The clip cuts *exactly* on each face plane, so two solids clipped against each other share cut lines and close into one shell.
+     - Its epsilon only decides that a piece lying *on* a face counts as inside. An earlier version grew the solid by epsilon instead, which left a hairline gap between mutually clipped solids.
+   - `clipInsideNeighbor` now uses shared `geometryTriangles`/`trianglesToGeometry` helpers.
+   - Tests in `tests/roof_structures.test.js`:
+     - Clip area is exact.
+     - Faces on the boundary are dropped.
+     - Two boxes clipped against each other form a closed shell of the analytic area.
+     - Each descriptor's planes match the rendered roof surface (rectangular gable, hip, shed, and flat; the U assembly; a merged shed; a lowered merged gable ridge; independent story counts).
+     - `volumeSolid` membership.
+   - Mesh helpers were extracted to `tests/helpers/mesh.js`.
+1. **Data model, placement, validation, persistence.** Add `structureBounds`, `validateRoofStructure`, and `.bld` round-trip. Nothing is rendered yet. Tests cover the frame math for all four host sides and every validation rule.
+2. **Roof dormers (setback clears the host eave).**
+   - Build walls as rectangles plus gable-end polygons, from below the host plane up to the plate, and clip them outside the host.
+   - Build the roof with the existing builders on bounds extended back to the host ridge line, with no overhang on the back side, then clip it outside the host.
+   - Cut the host roof with the structure solid.
+   - Cover all four roof types.
+   - Tests: the hole outline matches the analytic polygon; the ridge endpoint matches the gable-merge formula; host plus dormer has no open edges (reuse `openEdges` from `tests/eaves.test.js`); no NaN.
+3. **Wall dormers (setback inside the eave, down to 0).**
+   - Treat the dormer span on the host's eave side as an adjacency interval. The host side gets zero overhang there, and `eaves.partial` builds the exposed strips on both sides with end caps. This is the same path shared walls use now.
+   - The front wall continues the host wall face up from the plate.
+   - Scope: analytic host builders only. On skeleton-hip and field fallbacks the UI reports that wall dormers are unsupported.
+4. **Porches and attached volumes.**
+   - Add `baseHeight`, open sides, and a floor-underside closure for projecting porches.
+   - Add an optional `attachVolumeId`, whose solid also clips the structure, so a porch on a wing merges into the main block's wall and roof.
+   - With open sides, the roof gets its soffit/ceiling, and posts are left to facade modifiers.
+   - Tests: a porch on the L preset's wing, and a porch projecting from the rectangle.
+5. **Facade surfaces.**
+   - Each structure adds wall runs to `computeFacadeLayout`: `wall-run-<structureId>-front|left|right|back`, with `structureId`, `hostVolumeId`, and an **outline polygon** in wall-local (u, v) coordinates. The outline carries the sloped bottom and the gable top that clipping produced.
+   - Each structure gets one story band (or its own count for a porch), with ids like `story-<structureId>-1`.
+   - Addressing extends to *Volume → Roof structure → Wall run → Facade panel → Story*, so windows and trim (Tasks 6–7) can target dormer and porch faces with the same API as footprint walls, placed inside the outline.
+   - Material precedence gains a structure level.
+6. **UI and picking.**
+   - Selected-element picker entries for structures.
+   - An "Add roof structure" action on a selected volume, with presets: gable dormer, shed dormer, hip dormer, flat dormer, wall dormer, sleeping porch.
+   - Controls: side, offset, width, setback, wall height, base, open sides, and roof type/ridge/pitch/rise/join, reusing the roof-zone and eave controls keyed by structure id.
+   - Pick targets and the amber/cyan cues come from the structure's clipped solid. Top-view outline.
+   - Validation errors appear inline.
+   - GLB export includes structures. Pick targets stay editor-only.
+7. **Docs.** Update ARCHITECTURE.md (§3 data model, §4 addressing, §5 envelope modifiers, and a "Roof structures" roof-shell note) and the README feature list.
+
+### Risks and decisions
+
+- **Clipping precision.** Coplanar and near-coplanar faces (a flush wall dormer front, a porch back wall) depend on the tolerance rule. Closure tests at each phase are the guard. T-junctions from clipping are acceptable, as they already are for partial eave strips.
+- **Descriptor accuracy.** The host solid must use the *final* planes after merges (for example, a gable ridge lowered by a merge). Getting this wrong is the most likely source of seams, which is why phase 0 comes first.
+- **Out of scope for now:**
+  - Structures straddling two volumes or a valley.
+  - Dormers on dormers.
+  - Recessed ("carved") porches cut into the roof. This is the subtractive counterpart, the same primitive run in reverse, and a natural follow-up.
+  - Eyebrow and curved dormers.
+  - Windows and railings themselves, which belong to Tasks 6–7 and only need the surfaces from phase 5.
+
 ## Immediate next implementation step
 
 Steps 3–5 of the resolver above (trimming plane against plane at differing elevations is done for shed/gable; hip and wall cut-to-roof remain).

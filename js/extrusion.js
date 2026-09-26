@@ -8,6 +8,7 @@ import { roofAxisForDirection, findVolumeAdjacencies } from './facade.js';
 import {
   resolveVolumeEaves, sideOverhangs, buildGableTrim, buildHipTrim, buildShedTrim, buildPartialEaveStrips,
 } from './eaves.js';
+import { clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS } from './roof-structures.js';
 
 let straightSkeletonBuilder = null;
 
@@ -93,25 +94,24 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   foundation.position.y = 0;
   group.add(foundation);
 
-  const roof = new THREE.Mesh(
-    createRoofGeometry(footprint, {
-      roofType: resolvedRoofType,
-      roofDirection: resolvedRoofDirection,
-      roofHeight,
-      roofOverhang: roofEaveDepth,
-      roofPitchRise: resolvedRoofPitchRise,
-      roofPitchRun: resolvedRoofPitchRun,
-      volumes: config.volumes,
-      volumeRidgeDirections: config.volumeRidgeDirections,
-      volumeRoofTypes: config.volumeRoofTypes,
-      volumeRoofConnections: config.volumeRoofConnections,
-      volumeRoofShapes: config.volumeRoofShapes,
-      roofHeightMode: config.roofHeightMode,
-      ...pickEaveConfig({ ...config, roofEaveDepth }),
-    }),
-    materials.roof
-  );
+  const { geometry: roofGeometry, zones: roofZones } = createRoofGeometry(footprint, {
+    roofType: resolvedRoofType,
+    roofDirection: resolvedRoofDirection,
+    roofHeight,
+    roofOverhang: roofEaveDepth,
+    roofPitchRise: resolvedRoofPitchRise,
+    roofPitchRun: resolvedRoofPitchRun,
+    volumes: config.volumes,
+    volumeRidgeDirections: config.volumeRidgeDirections,
+    volumeRoofTypes: config.volumeRoofTypes,
+    volumeRoofConnections: config.volumeRoofConnections,
+    volumeRoofShapes: config.volumeRoofShapes,
+    roofHeightMode: config.roofHeightMode,
+    ...pickEaveConfig({ ...config, roofEaveDepth }),
+  });
+  const roof = new THREE.Mesh(roofGeometry, materials.roof);
   roof.position.y = foundationHeight + totalHeight + 0.02;
+  roofZones.forEach((zone) => { zone.baseY = roof.position.y; });
   roof.userData = {
     roofZoneId: primaryRoofZone?.id ?? 'roof-zone-main',
     roofType: resolvedRoofType,
@@ -143,7 +143,9 @@ export function createBuildingFromFootprint(footprint, config = {}) {
     facadePanelsRendered: Boolean(config.facadeLayout && getRectangularBounds(footprint)),
   };
 
-  return { building: group, foundationHeight, totalHeight };
+  return {
+    building: group, foundationHeight, totalHeight, roofZones,
+  };
 }
 
 /**
@@ -172,6 +174,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
   const group = new THREE.Group();
   const foundationHeight = foundationDepth;
   let maxTotalHeight = 0;
+  const roofZones = [];
   const volumePlateHeights = Object.fromEntries(
     roofVolumes.map((volume) => [volume.id, (overrides[volume.id] ?? storyCount) * storyHeight])
   );
@@ -235,6 +238,17 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
         : createFlatRoofGeometry(bounds, setup.overhang);
     const roof = new THREE.Mesh(flatShaded(clipInsideNeighbor(roofGeometry, volumeConnections)), materials.roof);
     roof.position.y = foundationHeight + totalHeight + 0.02;
+    roofZones.push({
+      ...roofZoneDescriptor(volume.id, {
+        wallBounds,
+        roofBounds: bounds,
+        roofType: roofTypeForVolume,
+        roofConfig,
+        setup,
+        exact: !hasCoplanarShedMerge(roofTypeForVolume, volumeConnections),
+      }),
+      baseY: roof.position.y,
+    });
     roof.userData = {
       volumeId: volume.id,
       roofType: roofTypeForVolume,
@@ -250,7 +264,9 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
   });
 
   group.userData = { multiVolume: true, volumeCount: volumes.length };
-  return { building: group, foundationHeight, totalHeight: maxTotalHeight };
+  return {
+    building: group, foundationHeight, totalHeight: maxTotalHeight, roofZones,
+  };
 }
 
 /**
@@ -270,6 +286,54 @@ function volumeRoofParams(volumeId, halfSpan, config) {
   }
   const pitchRise = shape?.mode === 'slope' ? shape.pitchRise : (config.roofPitchRise ?? 6);
   return { mode, roofHeight: halfSpan * (pitchRise / pitchRun), pitchRise, pitchRun };
+}
+
+/**
+ * The resolved roof of one volume, as built: its wall rectangle, the
+ * rectangle its roof planes are defined over (a shed extended to a ridge
+ * reaches past its walls), and its final planes after any merge (a merged
+ * gable's lowered ridge, a shed's snapped slope). Roof structures use it to
+ * build the volume's solid (`volumeSolid` in js/roof-structures.js) without
+ * reading the mesh. Planes are in the roof's own frame (height above the
+ * plate); `baseY` is the plate's absolute elevation, filled in by the caller
+ * that positions the roof mesh.
+ *
+ * `exact` is false where the rendered surface is not the min of these planes:
+ * a hip whose ridge ends were moved to meet a neighbor's, or a shed corner
+ * clamped onto a neighbor's plane by a coplanar merge.
+ */
+function roofZoneDescriptor(volumeId, {
+  wallBounds, roofBounds, roofType, roofConfig, setup, exact = true,
+}) {
+  const roofHeight = roofType === 'flat' ? 0 : roofConfig.roofHeight;
+  const roofHighEdge = roofType === 'shed' ? shedHighEdge(roofConfig) : roofConfig.roofHighEdge;
+  const planes = computeVolumeEavePlanes(roofBounds, roofType, { ...roofConfig, roofHighEdge });
+  if (roofType === 'hip' && planes.length && roofHeight < evalZoneHeight(planes, (roofBounds.minX + roofBounds.maxX) / 2, (roofBounds.minZ + roofBounds.maxZ) / 2) - 1e-6) {
+    // a hip's ridge sits at its configured height even when the pitch alone would peak higher
+    planes.push({ constantHeight: roofHeight });
+  }
+  return {
+    volumeId,
+    roofType,
+    bounds: wallBounds,
+    roofBounds,
+    ridgeAxis: roofConfig.roofDirection,
+    roofHighEdge,
+    roofHeight,
+    planes,
+    slabThickness: roofType === 'flat' ? FLAT_ROOF_THICKNESS : 0,
+    overhang: setup?.overhang,
+    eaves: setup?.eaves,
+    exact,
+    baseY: 0,
+  };
+}
+
+/** Whether a shed's corners were clamped onto a neighbor's plane rather than its own. */
+function hasCoplanarShedMerge(roofType, connections) {
+  return roofType === 'shed' && Object.values(connections ?? {}).some((resolution) => (
+    resolution?.mode === 'merged' && !resolution.override && !resolution.rakeTriangle
+  ));
 }
 
 /**
@@ -362,6 +426,15 @@ export function roofPitchDegrees(pitchRise, pitchRun = 12) {
   return THREE.MathUtils.radToDeg(Math.atan(pitchRise / pitchRun));
 }
 
+/**
+ * The roof mesh for the whole footprint, plus a resolved zone descriptor per
+ * volume (see roofZoneDescriptor) wherever an analytic per-volume builder
+ * produced it. The straight-skeleton hip, the sampled roof field, and the flat
+ * cap over a non-rectangular footprint have no per-volume planes, so they
+ * return no zones.
+ *
+ * @returns {{ geometry: THREE.BufferGeometry, zones: Array<object> }}
+ */
 function createRoofGeometry(footprint, config) {
   const roofHighEdge = config.roofHighEdge ?? config.roofDirection;
   config = {
@@ -378,8 +451,11 @@ function createRoofGeometry(footprint, config) {
   const rectangleSetup = bounds
     ? volumeEaveSetup(rectangleVolumeId, config.roofType, { ridgeAxis: config.roofDirection, roofHighEdge: config.roofHighEdge }, config)
     : null;
+  const rectangleZone = (roofType, roofConfig) => [roofZoneDescriptor(rectangleVolumeId, {
+    wallBounds: bounds, roofBounds: bounds, roofType, roofConfig, setup: rectangleSetup,
+  })];
   if (bounds && config.roofType === 'flat') {
-    return createFlatRoofGeometry(bounds, rectangleSetup.overhang);
+    return { geometry: createFlatRoofGeometry(bounds, rectangleSetup.overhang), zones: rectangleZone('flat', config) };
   }
 
   const hasVolumeShapeOverride = Object.keys(config.volumeRoofShapes ?? {}).length > 0
@@ -390,11 +466,12 @@ function createRoofGeometry(footprint, config) {
   if (config.roofType === 'gable' || config.roofType === 'hip' || config.roofType === 'shed' || hasSlopedVolumeRoof) {
     if (bounds) {
       const shapedConfig = { ...config, overhang: rectangleSetup.overhang, eaves: rectangleSetup.eaves };
-      return flatShaded(config.roofType === 'gable'
+      const geometry = flatShaded(config.roofType === 'gable'
         ? createGableRoofGeometry(bounds, shapedConfig)
         : config.roofType === 'hip'
           ? createHipRoofGeometry(bounds, shapedConfig)
           : createShedRoofGeometry(bounds, shapedConfig));
+      return { geometry, zones: rectangleZone(config.roofType, shapedConfig) };
     }
     if (config.roofType === 'hip'
       && config.roofHeightMode === 'height'
@@ -405,18 +482,18 @@ function createRoofGeometry(footprint, config) {
     if (config.roofType === 'hip' && config.volumes && config.volumes.length > 1 && straightSkeletonBuilder) {
       const topologyGeometry = createStraightSkeletonHipGeometry(footprint, config);
       if (topologyGeometry) {
-        return topologyGeometry;
+        return { geometry: topologyGeometry, zones: [] };
       }
     }
     if (config.roofType === 'hip'
       && config.volumes
       && config.volumes.length > 1) {
-      return createRoofFieldSurface(footprint, config);
+      return { geometry: createRoofFieldSurface(footprint, config), zones: [] };
     }
     if (config.volumes && config.volumes.length > 1) {
       return createVolumeRoofAssembly(config.volumes, config);
     }
-    return createRoofFieldSurface(footprint, config);
+    return { geometry: createRoofFieldSurface(footprint, config), zones: [] };
   }
 
   const roofShape = buildShape(footprint, 0);
@@ -427,7 +504,7 @@ function createRoofGeometry(footprint, config) {
     curveSegments: 12,
   });
   geometry.rotateX(-Math.PI / 2);
-  return geometry;
+  return { geometry, zones: [] };
 }
 
 function createStraightSkeletonHipGeometry(footprint, config) {
@@ -509,6 +586,7 @@ function createVolumeRoofAssembly(volumes, config) {
   const adjacentSides = adjacentSidesByVolume(roofVolumes);
   const setups = buildRoofSetups(roofVolumes, config, connections, adjacentSides, (volume) => config.volumeRoofTypes?.[volume.id] ?? config.roofType);
 
+  const zones = [];
   const chunks = roofVolumes.map((volume) => {
     const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
     const volumeConnections = connections.get(volume.id);
@@ -542,9 +620,17 @@ function createVolumeRoofAssembly(volumes, config) {
         : roofType === 'hip'
           ? createHipRoofGeometry(bounds, roofConfig)
           : createShedRoofGeometry(bounds, roofConfig);
+    zones.push(roofZoneDescriptor(volume.id, {
+      wallBounds: { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ },
+      roofBounds: bounds,
+      roofType,
+      roofConfig,
+      setup,
+      exact: !(roofType === 'hip' && roofConfig.ridgeEndpoints) && !hasCoplanarShedMerge(roofType, volumeConnections),
+    }));
     return clipInsideNeighbor(chunk, volumeConnections);
   });
-  return mergeFlatGeometries(chunks);
+  return { geometry: mergeFlatGeometries(chunks), zones };
 }
 
 function applyVolumeRidgeDirections(volumes, directions) {
@@ -1008,16 +1094,7 @@ function clipInsideNeighbor(geometry, connections) {
   if (clips.length === 0 || clips.every((clip) => clip.gap <= MERGE_HEIGHT_EPSILON)) {
     return geometry;
   }
-  const position = geometry.getAttribute('position');
-  const index = geometry.index;
-  const count = index ? index.count : position.count;
-  let polygons = [];
-  for (let i = 0; i < count; i += 3) {
-    polygons.push([0, 1, 2].map((k) => {
-      const v = index ? index.getX(i + k) : i + k;
-      return [position.getX(v), position.getY(v), position.getZ(v)];
-    }));
-  }
+  let polygons = geometryTriangles(geometry);
   clips.forEach(({ axis, wall, direction, gap }) => {
     const beyond = (v) => direction * ((axis === 'x' ? v[0] : v[2]) - wall);
     polygons = polygons.flatMap((polygon) => {
@@ -1026,34 +1103,29 @@ function clipInsideNeighbor(geometry, connections) {
       return [near, far].filter((poly) => poly.length >= 3);
     });
   });
-  const positions = [];
-  polygons.forEach((polygon) => {
-    for (let k = 1; k < polygon.length - 1; k += 1) {
-      [polygon[0], polygon[k], polygon[k + 1]].forEach((v) => positions.push(...v));
-    }
-  });
-  const clipped = new THREE.BufferGeometry();
-  clipped.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  clipped.computeVertexNormals();
-  return clipped;
+  return trianglesToGeometry(polygonsToTriangles(polygons));
 }
 
-// Sutherland-Hodgman against the half-space where distance(v) >= 0.
-function clipPolygon(polygon, distance) {
-  const out = [];
-  polygon.forEach((current, i) => {
-    const previous = polygon[(i + polygon.length - 1) % polygon.length];
-    const dCurrent = distance(current);
-    const dPrevious = distance(previous);
-    if ((dCurrent >= 0) !== (dPrevious >= 0)) {
-      const t = dPrevious / (dPrevious - dCurrent);
-      out.push(previous.map((value, k) => value + (current[k] - value) * t));
-    }
-    if (dCurrent >= 0) {
-      out.push(current);
-    }
-  });
-  return out;
+/** The triangles of a (possibly indexed) geometry, as [[x, y, z] x 3] arrays. */
+function geometryTriangles(geometry) {
+  const position = geometry.getAttribute('position');
+  const index = geometry.index;
+  const count = index ? index.count : position.count;
+  const triangles = [];
+  for (let i = 0; i < count; i += 3) {
+    triangles.push([0, 1, 2].map((k) => {
+      const v = index ? index.getX(i + k) : i + k;
+      return [position.getX(v), position.getY(v), position.getZ(v)];
+    }));
+  }
+  return triangles;
+}
+
+function trianglesToGeometry(triangles) {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(triangles.flat(2), 3));
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function mergeFlatGeometries(geometries) {
@@ -1338,7 +1410,7 @@ function createFlatRoofGeometry(bounds, overhang) {
   shape.lineTo(minX, -maxZ);
   shape.closePath();
   const geometry = new THREE.ExtrudeGeometry(shape, {
-    depth: 0.08,
+    depth: FLAT_ROOF_THICKNESS,
     bevelEnabled: false,
     steps: 1,
     curveSegments: 1,
@@ -1580,13 +1652,17 @@ function createGableRoofGeometry(bounds, config) {
   return createIndexedGeometry(positions, indices);
 }
 
+function shedHighEdge(config) {
+  const requested = config.roofHighEdge ?? defaultHighEdgeForAxis(config.roofDirection);
+  // anything that is not a recognised edge has always meant 'z-max' here
+  return ['x-min', 'x-max', 'z-min', 'z-max'].includes(requested) ? requested : 'z-max';
+}
+
 export function createShedRoofGeometry(bounds, config) {
   const { minX, maxX, minZ, maxZ } = bounds;
   const ov = overhangOf(config);
   const peakY = config.roofHeight;
-  const requestedHighEdge = config.roofHighEdge ?? defaultHighEdgeForAxis(config.roofDirection);
-  // anything that is not a recognised edge has always meant 'z-max' here
-  const highEdge = ['x-min', 'x-max', 'z-min', 'z-max'].includes(requestedHighEdge) ? requestedHighEdge : 'z-max';
+  const highEdge = shedHighEdge(config);
   const cornerDefs = highEdge === 'x-min'
     ? [
       { x: minX, z: minZ, height: peakY, sides: ['minX', 'minZ'] },
