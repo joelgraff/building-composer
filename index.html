@@ -389,6 +389,28 @@
             <label for="roof-eave-depth">Eave depth (<span id="roof-eave-unit">feet</span>)</label>
             <input id="roof-eave-depth" type="number" min="0" max="20" step="0.1" />
           </div>
+          <div class="field">
+            <label for="roof-rake-depth">Rake overhang (<span id="roof-rake-unit">feet</span>)</label>
+            <input id="roof-rake-depth" type="number" min="0" max="20" step="0.1" />
+          </div>
+          <div class="field">
+            <label for="roof-fascia-depth">Fascia depth (<span id="roof-fascia-unit">feet</span>)</label>
+            <input id="roof-fascia-depth" type="number" min="0.05" max="5" step="0.05" />
+          </div>
+          <div class="field">
+            <label for="eave-soffit">Eave soffit</label>
+            <select id="eave-soffit">
+              <option value="flat">Flat (level from fascia)</option>
+              <option value="sloped">Parallel to roof</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="rake-soffit">Rake soffit</label>
+            <select id="rake-soffit">
+              <option value="sloped">Parallel to roof</option>
+              <option value="flat">Flat (level from fascia)</option>
+            </select>
+          </div>
           <div class="field" id="roof-height-mode-field" style="display:none;">
             <label for="roof-height-mode">Ridge Control</label>
             <select id="roof-height-mode">

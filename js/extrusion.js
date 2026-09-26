@@ -5,6 +5,9 @@
 import * as THREE from '../node_modules/three/build/three.module.js';
 import { createMaterials, MATERIAL_PALETTE } from './materials.js';
 import { roofAxisForDirection, findVolumeAdjacencies } from './facade.js';
+import {
+  resolveVolumeEaves, sideOverhangs, buildGableTrim, buildHipTrim, buildShedTrim,
+} from './eaves.js';
 
 let straightSkeletonBuilder = null;
 
@@ -51,6 +54,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   if (hasVolumeOverrides) {
     return createMultiVolumeBuilding(volumes, overrides, {
       storyCount, storyHeight, foundationDepth, roofEaveDepth, roofType, roofHeight, roofPitchRise, roofPitchRun, roofHeightMode: config.roofHeightMode, volumeRidgeDirections: config.volumeRidgeDirections, volumeRoofTypes: config.volumeRoofTypes, volumeRoofConnections: config.volumeRoofConnections, volumeRoofShapes: config.volumeRoofShapes,
+      ...pickEaveConfig({ ...config, roofEaveDepth }),
     });
   }
 
@@ -103,6 +107,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
       volumeRoofConnections: config.volumeRoofConnections,
       volumeRoofShapes: config.volumeRoofShapes,
       roofHeightMode: config.roofHeightMode,
+      ...pickEaveConfig({ ...config, roofEaveDepth }),
     }),
     materials.roof
   );
@@ -171,6 +176,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
     roofVolumes.map((volume) => [volume.id, (overrides[volume.id] ?? storyCount) * storyHeight])
   );
   const connections = resolveRoofConnections(roofVolumes, { ...config, volumePlateHeights });
+  const adjacentSides = adjacentSidesByVolume(roofVolumes);
 
   roofVolumes.forEach((volume) => {
     const volumeStoryCount = overrides[volume.id] ?? storyCount;
@@ -178,7 +184,6 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
     maxTotalHeight = Math.max(maxTotalHeight, totalHeight);
     const roofTypeForVolume = config.volumeRoofTypes?.[volume.id] ?? roofType;
     const volumeConnections = connections.get(volume.id);
-    const hasMerge = Object.keys(volumeConnections ?? {}).length > 0;
     const { bounds, extendedRoofHeight } = applyRoofExtension(
       { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ },
       roofTypeForVolume,
@@ -197,6 +202,13 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
 
     const roofDirectionForVolume = volume.ridgeAxis;
     const params = volumeRoofParams(volume.id, halfSpanForBounds(wallBounds, roofDirectionForVolume), config);
+    const setup = volumeEaveSetup(
+      volume.id,
+      roofTypeForVolume,
+      { ridgeAxis: roofDirectionForVolume, roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(roofDirectionForVolume) },
+      config,
+      new Set([...(adjacentSides.get(volume.id) ?? []), ...Object.keys(volumeConnections ?? {})])
+    );
     const roofHeightForVolume = roofTypeForVolume === 'flat'
       ? 0
       : (extendedRoofHeight ?? params.roofHeight);
@@ -204,7 +216,8 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
       roofDirection: roofDirectionForVolume,
       roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(roofDirectionForVolume),
       roofHeight: roofHeightForVolume,
-      roofOverhang: hasMerge ? 0 : roofEaveDepth,
+      overhang: setup.overhang,
+      eaves: setup.eaves,
       roofPitchRise: params.pitchRise,
       roofPitchRun: params.pitchRun,
       connections: volumeConnections,
@@ -223,7 +236,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
         ? createHipRoofGeometry(bounds, roofConfig)
         : roofTypeForVolume === 'shed'
           ? createShedRoofGeometry(bounds, roofConfig)
-        : createFlatRoofGeometry(bounds, roofEaveDepth);
+        : createFlatRoofGeometry(bounds, setup.overhang);
     const roof = new THREE.Mesh(flatShaded(clipInsideNeighbor(roofGeometry, volumeConnections)), materials.roof);
     roof.position.y = foundationHeight + totalHeight + 0.02;
     roof.userData = {
@@ -365,8 +378,12 @@ function createRoofGeometry(footprint, config) {
     const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
     return roofType === 'gable' || roofType === 'hip' || roofType === 'shed';
   });
+  const rectangleVolumeId = config.volumes?.[0]?.id ?? 'volume-main';
+  const rectangleSetup = bounds
+    ? volumeEaveSetup(rectangleVolumeId, config.roofType, { ridgeAxis: config.roofDirection, roofHighEdge: config.roofHighEdge }, config)
+    : null;
   if (bounds && config.roofType === 'flat') {
-    return createFlatRoofGeometry(bounds, config.roofOverhang);
+    return createFlatRoofGeometry(bounds, rectangleSetup.overhang);
   }
 
   const hasVolumeShapeOverride = Object.keys(config.volumeRoofShapes ?? {}).length > 0
@@ -376,11 +393,12 @@ function createRoofGeometry(footprint, config) {
   }
   if (config.roofType === 'gable' || config.roofType === 'hip' || config.roofType === 'shed' || hasSlopedVolumeRoof) {
     if (bounds) {
+      const shapedConfig = { ...config, overhang: rectangleSetup.overhang, eaves: rectangleSetup.eaves };
       return flatShaded(config.roofType === 'gable'
-        ? createGableRoofGeometry(bounds, config)
+        ? createGableRoofGeometry(bounds, shapedConfig)
         : config.roofType === 'hip'
-          ? createHipRoofGeometry(bounds, config)
-          : createShedRoofGeometry(bounds, config));
+          ? createHipRoofGeometry(bounds, shapedConfig)
+          : createShedRoofGeometry(bounds, shapedConfig));
     }
     if (config.roofType === 'hip'
       && config.roofHeightMode === 'height'
@@ -492,6 +510,7 @@ function createVolumeRoofAssembly(volumes, config) {
     ? buildConnectedConstantRiseRidges(roofVolumes, config.roofType === 'hip', ridgeHeights)
     : new Map();
   const connections = resolveRoofConnections(roofVolumes, config);
+  const adjacentSides = adjacentSidesByVolume(roofVolumes);
 
   const chunks = roofVolumes.map((volume) => {
     const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
@@ -502,12 +521,20 @@ function createVolumeRoofAssembly(volumes, config) {
       volumeConnections
     );
     const params = paramsFor(volume, bounds);
+    const setup = volumeEaveSetup(
+      volume.id,
+      roofType,
+      { ridgeAxis: volume.ridgeAxis, roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis) },
+      config,
+      new Set([...(adjacentSides.get(volume.id) ?? []), ...Object.keys(volumeConnections ?? {})])
+    );
     const gableMerge = roofType === 'gable' ? gableMergeGeometry(volume, bounds, volumeConnections, params.roofHeight) : null;
     const roofConfig = {
       roofDirection: volume.ridgeAxis,
       roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis),
       roofHeight: extendedRoofHeight ?? (gableMerge?.any ? gableMerge.roofHeight : params.roofHeight),
-      roofOverhang: 0,
+      overhang: setup.overhang,
+      eaves: setup.eaves,
       roofPitchRise: params.pitchRise,
       roofPitchRun: params.pitchRun,
       ridgeEndpoints: gableMerge?.any
@@ -517,7 +544,7 @@ function createVolumeRoofAssembly(volumes, config) {
       connections: volumeConnections,
     };
     const chunk = roofType === 'flat'
-      ? createFlatRoofGeometry(bounds, 0)
+      ? createFlatRoofGeometry(bounds, setup.overhang)
       : roofType === 'gable'
         ? createGableRoofGeometry(bounds, roofConfig)
         : roofType === 'hip'
@@ -1304,12 +1331,15 @@ function isPointCoveredByFootprint(x, z, footprint, edges) {
   return edges.some((edge) => distancePointToSegment(x, z, edge.start[0], edge.start[1], edge.end[0], edge.end[1]) < 1e-6);
 }
 
-function createFlatRoofGeometry(bounds, eaveDepth) {
+function createFlatRoofGeometry(bounds, overhang) {
+  const ov = typeof overhang === 'number'
+    ? { minX: overhang, maxX: overhang, minZ: overhang, maxZ: overhang }
+    : { minX: 0, maxX: 0, minZ: 0, maxZ: 0, ...overhang };
   const shape = new THREE.Shape();
-  const minX = bounds.minX - eaveDepth;
-  const maxX = bounds.maxX + eaveDepth;
-  const minZ = bounds.minZ - eaveDepth;
-  const maxZ = bounds.maxZ + eaveDepth;
+  const minX = bounds.minX - ov.minX;
+  const maxX = bounds.maxX + ov.maxX;
+  const minZ = bounds.minZ - ov.minZ;
+  const maxZ = bounds.maxZ + ov.maxZ;
   shape.moveTo(minX, -minZ);
   shape.lineTo(maxX, -minZ);
   shape.lineTo(maxX, -maxZ);
@@ -1344,51 +1374,107 @@ function getRectangularBounds(footprint) {
   };
 }
 
+const EAVE_CONFIG_KEYS = ['roofEaveDepth', 'roofRakeDepth', 'eaveSoffit', 'rakeSoffit', 'roofFasciaDepth', 'volumeEaves'];
+
+function pickEaveConfig(config) {
+  return Object.fromEntries(EAVE_CONFIG_KEYS.filter((key) => config[key] !== undefined).map((key) => [key, config[key]]));
+}
+
+/** Sides of each volume that touch another volume (no overhang there). */
+function adjacentSidesByVolume(volumes) {
+  const sides = new Map(volumes.map((volume) => [volume.id, new Set()]));
+  findVolumeAdjacencies(volumes).forEach((adjacency) => {
+    sides.get(adjacency.volumeAId)?.add(adjacency.sideA);
+    sides.get(adjacency.volumeBId)?.add(adjacency.sideB);
+  });
+  return sides;
+}
+
+/**
+ * Overhang and eave settings for one volume's roof. Shared walls and merged
+ * sides never overhang.
+ */
+function volumeEaveSetup(volumeId, roofType, orientation, config, zeroSides) {
+  const eaves = resolveVolumeEaves(volumeId, config);
+  const { overhang } = sideOverhangs(roofType, orientation, eaves, zeroSides ?? new Set());
+  return { overhang, eaves };
+}
+
+/** Per-side overhang from `config.overhang`, or a uniform scalar `roofOverhang`. */
+function overhangOf(config) {
+  if (config.overhang) {
+    return { minX: 0, maxX: 0, minZ: 0, maxZ: 0, ...config.overhang };
+  }
+  const o = config.roofOverhang ?? 0;
+  return { minX: o, maxX: o, minZ: o, maxZ: o };
+}
+
+function appendTriangles(positions, indices, triangles) {
+  triangles.forEach((triangle) => {
+    const first = positions.length / 3;
+    triangle.forEach((vertex) => positions.push(...vertex));
+    indices.push(first, first + 1, first + 2);
+  });
+}
+
 function createGableRoofGeometry(bounds, config) {
-  const minX = bounds.minX - config.roofOverhang;
-  const maxX = bounds.maxX + config.roofOverhang;
-  const minZ = bounds.minZ - config.roofOverhang;
-  const maxZ = bounds.maxZ + config.roofOverhang;
-  const centerX = (minX + maxX) / 2;
-  const centerZ = (minZ + maxZ) / 2;
-  const baseY = 0;
+  const ov = overhangOf(config);
+  const axis = config.roofDirection === 'x' ? 'x' : 'z';
+  const [cMin, cMax] = axis === 'x' ? [bounds.minZ, bounds.maxZ] : [bounds.minX, bounds.maxX];
+  const [aMin, aMax] = axis === 'x' ? [bounds.minX, bounds.maxX] : [bounds.minZ, bounds.maxZ];
+  const [eMin, eMax] = axis === 'x' ? [ov.minZ, ov.maxZ] : [ov.minX, ov.maxX];
+  const [rStart, rEnd] = axis === 'x' ? [ov.minX, ov.maxX] : [ov.minZ, ov.maxZ];
+  const centerCross = (cMin + cMax) / 2;
   const peakY = config.roofHeight;
+  const halfSpan = (cMax - cMin) / 2;
+  // The slopes keep their pitch past the wall, so an eave edge sits below the plate.
+  const slope = halfSpan > 1e-9 ? peakY / halfSpan : 0;
+  const yLow = -slope * eMin;
+  const yHigh = -slope * eMax;
+  const aStart = aMin - rStart;
+  const aEnd = aMax + rEnd;
+  const W = axis === 'x' ? (c, a, y) => [a, y, c] : (c, a, y) => [c, y, a];
   const ridgeEndpoints = config.ridgeEndpoints;
   const startPeakY = ridgeEndpoints?.start?.[2] ?? peakY;
   const endPeakY = ridgeEndpoints?.end?.[2] ?? peakY;
-  const positions = config.roofDirection === 'x'
-    ? [
-      minX, baseY, minZ, maxX, baseY, minZ, maxX, baseY, maxZ, minX, baseY, maxZ,
-      ridgeEndpoints?.start?.[0] ?? minX, startPeakY, ridgeEndpoints?.start?.[1] ?? centerZ,
-      ridgeEndpoints?.end?.[0] ?? maxX, endPeakY, ridgeEndpoints?.end?.[1] ?? centerZ,
-    ]
-    : [
-      minX, baseY, minZ, maxX, baseY, minZ, maxX, baseY, maxZ, minX, baseY, maxZ,
-      ridgeEndpoints?.start?.[0] ?? centerX, startPeakY, ridgeEndpoints?.start?.[1] ?? minZ,
-      ridgeEndpoints?.end?.[0] ?? centerX, endPeakY, ridgeEndpoints?.end?.[1] ?? maxZ,
-    ];
-  const slopes = config.roofDirection === 'x'
+  const corners = axis === 'x'
+    ? [W(cMin - eMin, aStart, yLow), W(cMin - eMin, aEnd, yLow), W(cMax + eMax, aEnd, yHigh), W(cMax + eMax, aStart, yHigh)]
+    : [W(cMin - eMin, aStart, yLow), W(cMax + eMax, aStart, yHigh), W(cMax + eMax, aEnd, yHigh), W(cMin - eMin, aEnd, yLow)];
+  const ridgeStart = ridgeEndpoints?.start
+    ? [ridgeEndpoints.start[0], startPeakY, ridgeEndpoints.start[1]]
+    : W(centerCross, aStart, peakY);
+  const ridgeEnd = ridgeEndpoints?.end
+    ? [ridgeEndpoints.end[0], endPeakY, ridgeEndpoints.end[1]]
+    : W(centerCross, aEnd, peakY);
+  const positions = [...corners, ridgeStart, ridgeEnd].flat();
+  // gable end faces stay at the wall plane; only the slopes run out past them
+  [W(cMin, aMin, 0), W(cMax, aMin, 0), W(centerCross, aMin, startPeakY),
+    W(cMin, aMax, 0), W(cMax, aMax, 0), W(centerCross, aMax, endPeakY)].forEach((v) => positions.push(...v));
+  const slopes = axis === 'x'
     ? [0, 1, 5, 0, 5, 4, 3, 4, 5, 3, 5, 2]
     : [0, 4, 5, 0, 5, 3, 1, 2, 5, 1, 5, 4];
-  const startEnd = config.roofDirection === 'x' ? [0, 4, 3] : [0, 1, 4];
-  const endEnd = config.roofDirection === 'x' ? [1, 2, 5] : [3, 5, 2];
   // A merged end has no gable-end face: the ridge runs on into the
   // neighbor's roof, so the two slopes simply continue to their valley lines.
   const indices = [
     ...slopes,
-    ...(config.mergedEnds?.start ? [] : startEnd),
-    ...(config.mergedEnds?.end ? [] : endEnd),
+    ...(config.mergedEnds?.start ? [] : [6, 7, 8]),
+    ...(config.mergedEnds?.end ? [] : [9, 10, 11]),
   ];
+  if (config.eaves) {
+    appendTriangles(positions, indices, buildGableTrim(bounds, {
+      roofHeight: peakY, ridgeAxis: axis, overhang: ov, eaves: config.eaves,
+    }));
+  }
   return createIndexedGeometry(positions, indices);
 }
 
 export function createShedRoofGeometry(bounds, config) {
-  const minX = bounds.minX - config.roofOverhang;
-  const maxX = bounds.maxX + config.roofOverhang;
-  const minZ = bounds.minZ - config.roofOverhang;
-  const maxZ = bounds.maxZ + config.roofOverhang;
+  const { minX, maxX, minZ, maxZ } = bounds;
+  const ov = overhangOf(config);
   const peakY = config.roofHeight;
-  const highEdge = config.roofHighEdge ?? defaultHighEdgeForAxis(config.roofDirection);
+  const requestedHighEdge = config.roofHighEdge ?? defaultHighEdgeForAxis(config.roofDirection);
+  // anything that is not a recognised edge has always meant 'z-max' here
+  const highEdge = ['x-min', 'x-max', 'z-min', 'z-max'].includes(requestedHighEdge) ? requestedHighEdge : 'z-max';
   const cornerDefs = highEdge === 'x-min'
     ? [
       { x: minX, z: minZ, height: peakY, sides: ['minX', 'minZ'] },
@@ -1456,7 +1542,22 @@ export function createShedRoofGeometry(bounds, config) {
   const positions = corners.flatMap((corner) => [corner.x, corner.height, corner.z]);
   corners.forEach((corner) => positions.push(corner.x, 0, corner.z));
 
-  const indices = [0, 1, 2, 0, 2, 3];
+  // Top surface: the corner quad, or — with overhang — the same plane
+  // continued out to the expanded outline (closures stay at the wall plane).
+  let indices = [0, 1, 2, 0, 2, 3];
+  if (Object.values(ov).some((value) => value > 1e-9)) {
+    const planes = computeVolumeEavePlanes(bounds, 'shed', {
+      roofHeight: peakY, roofHighEdge: highEdge, roofDirection: config.roofDirection,
+    });
+    const first = positions.length / 3;
+    corners.forEach((corner) => {
+      const dx = corner.sides.includes('minX') ? -ov.minX : ov.maxX;
+      const dz = corner.sides.includes('minZ') ? -ov.minZ : ov.maxZ;
+      const height = dx === 0 && dz === 0 ? corner.height : evalZoneHeight(planes, corner.x + dx, corner.z + dz);
+      positions.push(corner.x + dx, height, corner.z + dz);
+    });
+    indices = [first, first + 1, first + 2, first, first + 2, first + 3];
+  }
   for (let index = 0; index < 4; index += 1) {
     const next = (index + 1) % 4;
     const edgeSide = cornerDefs[index].sides.find((side) => cornerDefs[next].sides.includes(side));
@@ -1480,38 +1581,49 @@ export function createShedRoofGeometry(bounds, config) {
       indices.push(first, first + 1, first + 2);
     }
   });
+  if (config.eaves) {
+    appendTriangles(positions, indices, buildShedTrim(bounds, {
+      roofHeight: peakY, roofHighEdge: highEdge, overhang: ov, eaves: config.eaves,
+    }));
+  }
   return createIndexedGeometry(positions, indices);
 }
 
 function createHipRoofGeometry(bounds, config) {
-  const minX = bounds.minX - config.roofOverhang;
-  const maxX = bounds.maxX + config.roofOverhang;
-  const minZ = bounds.minZ - config.roofOverhang;
-  const maxZ = bounds.maxZ + config.roofOverhang;
+  const ov = overhangOf(config);
+  const e = Math.min(ov.minX, ov.maxX, ov.minZ, ov.maxZ);
+  const { minX, maxX, minZ, maxZ } = bounds;
   const centerX = (minX + maxX) / 2;
   const centerZ = (minZ + maxZ) / 2;
-  const baseY = 0;
   const peakY = config.roofHeight;
   const pitchRatio = config.roofPitchRise / config.roofPitchRun;
   const longitudinalSpan = config.roofDirection === 'x' ? maxX - minX : maxZ - minZ;
   const ridgeEndOffset = Number.isFinite(pitchRatio) && pitchRatio > 0
     ? Math.min(longitudinalSpan / 2, peakY / pitchRatio)
     : 0;
+  const eaveY = Number.isFinite(pitchRatio) ? -pitchRatio * e : 0;
   const ridgeEndpoints = config.ridgeEndpoints;
   const positions = config.roofDirection === 'x'
     ? [
-      minX, baseY, minZ, maxX, baseY, minZ, maxX, baseY, maxZ, minX, baseY, maxZ,
+      minX - e, eaveY, minZ - e, maxX + e, eaveY, minZ - e, maxX + e, eaveY, maxZ + e, minX - e, eaveY, maxZ + e,
       ridgeEndpoints?.start?.[0] ?? minX + ridgeEndOffset, peakY, ridgeEndpoints?.start?.[1] ?? centerZ,
       ridgeEndpoints?.end?.[0] ?? maxX - ridgeEndOffset, peakY, ridgeEndpoints?.end?.[1] ?? centerZ,
     ]
     : [
-      minX, baseY, minZ, maxX, baseY, minZ, maxX, baseY, maxZ, minX, baseY, maxZ,
+      minX - e, eaveY, minZ - e, maxX + e, eaveY, minZ - e, maxX + e, eaveY, maxZ + e, minX - e, eaveY, maxZ + e,
       ridgeEndpoints?.start?.[0] ?? centerX, peakY, ridgeEndpoints?.start?.[1] ?? minZ + ridgeEndOffset,
       ridgeEndpoints?.end?.[0] ?? centerX, peakY, ridgeEndpoints?.end?.[1] ?? maxZ - ridgeEndOffset,
     ];
   const indices = config.roofDirection === 'x'
     ? [0, 1, 5, 0, 5, 4, 3, 4, 5, 3, 5, 2, 0, 4, 3, 1, 2, 5]
     : [0, 4, 5, 0, 5, 3, 1, 2, 5, 1, 5, 4, 0, 1, 4, 3, 5, 2];
+  if (config.eaves && e > 0) {
+    appendTriangles(positions, indices, buildHipTrim(bounds, {
+      pitchRatio: Number.isFinite(pitchRatio) ? pitchRatio : 0,
+      overhang: { minX: e, maxX: e, minZ: e, maxZ: e },
+      eaves: config.eaves,
+    }));
+  }
   return createIndexedGeometry(positions, indices);
 }
 

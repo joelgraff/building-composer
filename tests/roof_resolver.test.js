@@ -347,6 +347,7 @@ describe('Merge with independent story counts (multi-volume path)', () => {
     const res = createBuildingFromFootprint(norm, {
       storyCount: 1,
       storyHeight: 3,
+      roofEaveDepth: 0,
       roofType: 'gable',
       roofPitchRise: 6,
       roofPitchRun: 12,
@@ -540,7 +541,7 @@ describe('Merged gable roof faces stay coplanar', () => {
   const layout = computeFacadeLayout(norm, { roofType: 'gable' });
   const uniqueNormals = (pitchRise) => {
     const { building } = createBuildingFromFootprint(norm, {
-      storyCount: 1, storyHeight: 3, roofType: 'gable', roofPitchRise: 6, roofPitchRun: 12, volumes: layout.volumes,
+      storyCount: 1, storyHeight: 3, roofEaveDepth: 0, roofType: 'gable', roofPitchRise: 6, roofPitchRun: 12, volumes: layout.volumes,
       volumeStoryOverrides: { 'volume-0': 3, 'volume-1': 3 },
       volumeRoofConnections: { 'volume-1': 'merge-plane' },
       volumeRoofShapes: { 'volume-1': { mode: 'slope', pitchRise } },

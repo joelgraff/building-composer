@@ -69,12 +69,21 @@ upstream Godot model is expected to prefer clockwise polygon winding in some
 scenes. The selected winding is treated as a validation parameter, not a hidden
 assumption.
 
-**Roof eave depth.** Eave depth is the horizontal roof projection beyond the
-wall envelope. It affects roof geometry only; it does not enlarge the wall or
-foundation footprint. For rectangular roof builders it expands the roof
-footprint. For non-rectangular footprints, the interim roof fallback is kept
-exactly on the selected footprint until explicit roof zones provide a
-containment-safe roof construction.
+**Eaves.** Overhang is a per-side property of each volume's roof (`js/eaves.js`).
+An *eave* is a side where the slope meets the wall (gable long sides, every hip
+side, a shed's low side); a *rake* is a side across a gable ridge or a shed's
+sloped side. Eave depth, rake overhang, fascia depth (default six inches), and
+the eave/rake soffit styles are building-wide defaults that any volume can
+override (`volumeEaves`). The roof slope continues past the wall at its own
+pitch, so eave edges sit below the plate; gable end faces stay at the wall plane
+and only the slopes run out past them. A vertical fascia hangs below every outer
+roof edge. Soffits are *flat* (horizontal, at the bottom of the fascia; the
+default for eaves) or *sloped* (roof plane shifted down by the fascia depth; the
+default for rakes). Where a flat eave soffit meets a sloped rake soffit the
+corner is boxed: the rake fascia deepens over the eave strip and a step face
+closes the height change. Sides that touch another volume, and merged sides,
+get no overhang; a hip overhangs equally on all sides (or not at all) so its
+faces stay planar. Overhang never changes the wall or foundation footprint.
 
 **Roof variant support.** Gable, hip, pitch, and ridge direction controls apply
 to every footprint. Rectangular footprints use a direct analytic roof mesh.

@@ -494,6 +494,11 @@ export function serializeBuildingState(layout, modelConfig) {
     volumeRoofTypes: modelConfig.volumeRoofTypes ?? {},
     volumeRoofConnections: modelConfig.volumeRoofConnections ?? {},
     volumeRoofShapes: modelConfig.volumeRoofShapes ?? {},
+    roofRakeDepth: modelConfig.roofRakeDepth,
+    roofFasciaDepth: modelConfig.roofFasciaDepth,
+    eaveSoffit: modelConfig.eaveSoffit,
+    rakeSoffit: modelConfig.rakeSoffit,
+    volumeEaves: modelConfig.volumeEaves ?? {},
     edgePitchOverrides: modelConfig.edgePitchOverrides ?? {},
     roofGraph: layout.roofGraph,
   };
@@ -534,6 +539,11 @@ export function deserializeBuildingState(data) {
       volumeRoofTypes: data.volumeRoofTypes ?? {},
       volumeRoofConnections: data.volumeRoofConnections ?? {},
       volumeRoofShapes: data.volumeRoofShapes ?? {},
+      roofRakeDepth: data.roofRakeDepth ?? data.roofEaveDepth ?? 0.35,
+      roofFasciaDepth: data.roofFasciaDepth ?? 0.1524,
+      eaveSoffit: data.eaveSoffit ?? 'flat',
+      rakeSoffit: data.rakeSoffit ?? 'sloped',
+      volumeEaves: data.volumeEaves ?? {},
       edgePitchOverrides: data.edgePitchOverrides ?? {},
     },
   };

@@ -416,6 +416,12 @@ Also in this slice: roof faces are flat-shaded (indexed builders shared vertices
 
 Known limits: hip and flat roofs do not act as the merging (lower/joining) roof; a hip neighbor's boundary is always at its eave, so only ridge-directed joins apply against it; non-footprint attached elements (dormers, porch roofs, widow's walks) are not designed yet — the eave-plane/zone model is expected to extend to an "attached" roof zone. Tests: `tests/roof_resolver.test.js`.
 
+### Eaves (implemented)
+
+`js/eaves.js` resolves per-volume eave/rake depth, fascia depth, and soffit styles (`volumeEaves` over building defaults; persisted in `.bld`), classifies each side as eave/rake/none per roof type, and builds fascia and soffit faces. The analytic roof builders continue the roof planes past the walls instead of enlarging a flat rectangle. Sidebar controls: eave depth, rake overhang, fascia depth, eave soffit and rake soffit styles, editing the selected volume or the building defaults. Tests: `tests/eaves.test.js` (including closure checks for every soffit style combination).
+
+Known limits: a side only *partly* shared with another volume is treated as fully shared (no overhang along its exposed part); hip overhang is all-or-nothing; the skeleton-hip and sampled-field fallbacks and flat roofs have no fascia/soffit trim (flat roofs overhang as a slab); eave/fascia are not yet part of merged-roof clipping.
+
 ## Immediate next implementation step
 
-Eaves: eave depth cannot currently be changed for multi-volume roofs (they are built with zero overhang) and soffit faces are not generated. See the roof section above ("The surface stops at the wall plate") and rework overhang as a resolved offset with soffit faces.
+Partial-side overhang (exposed portions of shared sides), then steps 3–5 of the resolver above (trimming plane against plane at differing elevations is done for shed/gable; hip and wall cut-to-roof remain).

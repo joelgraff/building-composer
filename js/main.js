@@ -31,6 +31,12 @@ const roofConnectionField = document.getElementById('roof-connection-field');
 const storyHeightUnit = document.getElementById('story-height-unit');
 const roofHeightUnit = document.getElementById('roof-height-unit');
 const roofEaveUnit = document.getElementById('roof-eave-unit');
+const roofRakeUnit = document.getElementById('roof-rake-unit');
+const roofFasciaUnit = document.getElementById('roof-fascia-unit');
+const roofRakeDepthInput = document.getElementById('roof-rake-depth');
+const roofFasciaDepthInput = document.getElementById('roof-fascia-depth');
+const eaveSoffitSelect = document.getElementById('eave-soffit');
+const rakeSoffitSelect = document.getElementById('rake-soffit');
 const roofSupportNote = document.getElementById('roof-support-note');
 const roofZoneTarget = document.getElementById('roof-zone-target');
 const wallMaterialSelect = document.getElementById('wall-material');
@@ -133,6 +139,10 @@ let modelConfig = {
   roofPitchRun: 12,
   roofHeight: 5,
   roofEaveDepth: 0.35,
+  roofRakeDepth: 0.35,
+  roofFasciaDepth: 0.1524,
+  eaveSoffit: 'flat',
+  rakeSoffit: 'sloped',
   roofHeightMode: roofHeightModeSelect.value,
   wallMaterial: wallMaterialSelect.value,
   storyMaterials: [],
@@ -142,6 +152,7 @@ let modelConfig = {
   volumeRoofTypes: {},
   volumeRoofConnections: {},
   volumeRoofShapes: {},
+  volumeEaves: {},
   edgePitchOverrides: {},
 };
 let currentVolumeCount = 1;
@@ -165,12 +176,25 @@ function syncUnitLabels() {
   storyHeightUnit.textContent = label;
   roofHeightUnit.textContent = label;
   roofEaveUnit.textContent = label;
+  roofRakeUnit.textContent = label;
+  roofFasciaUnit.textContent = label;
 }
 
 function syncLengthInputs() {
   storyHeightInput.value = (modelConfig.storyHeight * unitFactor()).toFixed(1);
   roofHeightInput.value = (modelConfig.roofHeight * unitFactor()).toFixed(1);
   roofEaveDepthInput.value = (modelConfig.roofEaveDepth * unitFactor()).toFixed(1);
+  syncEaveInputs(null);
+}
+
+function syncEaveInputs(volumeId) {
+  const own = volumeId ? modelConfig.volumeEaves[volumeId] ?? {} : {};
+  const factor = unitFactor();
+  roofEaveDepthInput.value = ((own.eaveDepth ?? modelConfig.roofEaveDepth) * factor).toFixed(1);
+  roofRakeDepthInput.value = ((own.rakeDepth ?? modelConfig.roofRakeDepth) * factor).toFixed(1);
+  roofFasciaDepthInput.value = ((own.fasciaDepth ?? modelConfig.roofFasciaDepth) * factor).toFixed(2);
+  eaveSoffitSelect.value = own.eaveSoffit ?? modelConfig.eaveSoffit;
+  rakeSoffitSelect.value = own.rakeSoffit ?? modelConfig.rakeSoffit;
 }
 
 function isRectangularFootprint(vertices) {
@@ -188,7 +212,6 @@ function updateRoofControlAvailability(vertices) {
     .forEach((control) => {
       control.disabled = false;
     });
-  roofEaveDepthInput.disabled = !rectangular;
   roofSupportNote.textContent = rectangular
     ? 'Roof variants and eave projection are active.'
     : 'Roof variants follow this footprint; eave projection is constrained until roof zones are assigned.';
@@ -347,6 +370,7 @@ function syncSelectedRoofZoneControls(layout) {
   if (volume && layout.volumes.length > 1) {
     syncVolumeRoofShapeInputs(volume);
   }
+  syncEaveInputs(volume && layout.volumes.length > 1 ? volume.id : null);
   roofConnectionField.style.display = canMerge ? '' : 'none';
   if (canMerge) {
     // Default to "standalone" only the first time this volume becomes
@@ -618,6 +642,11 @@ async function loadFootprint(footprintData, preserveView = true) {
     volumeRoofTypes: modelConfig.volumeRoofTypes,
     volumeRoofConnections: modelConfig.volumeRoofConnections,
     volumeRoofShapes: modelConfig.volumeRoofShapes,
+    volumeEaves: modelConfig.volumeEaves,
+    roofRakeDepth: modelConfig.roofRakeDepth,
+    roofFasciaDepth: modelConfig.roofFasciaDepth,
+    eaveSoffit: modelConfig.eaveSoffit,
+    rakeSoffit: modelConfig.rakeSoffit,
     roofHeightMode: modelConfig.roofHeightMode,
     foundationDepth: 0.7,
     roofOverhang: 0.35,
@@ -662,6 +691,7 @@ async function loadSampleFootprint() {
   modelConfig.volumeRoofTypes = {};
   modelConfig.volumeRoofConnections = {};
   modelConfig.volumeRoofShapes = {};
+  modelConfig.volumeEaves = {};
   selectedElementId = 'building-defaults';
   const presetFiles = {
     sample: 'sample_footprint.json',
@@ -769,6 +799,7 @@ function handleFileInput(event) {
   modelConfig.volumeRoofTypes = {};
   modelConfig.volumeRoofConnections = {};
   modelConfig.volumeRoofShapes = {};
+  modelConfig.volumeEaves = {};
   modelConfig.edgePitchOverrides = {};
   selectedElementId = 'building-defaults';
 
@@ -927,12 +958,31 @@ roofHeightInput.addEventListener('input', () => {
   }
 });
 
-roofEaveDepthInput.addEventListener('input', () => {
-  modelConfig.roofEaveDepth = Math.max(0, (Number(roofEaveDepthInput.value) || 0) / unitFactor());
+// Eave controls edit the selected volume's override, or the building defaults
+// when no volume is selected (see volumeShapeTarget).
+function setEaveValue(volumeKey, buildingKey, value) {
+  const target = volumeShapeTarget();
+  if (target) {
+    modelConfig.volumeEaves[target] = { ...(modelConfig.volumeEaves[target] ?? {}), [volumeKey]: value };
+  } else {
+    modelConfig[buildingKey] = value;
+  }
   if (loadedFootprint) {
     loadFootprint(loadedFootprint);
   }
+}
+
+roofEaveDepthInput.addEventListener('input', () => {
+  setEaveValue('eaveDepth', 'roofEaveDepth', Math.max(0, (Number(roofEaveDepthInput.value) || 0) / unitFactor()));
 });
+roofRakeDepthInput.addEventListener('input', () => {
+  setEaveValue('rakeDepth', 'roofRakeDepth', Math.max(0, (Number(roofRakeDepthInput.value) || 0) / unitFactor()));
+});
+roofFasciaDepthInput.addEventListener('input', () => {
+  setEaveValue('fasciaDepth', 'roofFasciaDepth', Math.max(0.01, (Number(roofFasciaDepthInput.value) || 0.01) / unitFactor()));
+});
+eaveSoffitSelect.addEventListener('change', () => setEaveValue('eaveSoffit', 'eaveSoffit', eaveSoffitSelect.value));
+rakeSoffitSelect.addEventListener('change', () => setEaveValue('rakeSoffit', 'rakeSoffit', rakeSoffitSelect.value));
 
 volumeControlsBox.addEventListener('input', (event) => {
   const input = event.target.closest('input[data-volume-id]');
