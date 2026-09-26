@@ -466,6 +466,8 @@ export function resolveRoofStructure(structure, host, config = {}) {
       slabThickness,
       topY: topAt([(bounds.minX + bounds.maxX) / 2, (bounds.minZ + bounds.maxZ) / 2]),
       hostContact: hostContact.length >= 3 ? hostContact : [],
+      // the front wall stands on the host wall line: it carries the wall up through the eave
+      flush: Math.abs(structure.setback) <= GEOMETRY_EPSILON,
       openSides: structure.openSides,
       eaves: structure.eaves,
       materials: structure.materials,
@@ -596,4 +598,47 @@ export function structureWallPolygons(resolved, bottomY) {
       polygon: [[a[0], bottomY, a[1]], [b[0], bottomY, b[1]], ...top],
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Host eaves
+// ---------------------------------------------------------------------------
+
+/**
+ * The cross-section of a host roof's eave on `side`, as built by the eave
+ * trim (js/eaves.js): `[inward coordinate, height above the plate]` points
+ * from the wall at the roof surface, out along the roof to the fascia, down
+ * the fascia, and back to the wall along the soffit. A flat roof's eave is
+ * the edge of its slab. Null where the side has no eave.
+ *
+ * @param {object} host - roof zone descriptor
+ * @param {string} side
+ * @returns {{ depth: number, outline: Array<[number, number]> } | null}
+ */
+export function hostEaveProfile(host, side) {
+  const depth = host.overhang?.[side] > GEOMETRY_EPSILON
+    ? host.overhang[side]
+    : (host.eaves?.partial?.[side] ? host.eaves.eaveDepth ?? 0 : 0);
+  if (!(depth > GEOMETRY_EPSILON)) {
+    return null;
+  }
+  const wall = host.bounds[side];
+  const out = wall + (side === 'minX' || side === 'minZ' ? -depth : depth);
+  if (host.roofType === 'flat') {
+    const top = host.slabThickness ?? FLAT_ROOF_THICKNESS;
+    return { depth, outline: [[wall, 0], [wall, top], [out, top], [out, 0]] };
+  }
+  const face = host.planes?.find((plane) => plane.side === side);
+  const drop = (face?.slope ?? 0) * depth;
+  const fascia = host.eaves?.fasciaDepth ?? 0;
+  const soffitAtWall = host.eaves?.eaveSoffit === 'sloped' ? -fascia : -drop - fascia;
+  return { depth, outline: [[wall, 0], [out, -drop], [out, -drop - fascia], [wall, soffitAtWall]] };
+}
+
+/** Whether the host's eave on `side` runs past `along` (a full eave, or a partial strip covering it). */
+export function hostEaveCovers(host, side, along) {
+  if (host.overhang?.[side] > GEOMETRY_EPSILON) {
+    return true;
+  }
+  return (host.eaves?.partial?.[side] ?? []).some(({ a0, a1 }) => along > a0 + GEOMETRY_EPSILON && along < a1 - GEOMETRY_EPSILON);
 }

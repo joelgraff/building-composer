@@ -424,7 +424,7 @@ The exposed part of a partly shared eave side gets its own eave strip (top, fasc
 
 ## Roof-borne structures (dormers, raised porches) — plan
 
-Status: Phases 0–2 complete; phases 3–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+Status: Phases 0–3 complete; phases 4–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
 
 ### Core idea
 
@@ -546,10 +546,26 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
      - Nothing is left below the host roof.
      - Also: the gable ridge end lands at the analytic valley point; gable ends are wall, not roof; open sides; several dormers on both slopes; invalid structures leave the roof untouched; a dormer on the two-story base of a mixed-story U.
    - A mutation check (disabling the host cut) fails both the shell and area tests.
-3. **Wall dormers (setback inside the eave, down to 0).**
-   - Treat the dormer span on the host's eave side as an adjacency interval. The host side gets zero overhang there, and `eaves.partial` builds the exposed strips on both sides with end caps. This is the same path shared walls use now.
-   - The front wall continues the host wall face up from the plate.
-   - Scope: analytic host builders only. On skeleton-hip and field fallbacks the UI reports that wall dormers are unsupported.
+3. **Wall dormers (flush front wall).** Complete.
+   - A structure is `flush` when its setback is 0: its front wall stands on the host wall line.
+   - With any positive setback, even one inside the eave depth, the front wall stands on the roof and the host eave runs on in front of it (an ordinary roof dormer).
+   - For a flush structure:
+     - `interruptHostEave` cuts the host roof and eave trim away across the structure's width, outside the wall line, with the same convex clip.
+     - It then caps each cut end with the eave's cross-section, `hostEaveProfile`: roof edge, fascia, and a flat or sloped soffit, or a flat roof's slab edge. Caps are only added where the eave actually runs (`hostEaveCovers`, which includes partial strips).
+     - The front wall is built unclipped from the host wall top (`wallTopY`, now on every zone descriptor; roofs sit `ROOF_LIFT` = 2 cm above their walls). This closes the gap the eave used to hide.
+   - Deviation from the plan: this cut-and-cap approach replaces routing the span through `eaves.partial`. It works on gable, hip, shed, and flat hosts alike, whereas partial strips only exist for gable and shed eaves, and would have cost a hip its all-round overhang.
+   - Hosts without zone descriptors (skeleton hip, sampled field) already reject every structure with `host-missing`.
+   - Tests (`tests/roof_structure_geometry.test.js`), on each of gable, hip, shed, and flat hosts:
+     - One closed shell. On a flat host, the hole through the 8 cm slab opens into the dormer.
+     - Removed plan area equals contact plus eave top and soffit across the width (the whole slab through on a flat host).
+     - Each cap's area matches the hand-computed eave section.
+   - Also tested:
+     - The eave stays everywhere else.
+     - The front wall reaches the wall top.
+     - Sloped-soffit caps are a parallelogram.
+     - A 0.1 m setback leaves the eave alone.
+   - Mutation check: removing the caps fails the closure and cap tests on all four hosts.
+   - The test helper now ignores edges that round to zero length.
 4. **Porches and attached volumes.**
    - Add `baseHeight`, open sides, and a floor-underside closure for projecting porches.
    - Add an optional `attachVolumeId`, whose solid also clips the structure, so a porch on a wing merges into the main block's wall and roof.

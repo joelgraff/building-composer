@@ -10,7 +10,7 @@ import {
 } from './eaves.js';
 import {
   clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, volumeSolid,
-  validateRoofStructures, structureWallPolygons, structureWallSides,
+  validateRoofStructures, structureWallPolygons, structureWallSides, hostEaveProfile, hostEaveCovers,
 } from './roof-structures.js';
 import {
   computeVolumeEavePlanes, defaultHighEdgeForAxis, evalZoneHeight,
@@ -19,6 +19,9 @@ import {
 export { computeVolumeEavePlanes, evalZoneHeight };
 
 let straightSkeletonBuilder = null;
+
+/** Roofs sit this far above their wall top (see roofZoneDescriptor's `wallTopY`). */
+const ROOF_LIFT = 0.02;
 
 export function setStraightSkeletonBuilder(builder) {
   straightSkeletonBuilder = builder;
@@ -118,8 +121,11 @@ export function createBuildingFromFootprint(footprint, config = {}) {
     ...pickEaveConfig({ ...config, roofEaveDepth }),
   });
   const roof = new THREE.Mesh(roofGeometry, materials.roof);
-  roof.position.y = foundationHeight + totalHeight + 0.02;
-  roofZones.forEach((zone) => { zone.baseY = roof.position.y; });
+  roof.position.y = foundationHeight + totalHeight + ROOF_LIFT;
+  roofZones.forEach((zone) => {
+    zone.baseY = roof.position.y;
+    zone.wallTopY = foundationHeight + totalHeight;
+  });
   roof.userData = {
     roofZoneId: primaryRoofZone?.id ?? 'roof-zone-main',
     roofType: resolvedRoofType,
@@ -188,10 +194,24 @@ function withRoofStructures(result, config) {
     const host = zones.get(resolved.hostVolumeId);
     const hostSolid = volumeSolid(host);
     const bottomY = Math.min(resolved.sillY, host.baseY);
-    const wallTriangles = polygonsToTriangles(structureWallPolygons(resolved, bottomY).map((wall) => wall.polygon));
+    const walls = structureWallPolygons(resolved, bottomY);
+    // A flush front wall stands on the host wall line and carries it up: it
+    // runs down to the host wall top, unclipped, closing the gap under the
+    // host roof that the (now interrupted) eave used to hide.
+    const flushFront = resolved.flush
+      ? structureWallPolygons(resolved, host.wallTopY).find((wall) => wall.wall === 'front')
+      : null;
+    const wallTriangles = [
+      ...clipOutsideConvexSolid(
+        polygonsToTriangles(walls.filter((wall) => !(flushFront && wall.wall === 'front')).map((wall) => wall.polygon)),
+        hostSolid
+      ),
+      ...(flushFront ? polygonsToTriangles([flushFront.polygon]) : []),
+    ];
     const parts = [
-      ['walls', clipOutsideConvexSolid(wallTriangles, hostSolid), materials.wall],
+      ['walls', wallTriangles, materials.wall],
       ['roof', clipOutsideConvexSolid(structureRoofTriangles(resolved, config), hostSolid), materials.roof],
+      ['eave-caps', resolved.flush ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
     ];
     parts.forEach(([part, triangles, material]) => {
       if (triangles.length) {
@@ -211,6 +231,44 @@ function withRoofStructures(result, config) {
     });
   });
   return { ...result, roofStructures: results };
+}
+
+/**
+ * A flush structure's front wall carries the host wall up through the eave,
+ * so the host eave (roof edge, fascia, and soffit) stops on either side of
+ * it: the eave is cut away across the structure's width, and each cut end is
+ * closed with the eave's cross-section (see hostEaveProfile). Returns the
+ * cap triangles, in absolute coordinates.
+ */
+function interruptHostEave(resolved, host, roofMeshes) {
+  const side = resolved.hostSide;
+  const profile = hostEaveProfile(host, side);
+  if (!profile) {
+    return [];
+  }
+  const { frame } = resolved;
+  const [a0, a1] = resolved.along;
+  const wall = host.bounds[side];
+  const axisVector = (axis, value) => (axis === 'x' ? [value, 0, 0] : [0, 0, value]);
+  // the eave in front of the structure: within its width, outside the host wall
+  const eaveSpan = [
+    { normal: axisVector(frame.along, -1), offset: -a0 },
+    { normal: axisVector(frame.along, 1), offset: a1 },
+    { normal: axisVector(frame.inward, frame.sign), offset: frame.sign * wall },
+  ];
+  roofMeshes.forEach((mesh) => {
+    const y = mesh.position.y;
+    const absolute = geometryTriangles(mesh.geometry).map((tri) => tri.map(([px, py, pz]) => [px, py + y, pz]));
+    const kept = clipOutsideConvexSolid(absolute, eaveSpan).map((tri) => tri.map(([px, py, pz]) => [px, py - y, pz]));
+    mesh.geometry.dispose();
+    mesh.geometry = trianglesToGeometry(kept);
+  });
+  const point = (along, cross, height) => (frame.along === 'x'
+    ? [along, host.baseY + height, cross]
+    : [cross, host.baseY + height, along]);
+  return polygonsToTriangles([a0, a1]
+    .filter((along) => hostEaveCovers(host, side, along))
+    .map((along) => profile.outline.map(([cross, height]) => point(along, cross, height))));
 }
 
 /**
@@ -368,7 +426,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
           ? createShedRoofGeometry(bounds, roofConfig)
         : createFlatRoofGeometry(bounds, setup.overhang);
     const roof = new THREE.Mesh(flatShaded(clipInsideNeighbor(roofGeometry, volumeConnections)), materials.roof);
-    roof.position.y = foundationHeight + totalHeight + 0.02;
+    roof.position.y = foundationHeight + totalHeight + ROOF_LIFT;
     roofZones.push({
       ...roofZoneDescriptor(volume.id, {
         wallBounds,
@@ -379,6 +437,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
         exact: !hasCoplanarShedMerge(roofTypeForVolume, volumeConnections),
       }),
       baseY: roof.position.y,
+      wallTopY: foundationHeight + totalHeight,
     });
     roof.userData = {
       volumeId: volume.id,
@@ -426,8 +485,9 @@ function volumeRoofParams(volumeId, halfSpan, config) {
  * gable's lowered ridge, a shed's snapped slope). Roof structures use it to
  * build the volume's solid (`volumeSolid` in js/roof-structures.js) without
  * reading the mesh. Planes are in the roof's own frame (height above the
- * plate); `baseY` is the plate's absolute elevation, filled in by the caller
- * that positions the roof mesh.
+ * plate); `baseY` is the plate's absolute elevation and `wallTopY` the top
+ * of the walls just below it (roofs sit ROOF_LIFT above their walls), both
+ * filled in by the caller that positions the roof mesh.
  *
  * `exact` is false where the rendered surface is not the min of these planes:
  * a hip whose ridge ends were moved to meet a neighbor's, or a shed corner
@@ -457,6 +517,7 @@ function roofZoneDescriptor(volumeId, {
     eaves: setup?.eaves,
     exact,
     baseY: 0,
+    wallTopY: 0,
   };
 }
 

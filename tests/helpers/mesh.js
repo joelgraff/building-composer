@@ -48,6 +48,9 @@ export function openTriangleEdges(tris) {
       for (let k = 0; k < chain.length - 1; k += 1) {
         const ka = key(chain[k]);
         const kb = key(chain[k + 1]);
+        if (ka === kb) {
+          continue; // a sliver edge, zero length at this precision
+        }
         const id = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
         counts.set(id, (counts.get(id) ?? 0) + 1);
       }

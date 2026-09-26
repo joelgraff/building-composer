@@ -5,7 +5,7 @@ import { normalizeFootprint } from '../js/footprint.js';
 import { computeFacadeLayout } from '../js/facade.js';
 import { createBuildingFromFootprint } from '../js/extrusion.js';
 import { normalizeRoofStructures } from '../js/roof-structures.js';
-import { meshTriangles, openTriangleEdges } from './helpers/mesh.js';
+import { meshTriangles, openTriangleEdges, totalArea } from './helpers/mesh.js';
 
 const uFootprint = JSON.parse(readFileSync('./data/footprint_u.json', 'utf8'));
 const RECT = [[-10, -5], [10, -5], [10, 5], [-10, 5]];
@@ -206,5 +206,96 @@ describe('roof dormers', () => {
     assert.ok(Math.abs(removed - polygonArea(resolved.hostContact)) < 1e-4);
     const legRoofs = (result) => planArea(trianglesOf(result.building, (data) => data.volumeId !== 'volume-0' && Boolean(data.roofType)));
     assert.ok(Math.abs(legRoofs(before) - legRoofs(after)) < 1e-9, 'other volumes untouched');
+  });
+});
+
+describe('wall dormers', () => {
+  const E = 0.3; // eave depth
+  const F = 0.15; // fascia depth
+  // host roofs, each with its own surface height (absolute) for the slope the dormer is on
+  const hosts = {
+    gable: { config: { roofType: 'gable', roofDirection: 'x' }, surface: ([, , z]) => PLATE + 0.5 * (5 - Math.abs(z)), drop: 0.5 * E },
+    hip: { config: { roofType: 'hip', roofDirection: 'x' }, surface: ([, , z]) => PLATE + 0.5 * (5 - Math.abs(z)), drop: 0.5 * E },
+    shed: { config: { roofType: 'shed', roofDirection: 'z-max' }, surface: ([, , z]) => PLATE + 0.25 * (z + 5), drop: 0.25 * E },
+    flat: { config: { roofType: 'flat' }, surface: () => PLATE + 0.08, drop: 0 },
+  };
+  const wallDormer = (hostType, fields = {}) => build(
+    [{ kind: 'wall-dormer', hostVolumeId: 'volume-0', hostSide: 'minZ', depth: hostType === 'flat' ? 3 : undefined, ...fields }],
+    { ...hosts[hostType].config, roofEaveDepth: E, roofFasciaDepth: F, eaveSoffit: fields.eaveSoffit ?? 'flat' }
+  );
+  const eaveCaps = (result) => trianglesOf(result.building, (data) => data.structurePart === 'eave-caps');
+
+  Object.entries(hosts).forEach(([hostType, { surface }]) => {
+    it(`on a ${hostType} roof: breaks the eave and joins the host as one closed shell`, () => {
+      const result = wallDormer(hostType);
+      const [{ resolved, errors }] = result.roofStructures;
+      assert.deepEqual(errors, []);
+      assert.equal(resolved.flush, true);
+      const tris = [...trianglesOf(result.building, isHostRoof), ...trianglesOf(result.building, isStructure)];
+      const { bounds } = resolved;
+      const wallPlanes = ['minX', 'maxX', 'minZ', 'maxZ'].map((side) => [side === 'minX' || side === 'maxX' ? 0 : 2, bounds[side]]);
+      const insidePlan = ([x, , z]) => x >= bounds.minX - 1e-3 && x <= bounds.maxX + 1e-3 && z >= bounds.minZ - 1e-3 && z <= bounds.maxZ + 1e-3;
+      openTriangleEdges(tris).forEach((edge) => {
+        const mid = [0, 1, 2].map((k) => (edge[0][k] + edge[1][k]) / 2);
+        const onHostWall = edge.every((p) => Math.abs(Math.abs(p[0]) - 10) < 1e-3)
+          || edge.every((p) => Math.abs(Math.abs(p[2]) - 5) < 1e-3);
+        const onStructureWall = wallPlanes.some(([k, value]) => edge.every((p) => Math.abs(p[k] - value) < 1e-3))
+          && mid[1] > surface(mid) + 1e-3;
+        const onHostOutsideHole = edge.every((p) => Math.abs(p[1] - surface(p)) < 2e-3)
+          && signedDistance(resolved.hostContact, [mid[0], mid[2]]) > 1e-3;
+        // a flat roof is a slab: the hole through it opens into the dormer
+        const throughSlab = hostType === 'flat' && edge.every((p) => insidePlan(p) && p[1] >= PLATE - 1e-3 && p[1] <= PLATE + 0.08 + 1e-3);
+        assert.ok(onHostWall || onStructureWall || onHostOutsideHole || throughSlab, `${hostType}: open edge ${JSON.stringify(edge)}`);
+      });
+    });
+
+    it(`on a ${hostType} roof: removes the eave across its width and caps both ends`, () => {
+      const without = planArea(trianglesOf(build([], { ...hosts[hostType].config, roofEaveDepth: E, roofFasciaDepth: F }).building, isHostRoof));
+      const result = wallDormer(hostType);
+      const { resolved } = result.roofStructures[0];
+      const removed = without - planArea(trianglesOf(result.building, isHostRoof));
+      const width = resolved.along[1] - resolved.along[0];
+      // eave top and soffit in plan; a flat slab loses its top and underside over the whole hole
+      const expected = hostType === 'flat'
+        ? 2 * (polygonArea(resolved.hostContact) + E * width)
+        : polygonArea(resolved.hostContact) + 2 * E * width;
+      assert.ok(Math.abs(removed - expected) < 1e-4, `removed ${removed}, expected ${expected}`);
+      // each cap is the eave's cross-section: out along the roof, down the fascia, back along a flat soffit
+      const { drop } = hosts[hostType];
+      const capArea = hostType === 'flat' ? E * 0.08 : E * ((drop + F) + F) / 2;
+      const caps = eaveCaps(result);
+      [resolved.along[0], resolved.along[1]].forEach((x) => {
+        const cap = caps.filter((tri) => tri.every((v) => Math.abs(v[0] - x) < 1e-6));
+        assert.ok(Math.abs(totalArea(cap) - capArea) < 1e-6, `${hostType} cap at x=${x}: ${totalArea(cap)} vs ${capArea}`);
+      });
+    });
+  });
+
+  it('keeps the eave everywhere else', () => {
+    const result = wallDormer('gable');
+    const fascia = trianglesOf(result.building, isHostRoof).filter((tri) => tri.every((v) => Math.abs(v[2] - -(5 + E)) < 1e-6));
+    const xs = fascia.flat().map((v) => v[0]);
+    assert.ok(xs.some((x) => x < -1.2 - 1) && xs.some((x) => x > 1.2 + 1), 'fascia on both sides of the dormer');
+    assert.equal(fascia.some((tri) => tri.every((v) => Math.abs(v[0]) < 1.2 - 1e-6)), false, 'none in front of it');
+  });
+
+  it('carries the front wall down to the host wall top', () => {
+    const result = wallDormer('gable');
+    const front = trianglesOf(result.building, (data) => data.structurePart === 'walls')
+      .filter((tri) => tri.every((v) => Math.abs(v[2] - -5) < 1e-6));
+    assert.ok(Math.abs(Math.min(...front.flat().map((v) => v[1])) - (PLATE - 0.02)) < 1e-6);
+  });
+
+  it('works with sloped soffits', () => {
+    const result = wallDormer('gable', { eaveSoffit: 'sloped' });
+    const caps = eaveCaps(result);
+    const capArea = E * F; // a sloped soffit runs parallel to the roof: a parallelogram one fascia deep
+    assert.ok(Math.abs(totalArea(caps.filter((tri) => tri.every((v) => Math.abs(v[0] - 1.2) < 1e-6))) - capArea) < 1e-6);
+  });
+
+  it('a dormer set back from the wall leaves the eave alone', () => {
+    const result = build([{ hostVolumeId: 'volume-0', hostSide: 'minZ', setback: 0.1 }], { roofEaveDepth: E });
+    assert.equal(result.roofStructures[0].resolved.flush, false);
+    assert.equal(eaveCaps(result).length, 0);
   });
 });
