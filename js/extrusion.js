@@ -8,7 +8,10 @@ import { roofAxisForDirection, findVolumeAdjacencies } from './facade.js';
 import {
   resolveVolumeEaves, sideOverhangs, buildGableTrim, buildHipTrim, buildShedTrim, buildPartialEaveStrips,
 } from './eaves.js';
-import { clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS } from './roof-structures.js';
+import {
+  clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, volumeSolid,
+  validateRoofStructures, structureWallPolygons, structureWallSides,
+} from './roof-structures.js';
 import {
   computeVolumeEavePlanes, defaultHighEdgeForAxis, evalZoneHeight,
 } from './roof-planes.js';
@@ -58,10 +61,10 @@ export function createBuildingFromFootprint(footprint, config = {}) {
     && volumes.some((volume) => overrides[volume.id] !== undefined && overrides[volume.id] !== storyCount);
 
   if (hasVolumeOverrides) {
-    return createMultiVolumeBuilding(volumes, overrides, {
+    return withRoofStructures(createMultiVolumeBuilding(volumes, overrides, {
       storyCount, storyHeight, foundationDepth, roofEaveDepth, roofType, roofHeight, roofPitchRise, roofPitchRun, roofHeightMode: config.roofHeightMode, volumeRidgeDirections: config.volumeRidgeDirections, volumeRoofTypes: config.volumeRoofTypes, volumeRoofConnections: config.volumeRoofConnections, volumeRoofShapes: config.volumeRoofShapes,
       ...pickEaveConfig({ ...config, roofEaveDepth }),
-    });
+    }), config);
   }
 
   const materials = createMaterials(config);
@@ -148,9 +151,132 @@ export function createBuildingFromFootprint(footprint, config = {}) {
     facadePanelsRendered: Boolean(config.facadeLayout && getRectangularBounds(footprint)),
   };
 
-  return {
+  return withRoofStructures({
     building: group, foundationHeight, totalHeight, roofZones,
+  }, config);
+}
+
+/**
+ * Adds the roof structures in `config.roofStructures` (dormers, raised
+ * porches; see js/roof-structures.js) to a built building. Each valid
+ * structure gets walls and a roof built too large and clipped to what lies
+ * outside its host volume's solid, and every roof mesh is cut by the
+ * structure's own solid, so the two meet along the same lines as one shell.
+ * `roofStructures` in the result holds every structure's validation result
+ * (errors and warnings for the ones that were not built).
+ */
+function withRoofStructures(result, config) {
+  const structures = config.roofStructures ?? [];
+  if (structures.length === 0) {
+    return { ...result, roofStructures: [] };
+  }
+  const results = validateRoofStructures(structures, result.roofZones, config);
+  const built = results.filter((entry) => entry.resolved);
+  if (built.length === 0) {
+    return { ...result, roofStructures: results };
+  }
+  const zones = new Map(result.roofZones.map((zone) => [zone.volumeId, zone]));
+  const materials = createMaterials(config);
+  const roofMeshes = [];
+  result.building.traverse((child) => {
+    if (child.isMesh && child.userData?.roofType) {
+      roofMeshes.push(child);
+    }
+  });
+
+  built.forEach(({ resolved }) => {
+    const host = zones.get(resolved.hostVolumeId);
+    const hostSolid = volumeSolid(host);
+    const bottomY = Math.min(resolved.sillY, host.baseY);
+    const wallTriangles = polygonsToTriangles(structureWallPolygons(resolved, bottomY).map((wall) => wall.polygon));
+    const parts = [
+      ['walls', clipOutsideConvexSolid(wallTriangles, hostSolid), materials.wall],
+      ['roof', clipOutsideConvexSolid(structureRoofTriangles(resolved, config), hostSolid), materials.roof],
+    ];
+    parts.forEach(([part, triangles, material]) => {
+      if (triangles.length) {
+        const mesh = new THREE.Mesh(trianglesToGeometry(triangles), material);
+        mesh.userData = { structureId: resolved.id, structurePart: part, hostVolumeId: resolved.hostVolumeId };
+        result.building.add(mesh);
+      }
+    });
+
+    const cut = volumeSolid(resolved);
+    roofMeshes.forEach((mesh) => {
+      const y = mesh.position.y;
+      const absolute = geometryTriangles(mesh.geometry).map((tri) => tri.map(([px, py, pz]) => [px, py + y, pz]));
+      const kept = clipOutsideConvexSolid(absolute, cut).map((tri) => tri.map(([px, py, pz]) => [px, py - y, pz]));
+      mesh.geometry.dispose();
+      mesh.geometry = trianglesToGeometry(kept);
+    });
+  });
+  return { ...result, roofStructures: results };
+}
+
+/**
+ * A resolved structure's roof and eave trim, in absolute coordinates, built
+ * by the same analytic builders as a volume's roof. Its back side (buried in
+ * the host roof) gets no overhang; a hip keeps its all-round overhang, since
+ * its faces are only planar with equal overhang and its back end drops to
+ * its plate, well inside the host. The roof builders close gable ends,
+ * shed sides, and the edge of a flat slab with faces at the wall planes;
+ * where the structure has a wall there instead, those faces are dropped so
+ * walls and roof do not overlap.
+ */
+function structureRoofTriangles(resolved, config) {
+  const sides = structureWallSides(resolved.frame);
+  const eaveConfig = {
+    ...pickEaveConfig(config),
+    volumeEaves: { ...(config.volumeEaves ?? {}), [resolved.id]: resolved.eaves ?? {} },
   };
+  const setup = volumeEaveSetup(
+    resolved.id,
+    resolved.roofType,
+    { ridgeAxis: resolved.ridgeAxis, roofHighEdge: resolved.roofHighEdge },
+    eaveConfig,
+    resolved.roofType === 'hip' ? [] : [sides.back],
+    undefined,
+    resolved.bounds
+  );
+  const { bounds } = resolved;
+  const roofConfig = {
+    roofDirection: resolved.ridgeAxis,
+    roofHighEdge: resolved.roofHighEdge,
+    roofHeight: resolved.roofHeight,
+    roofPitchRise: resolved.roofPitchRise,
+    roofPitchRun: resolved.roofPitchRun,
+    overhang: setup.overhang,
+    eaves: setup.eaves,
+  };
+  const geometry = resolved.roofType === 'gable'
+    ? createGableRoofGeometry(bounds, roofConfig)
+    : resolved.roofType === 'hip'
+      ? createHipRoofGeometry(bounds, roofConfig)
+      : resolved.roofType === 'shed'
+        ? createShedRoofGeometry(bounds, roofConfig)
+        : createFlatRoofGeometry(bounds, setup.overhang);
+  let triangles = geometryTriangles(geometry).map((tri) => tri.map(([x, y, z]) => [x, y + resolved.plateY, z]));
+  geometry.dispose();
+  if (resolved.roofType === 'flat') {
+    // the slab's underside is only seen as a soffit under its overhang; inside the walls it is hidden
+    const underside = (tri) => tri.every((v) => Math.abs(v[1] - resolved.plateY) < 1e-6);
+    const insideWalls = [
+      { normal: [-1, 0, 0], offset: -bounds.minX }, { normal: [1, 0, 0], offset: bounds.maxX },
+      { normal: [0, 0, -1], offset: -bounds.minZ }, { normal: [0, 0, 1], offset: bounds.maxZ },
+    ];
+    triangles = [
+      ...triangles.filter((tri) => !underside(tri)),
+      ...clipOutsideConvexSolid(triangles.filter(underside), insideWalls),
+    ];
+  }
+  const wallPlanes = ['front', 'back', 'left', 'right']
+    .filter((wall) => !resolved.openSides.includes(wall))
+    .map((wall) => sides[wall]);
+  const inWallPlane = (tri) => wallPlanes.some((side) => {
+    const k = side === 'minX' || side === 'maxX' ? 0 : 2;
+    return tri.every((v) => Math.abs(v[k] - bounds[side]) < 1e-6 && v[1] >= resolved.plateY - 1e-6);
+  });
+  return triangles.filter((tri) => !inWallPlane(tri));
 }
 
 /**

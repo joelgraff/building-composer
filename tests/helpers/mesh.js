@@ -24,7 +24,8 @@ export const totalArea = (tris) => tris.reduce((sum, tri) => sum + triangleArea(
  * shorter neighbors (a T-junction) still counts as closed.
  */
 export function openTriangleEdges(tris) {
-  const key = (p) => p.map((v) => v.toFixed(3)).join(',');
+  // (+0 so that -0.000 and 0.000 are the same point)
+  const key = (p) => p.map((v) => (Number(v.toFixed(3)) + 0).toFixed(3)).join(',');
   const unique = new Map();
   tris.flat().forEach((p) => unique.set(key(p), p));
   const points = [...unique.values()];

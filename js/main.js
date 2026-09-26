@@ -157,6 +157,8 @@ let modelConfig = {
   roofStructures: [],
 };
 let currentVolumeCount = 1;
+// why any of modelConfig.roofStructures could not be built on the last render
+let roofStructureIssues = '';
 
 const UNIT_FACTORS = Object.freeze({ imperial: 3.28084, metric: 1 });
 
@@ -622,7 +624,7 @@ async function loadFootprint(footprintData, preserveView = true) {
   updateFacadeSummary(layout);
   setStatus(`Valid footprint loaded (${windingPreference})`, 'default');
 
-  const { building, foundationHeight } = createBuildingFromFootprint(normalized, {
+  const { building, foundationHeight, roofStructures } = createBuildingFromFootprint(normalized, {
     storyCount: modelConfig.storyCount,
     storyHeight: modelConfig.storyHeight,
     panelsPerRun: modelConfig.panelsPerRun,
@@ -649,9 +651,17 @@ async function loadFootprint(footprintData, preserveView = true) {
     eaveSoffit: modelConfig.eaveSoffit,
     rakeSoffit: modelConfig.rakeSoffit,
     roofHeightMode: modelConfig.roofHeightMode,
+    roofStructures: modelConfig.roofStructures,
     foundationDepth: 0.7,
     roofOverhang: 0.35,
   });
+  const unbuilt = roofStructures.filter((entry) => entry.errors.length);
+  roofStructureIssues = unbuilt.length
+    ? `Roof structures not built: ${unbuilt.map((entry) => `${entry.id} (${entry.errors.map((e) => e.message).join(' ')})`).join('; ')}`
+    : '';
+  if (roofStructureIssues) {
+    setStatus(roofStructureIssues, 'error');
+  }
 
   group.add(building);
   activeLayout = layout;
@@ -824,9 +834,10 @@ function handleFileInput(event) {
           syncLengthInputs();
           updateRoofPitchDisplay();
           loadFootprint(result.state.footprint, false);
-          setStatus(result.warnings.length
-            ? `Project (.bld) loaded. ${result.warnings.join(' ')}`
-            : 'Project (.bld) loaded successfully.', 'default');
+          const notes = [...result.warnings, roofStructureIssues].filter(Boolean);
+          setStatus(notes.length
+            ? `Project (.bld) loaded. ${notes.join(' ')}`
+            : 'Project (.bld) loaded successfully.', roofStructureIssues ? 'error' : 'default');
           return;
         }
       }

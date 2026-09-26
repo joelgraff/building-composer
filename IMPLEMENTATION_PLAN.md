@@ -424,7 +424,7 @@ The exposed part of a partly shared eave side gets its own eave strip (top, fasc
 
 ## Roof-borne structures (dormers, raised porches) — plan
 
-Status: Phases 0–1 complete; phases 2–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+Status: Phases 0–2 complete; phases 3–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
 
 ### Core idea
 
@@ -527,12 +527,25 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
      - A flat host, a porch base, and every error code.
      - Overlap, and `.bld` round-trip, dropped hosts, and older files without structures.
    - Note: zone ids come from the `volumes` passed to `createBuildingFromFootprint`. Without them the single rectangle is `volume-main`. The app always passes them.
-2. **Roof dormers (setback clears the host eave).**
-   - Build walls as rectangles plus gable-end polygons, from below the host plane up to the plate, and clip them outside the host.
-   - Build the roof with the existing builders on bounds extended back to the host ridge line, with no overhang on the back side, then clip it outside the host.
-   - Cut the host roof with the structure solid.
-   - Cover all four roof types.
-   - Tests: the hole outline matches the analytic polygon; the ridge endpoint matches the gable-merge formula; host plus dormer has no open edges (reuse `openEdges` from `tests/eaves.test.js`); no NaN.
+2. **Roof dormers (setback clears the host eave).** Complete.
+   - `withRoofStructures` in `js/extrusion.js` runs after either build path (single-plate or independent story counts). It validates `config.roofStructures` against the resolved `roofZones`.
+   - For each valid structure:
+     - `structureWallPolygons` (in `js/roof-structures.js`) builds the walls from below the host roof up to the roof profile. `roofProfile` traces min-of-planes along each wall, so a gable end runs up to the ridge. A flat roof's walls run to the top of its slab.
+     - `structureRoofTriangles` builds the roof with the existing gable, hip, shed, and flat builders at the structure's plate. The back side gets no overhang. A hip keeps its all-round overhang, because its faces are only planar with equal overhang and its back end drops to plate level, deep inside the host.
+     - Roof faces the builders put in a wall plane (gable ends, shed side closures, slab edges) are dropped where the structure has a wall there, so walls carry the wall material. An open side keeps them.
+     - A flat slab's underside is trimmed to its overhang.
+     - Walls and roof are clipped outside the host solid, and every roof mesh is clipped outside the structure solid.
+   - Meshes are tagged `userData.structureId` / `structurePart` (`walls` or `roof`), with no `roofType`, so host-roof lookups ignore them.
+   - The result's `roofStructures` holds every validation result.
+   - `main.js` passes `modelConfig.roofStructures` and reports structures that could not be built in the status line, including after a `.bld` load.
+   - `polygonsToTriangles` now drops clipping slivers (twice-area ≤ 1e-6).
+   - The test helper's point keys normalize `-0.000`.
+   - Tests (`tests/roof_structure_geometry.test.js`), for each of gable, hip, shed, and flat dormers:
+     - Host roof and dormer form one shell. Open edges are allowed only where either roof meets its own walls, or where dormer trim dips into the intact host roof outside the hole. The hole seam must be closed.
+     - The plan area removed from the host roof equals the contact polygon's area.
+     - Nothing is left below the host roof.
+     - Also: the gable ridge end lands at the analytic valley point; gable ends are wall, not roof; open sides; several dormers on both slopes; invalid structures leave the roof untouched; a dormer on the two-story base of a mixed-story U.
+   - A mutation check (disabling the host cut) fails both the shell and area tests.
 3. **Wall dormers (setback inside the eave, down to 0).**
    - Treat the dormer span on the host's eave side as an adjacency interval. The host side gets zero overhang there, and `eaves.partial` builds the exposed strips on both sides with end caps. This is the same path shared walls use now.
    - The front wall continues the host wall face up from the plate.

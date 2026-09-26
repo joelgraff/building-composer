@@ -43,11 +43,24 @@ export function clipPolygon(polygon, distance) {
   return out;
 }
 
-/** Fan-triangulates convex polygons, dropping any with fewer than 3 points. */
+const cross3 = (a, b, c) => {
+  const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+  return [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+};
+
+/** Twice the area below which a clipped sliver is dropped (about 1 mm²). */
+const SLIVER_AREA = 1e-6;
+
+/**
+ * Fan-triangulates convex polygons, dropping any with fewer than 3 points
+ * and any sliver triangles clipping leaves behind.
+ */
 export function polygonsToTriangles(polygons) {
   return polygons.flatMap((polygon) => (polygon.length < 3
     ? []
-    : polygon.slice(1, -1).map((_, k) => [polygon[0], polygon[k + 1], polygon[k + 2]])));
+    : polygon.slice(1, -1).map((_, k) => [polygon[0], polygon[k + 1], polygon[k + 2]])))
+    .filter((triangle) => triangle[0].length !== 3 || Math.hypot(...cross3(...triangle)) > SLIVER_AREA);
 }
 
 function normalizedHalfSpace(normal, offset) {
@@ -454,6 +467,8 @@ export function resolveRoofStructure(structure, host, config = {}) {
       topY: topAt([(bounds.minX + bounds.maxX) / 2, (bounds.minZ + bounds.maxZ) / 2]),
       hostContact: hostContact.length >= 3 ? hostContact : [],
       openSides: structure.openSides,
+      eaves: structure.eaves,
+      materials: structure.materials,
     },
     errors,
     warnings,
@@ -486,5 +501,99 @@ export function validateRoofStructures(structures, roofZones, config = {}) {
       }
     }
     return { id: structure.id, structure, ...result };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Structure walls
+// ---------------------------------------------------------------------------
+
+/**
+ * The rectangle side each named wall of a structure is on. `left` and
+ * `right` are as seen from outside, facing the front wall (looking inward).
+ */
+export function structureWallSides(frame) {
+  const upper = (axis) => axis.toUpperCase();
+  const inward = upper(frame.inward);
+  const along = upper(frame.along);
+  // facing direction f = inward * sign; right = f x up = (-f.z, 0, f.x)
+  const rightIsMax = frame.along === 'x' ? frame.sign < 0 : frame.sign > 0;
+  return {
+    front: `${frame.sign > 0 ? 'min' : 'max'}${inward}`,
+    back: `${frame.sign > 0 ? 'max' : 'min'}${inward}`,
+    right: `${rightIsMax ? 'max' : 'min'}${along}`,
+    left: `${rightIsMax ? 'min' : 'max'}${along}`,
+  };
+}
+
+/**
+ * The roof's height profile along the segment a -> b (plan points [x, z]):
+ * `[t, height]` points, t in [0, 1], at the ends and wherever the profile
+ * bends (where the governing plane changes, e.g. a ridge crossing). The
+ * min of planes is concave, so these points trace it exactly.
+ */
+export function roofProfile(planes, a, b) {
+  const heightAt = (t) => evalZoneHeight(planes, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
+  if (!planes?.length) {
+    return [[0, 0], [1, 0]];
+  }
+  const lines = planes.map((plane) => {
+    const h0 = evalPlaneHeight(plane, a[0], a[1]);
+    return [h0, evalPlaneHeight(plane, b[0], b[1]) - h0];
+  });
+  const ts = [0, 1];
+  lines.forEach(([h0, dh], i) => {
+    lines.slice(i + 1).forEach(([k0, dk]) => {
+      if (Math.abs(dh - dk) > 1e-12) {
+        const t = (k0 - h0) / (dh - dk);
+        if (t > 1e-9 && t < 1 - 1e-9) {
+          ts.push(t);
+        }
+      }
+    });
+  });
+  const points = [...new Set(ts)].sort((x, y) => x - y).map((t) => [t, heightAt(t)]);
+  // keep only the ends and real bends
+  return points.filter((point, i) => {
+    if (i === 0 || i === points.length - 1) {
+      return true;
+    }
+    const [t0, h0] = points[i - 1];
+    const [t2, h2] = points[i + 1];
+    const expected = h0 + ((h2 - h0) * (point[0] - t0)) / (t2 - t0);
+    return Math.abs(point[1] - expected) > 1e-9;
+  });
+}
+
+/**
+ * The outline of each closed wall of a resolved structure: a vertical
+ * polygon of [x, y, z] points from `bottomY` up to its roof (a gable end
+ * runs up to the ridge, a flat roof's walls to the top of its slab). Open sides get no wall. The polygons
+ * are convex; clipping them outside the host solid leaves the part that
+ * stands above the host roof.
+ *
+ * @returns {Array<{ wall: string, side: string, polygon: Array<[number, number, number]> }>}
+ */
+export function structureWallPolygons(resolved, bottomY) {
+  const sides = structureWallSides(resolved.frame);
+  const { bounds } = resolved;
+  const roofPlanes = resolved.roofType === 'flat' ? [] : resolved.planes;
+  // a flat roof's slab sits on the walls; they run up to its top, where the structure's solid ends
+  const plateY = resolved.plateY + (resolved.roofType === 'flat' ? resolved.slabThickness : 0);
+  return STRUCTURE_WALLS.filter((wall) => !resolved.openSides.includes(wall)).map((wall) => {
+    const side = sides[wall];
+    const [a, b] = side === 'minX' || side === 'maxX'
+      ? [[bounds[side], bounds.minZ], [bounds[side], bounds.maxZ]]
+      : [[bounds.minX, bounds[side]], [bounds.maxX, bounds[side]]];
+    const at = (t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    const top = roofProfile(roofPlanes, a, b).reverse().map(([t, height]) => {
+      const [x, z] = at(t);
+      return [x, plateY + height, z];
+    });
+    return {
+      wall,
+      side,
+      polygon: [[a[0], bottomY, a[1]], [b[0], bottomY, b[1]], ...top],
+    };
   });
 }
