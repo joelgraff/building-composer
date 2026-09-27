@@ -11,6 +11,7 @@ import {
   computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades,
 } from './facade.js';
 import { exportGlb } from './export.js';
+import { importDixonFootprint } from './import.js';
 
 const statusValue = document.getElementById('status-value');
 const areaValue = document.getElementById('area-value');
@@ -194,6 +195,8 @@ let modelConfig = {
   volumeEaves: {},
   edgePitchOverrides: {},
   roofStructures: [],
+  // where an imported footprint came from, to put the building back (see import.js)
+  placement: undefined,
 };
 let currentVolumeCount = 1;
 // why any of modelConfig.roofStructures could not be built on the last render
@@ -819,6 +822,7 @@ async function loadSampleFootprint() {
   modelConfig.volumeRoofShapes = {};
   modelConfig.volumeEaves = {};
   modelConfig.roofStructures = [];
+  modelConfig.placement = undefined;
   // a new footprint: cut it to follow its massing (a .bld sets its own)
   modelConfig.volumeSplit = 'auto';
   volumeSplitSelect.value = 'auto';
@@ -993,6 +997,26 @@ function handleFileInput(event) {
             : 'Project (.bld) loaded successfully.', roofStructureIssues ? 'error' : 'default');
           return;
         }
+      }
+      if (payload && payload.format === 'dixon-footprint') {
+        const imported = importDixonFootprint(payload);
+        if (imported.error) {
+          setStatus(imported.error, 'error');
+          return;
+        }
+        Object.assign(modelConfig, imported.settings, { placement: imported.placement });
+        storyCountInput.value = modelConfig.storyCount;
+        wallMaterialSelect.value = modelConfig.wallMaterial;
+        roofTypeSelect.value = modelConfig.roofType;
+        syncLengthInputs();
+        updateRoofPitchDisplay();
+        loadFootprint(imported.footprint, false);
+        const angle = (imported.placement.rotation * 180) / Math.PI;
+        setStatus([
+          `Building ${imported.placement.id} imported from ${imported.placement.source}, turned ${angle.toFixed(1)} degrees square to the axes.`,
+          ...imported.warnings, roofStructureIssues,
+        ].filter(Boolean).join(' '), imported.warnings.length || roofStructureIssues ? 'error' : 'default');
+        return;
       }
       loadFootprint(payload, false);
     } catch (error) {

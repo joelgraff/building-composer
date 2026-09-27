@@ -598,6 +598,8 @@ export function serializeBuildingState(layout, modelConfig) {
     roofUpperPitchRise: modelConfig.roofUpperPitchRise,
     roofWalkHeight: modelConfig.roofWalkHeight,
     roofStructures: modelConfig.roofStructures ?? [],
+    // where the footprint came from, to put the building back (see import.js)
+    placement: modelConfig.placement ?? null,
     roofGraph: layout.roofGraph,
   };
 }
@@ -701,6 +703,7 @@ export function deserializeBuildingState(data) {
       // a hip roof's widow's walk (its flat top), if any; older files called it a deck
       roofWalkHeight: [data.roofWalkHeight, data.roofDeckHeight].find(Number.isFinite),
       roofStructures,
+      placement: data.placement && typeof data.placement === 'object' ? data.placement : undefined,
     },
   };
 }
