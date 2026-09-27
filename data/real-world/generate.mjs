@@ -159,13 +159,12 @@ const houses = {
         at: [0, 0], kind: 'dormer', hostSide: 'maxZ', width: 7, wallHeight: 1.7, setback: 0.4, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 2 },
       },
       {
-        // kept below the eave, as builders do
-        at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 2.2, setback: -1.2, depth: 1.2, baseHeight: 'ground', wallHeight: 2.2,
-        roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 5 }, openSides: ['front', 'left', 'right'],
+        // an entry hood on brackets, kept below the eave
+        at: [0, 0], kind: 'hood', hostSide: 'maxZ', width: 2.2, setback: -0.9, depth: 0.9, wallHeight: 2.3,
+        roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 5 },
       },
     ],
     gaps: [
-      'An entry hood is a roof on brackets over the door with no floor or posts; the model has only porches, so it stands on a small stoop with posts.',
     ],
   },
   farmhouse: {

@@ -447,7 +447,7 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
 ```js
 {
   id: 'structure-1',
-  kind: 'dormer' | 'wall-dormer' | 'recessed-porch' | 'porch' | 'cupola',  // preset only; geometry is uniform
+  kind: 'dormer' | 'wall-dormer' | 'recessed-porch' | 'porch' | 'cupola' | 'hood',  // a starting preset; geometry is uniform but for a hood's
   hostVolumeId: 'volume-0',       // the volume it sits in or on ...
   hostStructureId: null,          // ... or another structure it stands on (a sleeping porch on a ground porch)
   hostSide: 'minZ',               // the side it faces out of
@@ -868,7 +868,7 @@ A second review of the renders added:
    - Found on the way: the skeleton library works in single precision (20.2 comes back as 20.2000008); `snapSkeleton` puts each node back on the exact values a rectilinear skeleton can take. And a plan polygon with a repeated point made `planPrism` emit a degenerate side, which silently dropped a porch's wall below the host roof; zero-length edges are now skipped.
 7. **Dormers crossing a two-slope break.** Done. On a mansard or gambrel a dormer may run up its side's lower slope and on past the break into the upper slope: the roof it replaces is one piece per host face under its roof (`piecesUnder`), all of which must be its own side's (lower or upper); any piece on another side is still `crosses-face` (a hip corner). The Dutch Colonial has its full shed dormer. Tests in `tests/two_slope_roofs.test.js`.
 8. **Canted bays and towers.** Done. A structure standing on a base or rising through the roof can have a `plan`: `{ shape: 'canted', angle }` (a bay whose sides run back to the wall at the angle; an oriel on an upper story) or `{ shape: 'polygon', sides }` (a regular polygon inscribed in its rectangle: an octagonal, or with many sides a round, tower or cupola). `resolvePlanned` gives its `outline` and a hip roof of planes rising from its outer edges (a bay's front and sides; every edge of a tower, a pyramid or cone), or a flat one; roof planes may now rise in any direction (`dir` planes, `makeEdgePlane`), and `volumeSolid` bounds a structure by its outline. `plannedParts` builds walls on each edge (a wall run per facet), the roof face by face with its eave trim, a floor, and a foundation at ground level; its solid cuts the host eave along its outline (no notch). A tower may stand on the corner, past the end of its wall. Errors: `plan-needs-base`, `plan-roof`, `plan-canted`. Editor "Plan" field; presets for a canted bay, an octagonal corner tower, and a round turret. Tests: `tests/planned_structures.test.js`. The Italianate's side bay is canted; the Queen Anne has an octagonal corner tower.
-9. Entry hoods (a roof on brackets, no floor).
+9. **Entry hoods.** Done. Kind `hood`: a projecting structure whose wall height is how high its roof sits above the floor. It is its roof alone, with a ceiling under it and brackets from its plate down the wall (always `support: 'brackets'`, so at most `MAX_BRACKET_PROJECTION` deep): no floor, posts, walls, or railings. `hood-placement` when it doesn't project. "Entry hood" preset. Tests in `tests/porch_roofs.test.js`; the Dutch Colonial's entry is a hood.
 10. **Foundation height as a setting.** Done with item 5.
 11. Dormer refusals that say which limit was hit and by how much.
 

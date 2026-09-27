@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeFacadeLayout } from '../js/facade.js';
+import { computeFacadeLayout, withStructureFacades } from '../js/facade.js';
 import { createBuildingFromFootprint } from '../js/extrusion.js';
 import { normalizeRoofStructures } from '../js/roof-structures.js';
 import { meshTriangles, uncoveredEdges } from './helpers/mesh.js';
@@ -131,6 +131,40 @@ describe('a porch roof rising through the host eave', () => {
     assert.deepEqual(cape([entry]).roofStructures[0].warnings.map((w) => w.code), ['above-eave']);
     const tucked = cape([{ ...entry, wallHeight: 2.1, roofShape: { mode: 'slope', pitchRise: 8 } }]).roofStructures[0];
     assert.deepEqual(tucked.warnings, [], 'one kept below the eave');
+  });
+});
+
+describe('entry hoods', () => {
+  const hood = (fields = {}) => ({ id: 'h', kind: 'hood', hostVolumeId: 'volume-0', hostSide: 'maxZ', ...fields });
+
+  it('are a roof on brackets over the door: no floor, posts, walls, or railings', () => {
+    const result = build([hood()]);
+    const [{ resolved, errors }] = result.roofStructures;
+    assert.deepEqual(errors, []);
+    assert.equal(resolved.support, 'brackets');
+    const part = (name) => trianglesOf(result, (data) => data.structureId === 'h' && data.structurePart === name);
+    assert.equal(part('floor').length, 0);
+    assert.equal(part('walls').length, 0);
+    assert.ok(part('roof').length > 0);
+    assert.ok(part('ceiling').length > 0, 'a ceiling under it');
+    // the brackets hang from its plate down the wall
+    const brackets = part('posts').flat();
+    assert.ok(brackets.length > 0);
+    assert.ok(Math.max(...brackets.map(([, y]) => y)) <= resolved.plateY + 1e-6, 'from the plate');
+    assert.ok(Math.min(...brackets.map(([, y]) => y)) >= resolved.plateY - 0.9 - 1e-6, 'down the wall');
+    assert.ok(brackets.every(([, , z]) => z >= 4 - 1e-6 && z <= 4.9 + 1e-6), 'between the wall and the front');
+    near(resolved.plateY, 0.6 + 2.4, 'its roof 2.4 m above the floor');
+    const layout = withStructureFacades(computeFacadeLayout(RECT, {}), result.structureFacades);
+    assert.deepEqual(layout.railRuns, []);
+    assert.deepEqual(layout.structureWallRuns, []);
+    assertWatertight(result, 'entry hood', [[2, 4.9]]);
+  });
+
+  it('must project from its wall, no further than brackets carry', () => {
+    const code = (fields) => build([hood(fields)]).roofStructures[0].errors.map((e) => e.code);
+    assert.deepEqual(code({ setback: 0 }), ['hood-placement']);
+    assert.deepEqual(code({ setback: -2, depth: 2 }), ['brackets-too-deep']);
+    assert.deepEqual(code({ roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 4 } }), []);
   });
 });
 

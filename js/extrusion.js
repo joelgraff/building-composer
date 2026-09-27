@@ -400,12 +400,14 @@ function withRoofStructures(result, config) {
       ['walls', [...[...wallFaces.values()].flat(), ...clipOutside(kneeWalls(resolved, host), others), ...recess.liftStrip], structureMaterials.wall],
       ['roof', clipOutside(structureRoofTriangles(resolved, config), [...hostSolids, ...others]), structureMaterials.roof],
       ['floor', [
-        ...(resolved.standing ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved)]), floorSolids) : []),
+        ...(resolved.standing && !resolved.hood ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved)]), floorSolids) : []),
         ...recess.floor,
       ], materials.roof],
+      // an entry hood's underside, at its plate
+      ['ceiling', resolved.hood ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved).map(([x, , z]) => [x, resolved.plateY, z])]), [hostBody, ...others]) : [], structureMaterials.wall],
       ['posts', [
         ...clipOutside([
-          ...(resolved.standing ? openSidePosts(resolved, [hostBody, ...others]) : []),
+          ...(resolved.standing && !resolved.hood ? openSidePosts(resolved, [hostBody, ...others]) : []),
           ...supports.posts,
         ], [hostBody, ...others]),
         // a structure rising through the roof stands its posts on the roof
@@ -783,9 +785,11 @@ function structureSupports(resolved, host) {
       return {
         ...empty,
         posts: spacedPositions(a0 + thickness / 2, a1 - thickness / 2, MAX_POST_SPAN * 0.6).flatMap((along) => {
-          // a right triangle in the (inward, y) plane: along the floor, then down the wall
+          // a right triangle in the (inward, y) plane: along the floor (a hood's
+          // ceiling), then down the wall
           const outward = -frame.sign;
-          const section = [[wall, sillY], [wall + outward * reach, sillY], [wall, sillY - reach]];
+          const braceY = resolved.hood ? resolved.plateY : sillY;
+          const section = [[wall, braceY], [wall + outward * reach, braceY], [wall, braceY - reach]];
           const at = (t, [c, y]) => (frame.along === 'x' ? [t, y, c] : [c, y, t]);
           const [s0, s1] = [along - thickness / 2, along + thickness / 2];
           const near = section.map((point) => at(s0, point));

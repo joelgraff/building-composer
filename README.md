@@ -64,6 +64,7 @@ npm test
   - **Wall dormers** (zero setback) carry the main wall up through the eave, which stops and is capped on either side.
   - **Recessed porches**: a dormer, usually set up the roof above an intact strip of roof and eave, whose front wall is set back (`inset`), leaving an open porch with a floor, side walls, and the dormer roof over it.
   - **Cupolas, belvederes, and rooftop pavilions** (`mount: 'through'`): rise through the roof without joining it, centered on the ridge or on a flat roof, walls clearing the highest point of the roof under them; open ones stand on posts on the roof.
+  - **Entry hoods**: a small roof on brackets over a door.
   - **Canted bay windows, oriels, and towers**: octagonal or round in plan, with polygonal hip or conical roofs; a tower can stand on a corner.
   - **Integral porches**, recessed entries, and loggias cut into the house under its roof (`mount: 'recess'`).
   - **Wraparound porches**: a porch at the end of its wall turns the corner and runs back along the side, under one hip roof.

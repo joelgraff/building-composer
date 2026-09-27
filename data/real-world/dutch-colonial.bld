@@ -77,22 +77,23 @@
     },
     {
       "id": "structure-2",
-      "kind": "porch",
+      "kind": "hood",
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
       "hostSide": "maxZ",
       "offset": 0,
       "width": 2.2,
-      "setback": -1.2,
+      "setback": -0.9,
       "mount": "join",
-      "depth": 1.2,
-      "wallHeight": 2.2,
+      "depth": 0.9,
+      "wallHeight": 2.3,
       "baseHeight": "ground",
       "support": "auto",
       "openSides": [
         "front",
         "left",
-        "right"
+        "right",
+        "back"
       ],
       "inset": 0,
       "roofType": "gable",

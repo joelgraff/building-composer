@@ -1517,7 +1517,7 @@ function structureEditorHtml(structure) {
     parts.push(checkField('Depth runs back to the roof', 'depthAuto', structure.depth === null));
   }
   parts.push(numberField(recess ? 'Depth into the house' : 'Depth', 'depth', structure.depth, { disabled: structure.depth === null }));
-  parts.push(numberField(recess ? 'Ceiling height' : 'Wall height', 'wallHeight', structure.wallHeight));
+  parts.push(numberField(recess ? 'Ceiling height' : structure.kind === 'hood' ? 'Height of its roof above the floor' : 'Wall height', 'wallHeight', structure.wallHeight));
   if (!through) {
     parts.push(selectField('Base', 'baseMode', [['roof', 'Rises out of the roof (a dormer)'], ['ground', 'Stands on the ground (a porch)'], ['height', 'Stands at a height above the host plate (a porch)']], baseMode));
     if (baseMode === 'height') {

@@ -50,6 +50,7 @@ export const STRUCTURE_UI_PRESETS = Object.freeze([
       roofType: 'flat', openSides: ['front'],
     },
   },
+  { key: 'entry-hood', label: 'Entry hood (a roof on brackets over a door)', fields: { kind: 'hood' } },
   { key: 'porch-on-roof', label: 'Porch on this roof', fields: { kind: 'porch' } },
   {
     key: 'sleeping-porch',
@@ -145,6 +146,7 @@ const KIND_LABELS = {
   'recessed-porch': 'Recessed porch',
   porch: 'Porch',
   cupola: 'Cupola',
+  hood: 'Entry hood',
 };
 
 const SIDE_LABELS = {

@@ -239,7 +239,7 @@ export function zoneRoofHeight(zone, point) {
 // Structure records: data model, placement, validation
 // ---------------------------------------------------------------------------
 
-export const STRUCTURE_KINDS = ['dormer', 'wall-dormer', 'recessed-porch', 'porch', 'cupola'];
+export const STRUCTURE_KINDS = ['dormer', 'wall-dormer', 'recessed-porch', 'porch', 'cupola', 'hood'];
 /**
  * How a structure meets the roof: joining one face (a dormer), rising
  * through it (a cupola), or recessed into the walls under it (an integral
@@ -278,6 +278,11 @@ export const STRUCTURE_PRESETS = Object.freeze({
   // a small square lookout rising through the roof at its center, with a pyramid roof
   cupola: Object.freeze({
     width: 1.6, setback: 'center', depth: 1.6, wallHeight: 1.2, baseHeight: null, openSides: [], roofType: 'hip', mount: 'through',
+  }),
+  // an entry hood: a small roof on brackets over a door, with no floor,
+  // posts, or walls; its wall height is how high its roof sits above the floor
+  hood: Object.freeze({
+    width: 1.8, setback: -0.9, depth: 0.9, wallHeight: 2.4, baseHeight: 'ground', openSides: ['front', 'left', 'right', 'back'], roofType: 'gable',
   }),
   // a raised porch standing on its host's plate (e.g. over a one-story wing)
   porch: Object.freeze({
@@ -684,7 +689,12 @@ export function resolveRoofStructure(structure, host, config = {}) {
 
   const projecting = setback < -GEOMETRY_EPSILON;
   const groundLevel = Number.isFinite(host.foundationTopY) && sillY <= host.foundationTopY + GEOMETRY_EPSILON;
-  let support = structure.support ?? 'auto';
+  // an entry hood hangs on brackets from the wall over a door
+  const hood = structure.kind === 'hood';
+  if (hood && !(projecting && structure.baseHeight !== null)) {
+    return fail('hood-placement', 'An entry hood projects from its wall, at a height above the floor.');
+  }
+  let support = hood ? 'brackets' : structure.support ?? 'auto';
   if (support === 'auto') {
     support = !projecting ? 'none' : (groundLevel ? 'deck' : 'posts');
   }
@@ -939,6 +949,8 @@ export function resolveRoofStructure(structure, host, config = {}) {
       ])],
       // where a wraparound's two segments meet (and its front segment's back): no wall, post, header, or railing
       seamSides: structure.seamSides ?? [],
+      // an entry hood: its roof alone, on brackets, with a ceiling under it
+      hood,
       // a roof rising from these eaves only (see eaveRoofTriangles)
       eaveRoof,
       // the record it was built from (a wraparound's side segment is part of its porch)
@@ -1766,7 +1778,8 @@ export function structureFacade(resolved, wallFaces, skirts, solids) {
 
   const floorY = resolved.sillY;
   const railHeight = Math.min(RAILING_HEIGHT, resolved.plateY - resolved.sillY);
-  const railRuns = resolved.openSides.filter((name) => !resolved.seamSides?.includes(name)).flatMap((name) => {
+  // (an entry hood has no floor to rail)
+  const railRuns = (resolved.hood ? [] : resolved.openSides).filter((name) => !resolved.seamSides?.includes(name)).flatMap((name) => {
     const side = sides[name];
     const frame = wallFrame(bounds, side);
     const a = [frame.start[0], floorY, frame.start[1]];
