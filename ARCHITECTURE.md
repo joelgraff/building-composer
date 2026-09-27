@@ -171,8 +171,9 @@ volume, or another structure): offset along the side, width, setback from the
 wall (0 = flush, negative = projecting), depth, wall height, and either no base
 (a *dormer*, rising out of the roof) or a base height (a *standing* structure,
 a porch). It has its own roof (any of the four types) and eave settings, open
-sides, and, when projecting, a support (deck, posts, ground-level porch,
-brackets, or an enclosed base).
+sides, an optional inset (the front wall set back behind an open porch under
+its roof: a recessed porch), and, when projecting, a support (deck, posts,
+ground-level porch, brackets, or an enclosed base).
 
 It relates to the building through convex solids. Every volume's resolved
 roof (its *zone descriptor*: wall and roof rectangles, final planes after

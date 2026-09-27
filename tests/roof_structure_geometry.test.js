@@ -627,3 +627,82 @@ describe('stacked structures', () => {
     assert.equal(backWall.length, 0);
   });
 });
+
+describe('recessed porches', () => {
+  // a story-and-a-half: one story under a 12:12 roof (ridge 5 m over a 5 m half span)
+  const bungalow = { roofHeight: 5, roofPitchRise: 12 };
+  const recessed = (fields = {}) => build([{ kind: 'recessed-porch', hostVolumeId: 'volume-0', hostSide: 'minZ', ...fields }], bungalow);
+  const WALL = -5;
+  const SETBACK = 1.2; // the preset's
+  const FRONT = WALL + SETBACK;
+
+  it('a recessed porch is a dormer set up the roof with its front wall set back behind an open porch', () => {
+    const result = recessed();
+    const [{ resolved, errors }] = result.roofStructures;
+    assert.deepEqual(errors, []);
+    assert.equal(resolved.inset, 1.5);
+    assert.ok(resolved.openSides.includes('front'));
+    near(resolved.front, FRONT);
+    near(resolved.innerLine, FRONT + 1.5);
+    assertWatertight(result, 'recessed', [[2, FRONT]]);
+  });
+
+  it('leaves the roof and eave whole below it', () => {
+    const result = recessed();
+    assert.equal(partOf(result, 'eave-caps').length, 0);
+    const fasciaInFront = trianglesOf(result.building, isHostRoof)
+      .filter((tri) => tri.every((v) => Math.abs(v[2] - (WALL - 0.3)) < 1e-6 && Math.abs(v[0]) < 1.8));
+    assert.ok(fasciaInFront.length > 0, 'the fascia runs on under the recess');
+    // the roof strip between the eave and the floor edge is intact
+    const roof = trianglesOf(result.building, isHostRoof);
+    assert.ok(surfaceHeightsAt(roof, 0, WALL + SETBACK / 2).some((h) => Math.abs(h - (PLATE + SETBACK / 2)) < 1e-5));
+  });
+
+  it('has a level floor across the recess, where the roof meets its front edge', () => {
+    const result = recessed();
+    const { resolved } = result.roofStructures[0];
+    const floor = partOf(result, 'floor');
+    assert.ok(Math.abs(planArea(floor) - 3.6 * 1.5) < 1e-4);
+    floor.flat().forEach((v) => assert.ok(Math.abs(v[1] - resolved.sillY) < 1e-5));
+    near(resolved.sillY, PLATE + SETBACK, '12:12 roof, 1.2 m up the slope');
+  });
+
+  it('has an inner wall across the back of the recess, up to the roof, and side walls down to the floor', () => {
+    const result = recessed();
+    const { resolved } = result.roofStructures[0];
+    const walls = partOf(result, 'walls');
+    const inner = walls.filter((tri) => tri.every((v) => Math.abs(v[2] - resolved.innerLine) < 1e-5));
+    const innerYs = inner.flat().map((v) => v[1]);
+    assert.ok(Math.abs(Math.min(...innerYs) - resolved.sillY) < 1e-5, 'from the floor');
+    assert.ok(Math.abs(Math.max(...innerYs) - (resolved.plateY + resolved.roofHeight)) < 1e-5, 'up to the ridge');
+    [-1.8, 1.8].forEach((x) => {
+      const side = walls.filter((tri) => tri.every((v) => Math.abs(v[0] - x) < 1e-5 && v[2] <= resolved.innerLine + 1e-5));
+      assert.ok(Math.abs(Math.min(...side.flat().map((v) => v[1])) - resolved.sillY) < 1e-5, `side wall at x=${x} reaches the floor`);
+    });
+    assert.equal(walls.some((tri) => tri.every((v) => Math.abs(v[2] - FRONT) < 1e-5 && v[1] > resolved.sillY + 1e-3)), false, 'no front wall');
+    assert.ok(partOf(result, 'roof').some((tri) => tri.every((v) => Math.abs(v[2] - FRONT) < 1e-5)), 'gable face over the open front');
+  });
+
+  it('a shed-roofed recess gets a header over its open front', () => {
+    const result = recessed({ roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 3 } });
+    const { resolved } = result.roofStructures[0];
+    const header = partOf(result, 'roof').filter((tri) => tri.every((v) => Math.abs(v[2] - FRONT) < 1e-5 && v[1] <= resolved.plateY + 1e-6));
+    assert.ok(header.length > 0);
+    assertWatertight(result, 'shed recess', [[2, FRONT]]);
+  });
+
+  it('can also stand flush on the wall, breaking the eave like a wall dormer', () => {
+    const result = recessed({ setback: 0 });
+    assert.deepEqual(result.roofStructures[0].errors, []);
+    assert.equal(partOf(result, 'eave-caps').length, 4);
+    // with no front wall, a strip under the floor edge closes the roof lift above the host wall top
+    const strip = partOf(result, 'walls').filter((tri) => tri.every((v) => Math.abs(v[2] - WALL) < 1e-5 && v[1] <= PLATE + 1e-5));
+    assert.ok(Math.abs(totalArea(strip) - 3.6 * 0.02) < 1e-5, `lift strip area ${totalArea(strip)}`);
+    assertWatertight(result, 'flush recess', [[2, WALL]]);
+  });
+
+  it('refuses a recess that would run back under the host roof', () => {
+    assert.deepEqual(recessed({ inset: 3.5 }).roofStructures[0].errors.map((e) => e.code), ['inset-too-deep']);
+    assert.deepEqual(recessed({ inset: 9 }).roofStructures[0].errors.map((e) => e.code), ['inset-too-deep']);
+  });
+});

@@ -50,6 +50,7 @@
       "baseHeight": null,
       "support": "auto",
       "openSides": [],
+      "inset": 0,
       "roofType": "shed",
       "ridge": "perpendicular",
       "roofShape": {
@@ -74,6 +75,7 @@
       "baseHeight": null,
       "support": "auto",
       "openSides": [],
+      "inset": 0,
       "roofType": "gable",
       "ridge": "perpendicular",
       "roofShape": {
@@ -98,6 +100,7 @@
       "baseHeight": null,
       "support": "auto",
       "openSides": [],
+      "inset": 0,
       "roofType": "gable",
       "ridge": "perpendicular",
       "roofShape": {

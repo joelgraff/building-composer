@@ -1,30 +1,30 @@
 {
   "format": "building-composer",
   "version": 1,
-  "note": "Key example: a sleeping porch standing on a flat-roofed ground porch. The ground porch is open with posts; the sleeping porch is enclosed, its shed roof tucked just under the main eave.",
+  "note": "Recessed porches on a story-and-a-half bungalow, set up the roof above an intact strip of roof and eave: a gable-roofed one on the front and a wider shed-roofed one on the back, each an open porch in front of a set-back wall under a dormer roof.",
   "footprint": [
     [
-      -8,
+      -6,
       -4.5
     ],
     [
-      8,
+      6,
       -4.5
     ],
     [
-      8,
+      6,
       4.5
     ],
     [
-      -8,
+      -6,
       4.5
     ]
   ],
-  "storyCount": 2,
+  "storyCount": 1,
   "storyHeight": 3.2,
   "roofType": "gable",
   "roofDirection": "z-min",
-  "roofPitchRise": 8,
+  "roofPitchRise": 12,
   "roofPitchRun": 12,
   "roofHeightMode": "slope",
   "roofEaveDepth": 0.35,
@@ -33,55 +33,54 @@
   "eaveSoffit": "flat",
   "rakeSoffit": "sloped",
   "wallMaterial": "wood",
-  "roofHeight": 3,
+  "roofHeight": 4.5,
   "volumeStoryOverrides": {},
   "roofStructures": [
     {
-      "id": "ground-porch",
-      "kind": "porch",
+      "id": "structure-1",
+      "kind": "recessed-porch",
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
       "hostSide": "maxZ",
       "offset": 0,
-      "width": 7,
-      "setback": -2.4,
-      "depth": 2.4,
-      "wallHeight": 3.2,
-      "baseHeight": "ground",
+      "width": 3.6,
+      "setback": 1.2,
+      "depth": null,
+      "wallHeight": 2,
+      "baseHeight": null,
       "support": "auto",
-      "openSides": [
-        "front",
-        "left",
-        "right"
-      ],
-      "inset": 0,
-      "roofType": "flat",
+      "openSides": [],
+      "inset": 1.5,
+      "roofType": "gable",
       "ridge": "perpendicular",
-      "roofShape": null,
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 8
+      },
       "join": "auto",
       "eaves": {},
       "materials": {}
     },
     {
-      "id": "sleeping-porch",
-      "kind": "porch",
-      "hostVolumeId": null,
-      "hostStructureId": "ground-porch",
-      "hostSide": "maxZ",
+      "id": "structure-2",
+      "kind": "recessed-porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "minZ",
       "offset": 0,
-      "width": 7,
-      "setback": 0,
-      "depth": 2.4,
-      "wallHeight": 2.4,
-      "baseHeight": 0,
+      "width": 5.4,
+      "setback": 0.9,
+      "depth": null,
+      "wallHeight": 2.2,
+      "baseHeight": null,
       "support": "auto",
       "openSides": [],
-      "inset": 0,
+      "inset": 1.2,
       "roofType": "shed",
       "ridge": "perpendicular",
       "roofShape": {
         "mode": "slope",
-        "pitchRise": 1.5
+        "pitchRise": 3
       },
       "join": "auto",
       "eaves": {},

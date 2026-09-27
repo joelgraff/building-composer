@@ -54,6 +54,7 @@
         "left",
         "right"
       ],
+      "inset": 0,
       "roofType": "shed",
       "ridge": "perpendicular",
       "roofShape": {

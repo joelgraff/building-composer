@@ -424,7 +424,7 @@ The exposed part of a partly shared eave side gets its own eave strip (top, fasc
 
 ## Roof-borne structures (dormers, raised porches) — plan
 
-Status: Phases 0–4, 4a, and 4b complete; 4c, 4d, and 5–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+Status: Phases 0–4 and 4a–4c complete; 4d and 5–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
 
 ### Core idea
 
@@ -625,16 +625,29 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
 
    *Review of the 4a/4b demo (2026-09-26).* Better, but porches are hard to develop further without actual buildings to model against. The porch arrangements, supports, and stacking are provisional, to be revisited with real cases.
 
-4c. **Recessed (inset) porches.** These are subtractive: a porch carved into the host volume instead of added to it.
-   - A recess is a box on a host side (the same frame and placement fields), from a floor level up through the roof.
-   - The host roof, eave trim, and wall meshes inside the recess are cut away with `clipOutsideConvexSolid`. Walls now join the roof meshes in being cut.
-   - The recess's own back wall, side walls, and floor are built and kept *inside* the host solid (`clipInsideConvexSolid`), the mirror image of a dormer.
-   - Two forms:
-     - **Open to the sky:** a notch in the roof slope.
-     - **Covered:** a structure roof over the recess, like a dormer whose front wall is set back (an `inset` depth on any structure: its front wall moves back by `inset`, leaving an open porch with floor, side walls, and roof in front of it).
-
-     Decision (2026-09-26): the covered form, a recessed porch under a dormer roof, is the main use case and comes first. It reuses the dormer machinery. The open notch, which needs the subtractive path, is deferred.
-   - A recess that reaches the host wall breaks the eave the same way a flush wall dormer does.
+4c. **Recessed porches.** Complete, in the covered form (a porch under a dormer roof). The open-to-the-sky notch, which needs a subtractive path, is deferred.
+   - `inset` on any structure sets its front wall back by that depth. The front becomes an open side (a gable keeps its gable face over it, and a shed or hip front gets a header), and the structure's roof carries on over the recess. `innerLine` is the set-back wall's position.
+   - The `recessed-porch` preset is a dormer set 1.2 m up the roof, so a strip of roof and the eave run on intact below it (the usual form), with a 1.5 m inset, 3.6 m wide, and 2.2 m walls. Its floor is level with the roof where the roof meets its front edge. A flush recess (setback 0) breaks the eave like a wall dormer.
+   - `structureRecess` gives the recess's plan rectangle, its floor at the sill, and the inner wall from the sill up to the roof profile. `recessParts` in `js/extrusion.js` builds:
+     - the floor and the inner wall;
+     - for a dormer, the side walls run on down to the floor inside the recess (the host roof there is already cut away with the dormer's footprint);
+     - for a flush recess, a strip under the floor edge that closes the roof-lift gap a front wall would have covered.
+   - Validation (`inset-too-deep`): the inset must leave the inner wall inside the structure. For a dormer, the recess's back corners must lie within `hostContact`, so the porch never runs back under the remaining host roof.
+   - Open-side posts are now for standing structures only; a dormer's open front spans between its own side walls.
+   - Tests:
+     - watertight;
+     - floor area and level;
+     - inner wall from the floor to the ridge;
+     - side walls down to the floor, and no front wall;
+     - eave caps, gable face, and lift strip;
+     - the roof strip and eave left whole below a set-back recess;
+     - a shed recess header;
+     - a flush recess (breaks the eave; lift strip);
+     - too-deep refusals;
+     - inset normalization and the preset.
+   - Mutation checks: removing the recess side walls fails the watertight tests; removing the lift strip fails the lift-strip check (it lies in the open front's plane, which the watertight check allows).
+   - Example: `recessed-porch` (a gable-roofed recess on the front and a shed-roofed one on the back, both set up the roof).
+   - Not modeled: a railing, or a knee wall/curb across the open front raising it above the roof. These come with facade modifiers, or a front knee-wall height if real cases call for one.
 
 4d. **Cupolas and belvederes.** A structure rising out of the roof that is not joining it: it sits over the ridge (or at the center of a flat or hip roof), with its whole roof above the host's.
    - A `mount: 'roof'` option skips the single-face rule and the ridge cap. Its walls still stop at the host roof, as a dormer's do. The host roof it covers comes from the per-face `removedRoof` union.

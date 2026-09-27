@@ -57,6 +57,15 @@ const examples = {
       { hostVolumeId: 'volume-0', hostSide: 'minZ', kind: 'dormer', offset: 3, width: 2, roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 12 } },
     ],
   },
+  'recessed-porch': {
+    note: 'Recessed porches on a story-and-a-half bungalow, set up the roof above an intact strip of roof and eave: a gable-roofed one on the front and a wider shed-roofed one on the back, each an open porch in front of a set-back wall under a dormer roof.',
+    footprint: rect(12, 9),
+    config: { storyCount: 1, roofPitchRise: 12 },
+    structures: [
+      on('volume-0', { kind: 'recessed-porch', width: 3.6, wallHeight: 2, roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 8 } }),
+      { hostVolumeId: 'volume-0', hostSide: 'minZ', kind: 'recessed-porch', width: 5.4, setback: 0.9, inset: 1.2, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 3 } },
+    ],
+  },
   'ground-porch': {
     note: 'A ground-level porch on a solid deck, open on three sides with posts, its shed roof butting the wall below the second floor.',
     footprint: rect(16, 9),

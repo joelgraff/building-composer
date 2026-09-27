@@ -54,6 +54,7 @@
         "left",
         "right"
       ],
+      "inset": 0,
       "roofType": "shed",
       "ridge": "perpendicular",
       "roofShape": {
@@ -80,6 +81,7 @@
       "openSides": [
         "front"
       ],
+      "inset": 0,
       "roofType": "shed",
       "ridge": "perpendicular",
       "roofShape": {
@@ -104,6 +106,7 @@
       "baseHeight": -3.2,
       "support": "enclosed",
       "openSides": [],
+      "inset": 0,
       "roofType": "hip",
       "ridge": "perpendicular",
       "roofShape": {

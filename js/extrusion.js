@@ -10,7 +10,7 @@ import {
 } from './eaves.js';
 import {
   clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, clipInsideConvexSolid, planPrism, volumeSolid, isInsideSolid,
-  validateRoofStructures, structureWallPolygons, structureWallSides, structureFloorPolygon, hostEaveProfile, hostEaveCovers,
+  validateRoofStructures, structureWallPolygons, structureWallSides, structureFloorPolygon, structureRecess, hostEaveProfile, hostEaveCovers,
 } from './roof-structures.js';
 import {
   computeVolumeEavePlanes, defaultHighEdgeForAxis, evalZoneHeight,
@@ -235,11 +235,18 @@ function withRoofStructures(result, config) {
       ...(flushFront ? clipOutside(polygonsToTriangles([flushFront.polygon]), others) : []),
     ];
     const supports = structureSupports(resolved, host);
+    const recess = recessParts(resolved, host, polygonsToTriangles(walls.map((wall) => wall.polygon)), { hostSolid, others, clipOutside });
     const parts = [
-      ['walls', [...wallTriangles, ...clipOutside(kneeWalls(resolved, host), others)], materials.wall],
+      ['walls', [...wallTriangles, ...clipOutside(kneeWalls(resolved, host), others), ...recess.walls], materials.wall],
       ['roof', clipOutside(structureRoofTriangles(resolved, config), [hostSolid, ...others]), materials.roof],
-      ['floor', resolved.standing ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved)]), floorSolids) : [], materials.roof],
-      ['posts', clipOutside([...openSidePosts(resolved, [hostBody, ...others]), ...supports.posts], [hostBody, ...others]), materials.wall],
+      ['floor', [
+        ...(resolved.standing ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved)]), floorSolids) : []),
+        ...recess.floor,
+      ], materials.roof],
+      ['posts', clipOutside([
+        ...(resolved.standing ? openSidePosts(resolved, [hostBody, ...others]) : []),
+        ...supports.posts,
+      ], [hostBody, ...others]), materials.wall],
       ['support', clipOutside(supports.walls, [hostSolid, ...others]), materials.wall],
       ['foundation', clipOutside(supports.foundation, [hostSolid, ...others]), materials.foundation],
       ['eave-caps', interruptsHostEave(resolved, host) ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
@@ -269,6 +276,33 @@ function withRoofStructures(result, config) {
     builtSolids.push({ id: resolved.id, solid: volumeSolid(resolved, { floorY: resolved.sillY }) });
   });
   return { ...result, roofStructures: results };
+}
+
+/**
+ * The open porch an inset leaves at the front of a structure (see
+ * structureRecess): its floor, the inner wall across its back, and, for a
+ * dormer, the side walls run on down to the floor inside it (the host roof
+ * there is cut away with the rest of the dormer's footprint). A flush recess
+ * also closes the roof-lift gap under its front edge, which a flush front
+ * wall would otherwise have covered.
+ */
+function recessParts(resolved, host, wallTriangles, { hostSolid, others, clipOutside }) {
+  const recess = structureRecess(resolved);
+  if (!recess) {
+    return { walls: [], floor: [] };
+  }
+  const belowFloor = [{ normal: [0, 1, 0], offset: resolved.sillY }];
+  const sideWalls = resolved.standing
+    ? []
+    : clipOutside(clipInsideConvexSolid(clipInsideConvexSolid(wallTriangles, planPrism(recess.plan)), hostSolid), [belowFloor, ...others]);
+  const [p0, p1] = recess.plan; // the front edge
+  const liftStrip = resolved.flush && host.wallTopY < resolved.sillY - 1e-9
+    ? [[[p0[0], host.wallTopY, p0[1]], [p1[0], host.wallTopY, p1[1]], [p1[0], resolved.sillY, p1[1]], [p0[0], resolved.sillY, p0[1]]]]
+    : [];
+  return {
+    walls: [...sideWalls, ...clipOutside(polygonsToTriangles([recess.innerWall, ...liftStrip]), others)],
+    floor: resolved.standing ? [] : clipOutside(polygonsToTriangles([recess.floor]), others),
+  };
 }
 
 /** Post size (square) and the longest span between posts along an open side or a supported front. */

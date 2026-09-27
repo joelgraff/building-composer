@@ -277,6 +277,15 @@ describe('roof structure records', () => {
     assert.equal(normalizeRoofStructure({ hostVolumeId: 'volume-0', hostSide: 'minZ', support: 'stilts' }).support, 'auto');
   });
 
+  it('read an inset, clamped to zero or more, with the recessed-porch preset', () => {
+    assert.equal(normalizeRoofStructure({ hostVolumeId: 'volume-0', hostSide: 'minZ' }).inset, 0);
+    assert.equal(normalizeRoofStructure({ hostVolumeId: 'volume-0', hostSide: 'minZ', inset: -2 }).inset, 0);
+    const recessed = normalizeRoofStructure({ kind: 'recessed-porch', hostVolumeId: 'volume-0', hostSide: 'minZ' });
+    assert.equal(recessed.inset, STRUCTURE_PRESETS['recessed-porch'].inset);
+    assert.equal(recessed.setback, STRUCTURE_PRESETS['recessed-porch'].setback);
+    assert.ok(recessed.setback > 0, 'set up the roof, above an intact strip of roof and eave');
+  });
+
   it('get unique ids, keeping valid ones', () => {
     const list = normalizeRoofStructures([
       { id: 'structure-2', hostVolumeId: 'volume-0', hostSide: 'minZ' },

@@ -187,7 +187,7 @@ export function volumeSolid(zone, { floorY = zone.floorY ?? 0 } = {}) {
 // Structure records: data model, placement, validation
 // ---------------------------------------------------------------------------
 
-export const STRUCTURE_KINDS = ['dormer', 'wall-dormer', 'porch'];
+export const STRUCTURE_KINDS = ['dormer', 'wall-dormer', 'recessed-porch', 'porch'];
 export const STRUCTURE_WALLS = ['front', 'left', 'right', 'back'];
 /** What holds up the part of a structure projecting past its host wall (see resolveRoofStructure). */
 export const STRUCTURE_SUPPORTS = ['auto', 'none', 'deck', 'posts', 'porch', 'brackets', 'enclosed'];
@@ -209,6 +209,11 @@ export const STRUCTURE_PRESETS = Object.freeze({
   // front wall carries the main wall up through the eave
   'wall-dormer': Object.freeze({
     width: 2.4, setback: 0, depth: null, wallHeight: 1.2, baseHeight: null, openSides: [], roofType: 'gable',
+  }),
+  // a dormer set up the roof (a strip of roof and the eave run on below it) whose
+  // front wall is set back, leaving an open porch under its roof
+  'recessed-porch': Object.freeze({
+    width: 3.6, setback: 1.2, depth: null, wallHeight: 2.2, baseHeight: null, openSides: [], roofType: 'gable', inset: 1.5,
   }),
   // a raised porch standing on its host's plate (e.g. over a one-story wing)
   porch: Object.freeze({
@@ -251,6 +256,10 @@ function normalizeRoofShape(shape) {
  *   structure's rectangle.
  * - `openSides`: walls left open (`front`, `back`, and `left`/`right` as
  *   seen from outside, facing the front wall).
+ * - `inset`: how far the front wall is set back inside the structure,
+ *   leaving an open porch (floor, side walls, and the structure's roof) in
+ *   front of it; 0 for none. A recessed porch is a dormer with an inset,
+ *   usually set up the roof so a strip of roof and the eave run on below it.
  *
  * @returns {object|null}
  */
@@ -280,6 +289,7 @@ export function normalizeRoofStructure(raw) {
     openSides: Array.isArray(raw.openSides)
       ? STRUCTURE_WALLS.filter((wall) => raw.openSides.includes(wall))
       : [...preset.openSides],
+    inset: Math.max(0, finite(raw.inset, preset.inset ?? 0)),
     roofType: ROOF_TYPES.includes(raw.roofType) ? raw.roofType : preset.roofType,
     ridge: raw.ridge === 'parallel' ? 'parallel' : 'perpendicular',
     roofShape: normalizeRoofShape(raw.roofShape),
@@ -553,6 +563,32 @@ export function resolveRoofStructure(structure, host, config = {}) {
     }).filter((piece) => piece.length >= 3)
     : [hostContact].filter((piece) => piece.length >= 3);
 
+  // An inset front wall leaves an open porch in front of it. Its floor is
+  // the sill, so the whole recess must be where the host roof is gone: for a
+  // dormer, inside the part of the roof it replaces (its back corners inside
+  // `hostContact`, which is convex and holds the front corners).
+  const inset = structure.inset ?? 0;
+  const inner = front + frame.sign * inset;
+  if (inset > GEOMETRY_EPSILON) {
+    if (frame.sign * (back - inner) <= GEOMETRY_EPSILON) {
+      return fail('inset-too-deep', 'The inset puts the front wall at or past the back of the structure.');
+    }
+    if (!standing) {
+      const corners = [pointOn(frame, along[0], inner), pointOn(frame, along[1], inner)];
+      const insideContact = (point) => hostContact.length >= 3 && hostContact.every(([x0, z0], i) => {
+        const [x1, z1] = hostContact[(i + 1) % hostContact.length];
+        const area = hostContact.reduce((sum, [ax, az], k) => {
+          const [bx, bz] = hostContact[(k + 1) % hostContact.length];
+          return sum + ax * bz - bx * az;
+        }, 0);
+        return Math.sign(area) * ((x1 - x0) * (point[1] - z0) - (z1 - z0) * (point[0] - x0)) >= -1e-6;
+      });
+      if (!corners.every(insideContact)) {
+        return fail('inset-too-deep', 'The recess runs back under the host roof; reduce the inset or raise the walls.');
+      }
+    }
+  }
+
   if (hostContact.length < 3 && structure.baseHeight === null) {
     return fail('no-contact', 'The structure does not meet the host roof.');
   }
@@ -594,7 +630,12 @@ export function resolveRoofStructure(structure, host, config = {}) {
       foundationTopY: host.foundationTopY,
       hostStructureId: structure.hostStructureId,
       standing,
-      openSides: structure.openSides,
+      // an inset leaves the front open; the recess behind it has its own inner wall
+      openSides: inset > GEOMETRY_EPSILON && !structure.openSides.includes('front')
+        ? ['front', ...structure.openSides]
+        : structure.openSides,
+      inset,
+      innerLine: inner,
       eaves: structure.eaves,
       materials: structure.materials,
     },
@@ -832,6 +873,37 @@ export function structureFloorPolygon(resolved) {
     [bounds.minX, sillY, bounds.minZ], [bounds.maxX, sillY, bounds.minZ],
     [bounds.maxX, sillY, bounds.maxZ], [bounds.minX, sillY, bounds.maxZ],
   ];
+}
+
+/**
+ * The recess an inset leaves at the front of a structure: its plan rectangle
+ * (front line to inner line, across the structure's width), its floor at the
+ * sill, and the inner wall across its back, from the sill up to the roof.
+ * Null without an inset.
+ *
+ * @returns {{ plan: Array<[number, number]>, floor: Array<[number, number, number]>, innerWall: Array<[number, number, number]> } | null}
+ */
+export function structureRecess(resolved) {
+  if (!(resolved.inset > GEOMETRY_EPSILON)) {
+    return null;
+  }
+  const { frame, sillY, plateY } = resolved;
+  const [a0, a1] = resolved.along;
+  const [front, inner] = [resolved.front, resolved.innerLine];
+  const at = (along, inward) => pointOn(frame, along, inward);
+  const plan = [at(a0, front), at(a1, front), at(a1, inner), at(a0, inner)];
+  const roofPlanes = resolved.roofType === 'flat' ? [] : resolved.planes;
+  const top = resolved.roofType === 'flat' ? resolved.slabThickness : 0;
+  const [p0, p1] = [at(a0, inner), at(a1, inner)];
+  const profile = roofProfile(roofPlanes, p0, p1).reverse().map(([t, height]) => {
+    const [x, z] = [p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t];
+    return [x, plateY + height + top, z];
+  });
+  return {
+    plan,
+    floor: plan.map(([x, z]) => [x, sillY, z]),
+    innerWall: [[p0[0], sillY, p0[1]], [p1[0], sillY, p1[1]], ...profile],
+  };
 }
 
 // ---------------------------------------------------------------------------
