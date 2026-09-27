@@ -126,7 +126,7 @@ const houses = {
   },
   bungalow: {
     title: 'Craftsman bungalow',
-    note: 'A story-and-a-half side-gabled bungalow of the 1910s-20s: a broad low roof on deep eaves, a wide shed dormer, and a front-gabled porch on tapered piers.',
+    note: 'A story-and-a-half side-gabled bungalow of the 1910s-20s: a broad low roof on deep eaves, a wide shed dormer, and an integral porch recessed into the corner under the main roof.',
     footprint: box(-6.1, -4.9, 6.1, 4.9),
     config: {
       storyCount: 1, storyHeight: 2.9, roofPitchRise: 8, roofEaveDepth: 0.75, roofRakeDepth: 0.6,
@@ -136,12 +136,12 @@ const houses = {
         at: [0, 0], kind: 'dormer', hostSide: 'maxZ', width: 5, wallHeight: 1.3, setback: 1.5, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 2 },
       },
       {
-        at: [0, 0], kind: 'porch', hostSide: 'maxZ', offset: -2, width: 6, setback: -2.7, depth: 2.7, baseHeight: 'ground', wallHeight: 2.6,
-        roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 6 }, openSides: ['front', 'left', 'right'],
+        // an integral porch at the right-hand corner, under the main roof
+        at: [0, 0], kind: 'porch', mount: 'recess', hostSide: 'maxZ', offset: 3.6, width: 5, setback: 0, depth: 2.7, baseHeight: 'ground', wallHeight: 2.4,
+        roofType: 'flat', openSides: ['front', 'right'],
       },
     ],
     gaps: [
-      'Many bungalows have an integral porch: the main roof carries on over a porch recessed into the footprint. A recess at ground level would need a notch in the footprint with the roof running on over it; only dormers can be recessed.',
       'Exposed rafter tails, knee braces, and tapered piers are facade work.',
     ],
   },
@@ -210,19 +210,19 @@ const houses = {
   },
   ranch: {
     title: 'L-shaped ranch (1950s)',
-    note: 'A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and a recessed entry porch in the ell.',
+    note: 'A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and an entry recessed under the roof in the ell.',
     footprint: [[-9, 0], [9, 0], [9, 15], [3, 15], [3, 8.5], [-9, 8.5]],
     config: {
       storyCount: 1, storyHeight: 2.7, roofType: 'hip', roofPitchRise: 4, roofEaveDepth: 0.6, roofRakeDepth: 0.6,
     },
     structures: [
       {
-        at: [-3, 4], kind: 'porch', hostSide: 'maxZ', offset: 3, width: 4, setback: -1.8, depth: 1.8, baseHeight: 'ground', wallHeight: 2.4,
-        roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 2 }, openSides: ['front', 'left'],
+        // a recessed entry in the ell, beside the garage wing, under the main roof
+        at: [-3, 4], kind: 'porch', mount: 'recess', hostSide: 'maxZ', offset: 1.5, width: 3, setback: 0, depth: 1.8, baseHeight: 'ground', wallHeight: 2.4,
+        roofType: 'flat', openSides: ['front'],
       },
     ],
     gaps: [
-      'On a real ranch the main roof usually carries on over the entry porch; here the porch has its own shed roof tucked under the eave.',
       'The continuous (straight-skeleton) hip has no eave overhang or fascia, so the low, deep eaves that define a ranch are missing.',
       'A garage has a lower floor (at grade) than the house; floor levels are building-wide.',
     ],

@@ -93,6 +93,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   wallGeometry.rotateX(-Math.PI / 2);
   const walls = new THREE.Mesh(wallGeometry, materials.wall);
   walls.position.y = foundationHeight;
+  walls.userData = { bodyPart: 'walls' };
   group.add(walls);
 
   const foundationShape = buildShape(footprint, 0);
@@ -247,6 +248,10 @@ function withRoofStructures(result, config) {
   const clipOutside = (triangles, solids) => solids.reduce((kept, solid) => clipOutsideConvexSolid(kept, solid), triangles);
 
   built.forEach(({ resolved, host }) => {
+    if (resolved.recess) {
+      buildRecess(resolved, host, result, materials);
+      return;
+    }
     // Every volume and every structure already built is solid too: a porch
     // that runs into a taller neighbor merges into its walls and roof the
     // same way it meets its host.
@@ -345,6 +350,77 @@ function withRoofStructures(result, config) {
     builtSolids.push({ id: resolved.id, solid: volumeSolid(resolved, { floorY: resolved.sillY }) });
   });
   return { ...result, roofStructures: results, structureSolids: builtSolids.map((entry) => entry.solid) };
+}
+
+/**
+ * A recessed structure (see resolveRecess in js/roof-structures.js): cuts the
+ * host's walls and facade panels away inside its box, carried a little past
+ * the wall so panels standing proud of it go too, and adds its back and
+ * closed side walls, a ceiling, a floor above the ground, and posts at its
+ * open corners. The host roof is left whole.
+ */
+function buildRecess(resolved, host, result, materials) {
+  const { bounds, sillY, plateY } = resolved;
+  const sides = structureWallSides(resolved.frame);
+  const proud = 0.05;
+  const openBounds = { ...bounds };
+  resolved.openSides.forEach((wallName) => {
+    const side = sides[wallName];
+    openBounds[side] += side.startsWith('min') ? -proud : proud;
+  });
+  const cut = volumeSolid({ bounds: openBounds, baseY: plateY, planes: [], slabThickness: 0 }, { floorY: sillY });
+  result.building.traverse((child) => {
+    if (!child.isMesh || !child.userData?.bodyPart) {
+      return;
+    }
+    const y = child.position.y;
+    const absolute = geometryTriangles(child.geometry).map((tri) => tri.map(([px, py, pz]) => [px, py + y, pz]));
+    const kept = clipOutsideConvexSolid(absolute, cut).map((tri) => tri.map(([px, py, pz]) => [px, py - y, pz]));
+    child.geometry.dispose();
+    child.geometry = trianglesToGeometry(kept);
+  });
+  const walls = structureWallPolygons(resolved, sillY);
+  const wallFaces = new Map(walls.map((wall) => [wall.wall, polygonsToTriangles([wall.polygon])]));
+  const rectangle = (y) => [[bounds.minX, y, bounds.minZ], [bounds.maxX, y, bounds.minZ], [bounds.maxX, y, bounds.maxZ], [bounds.minX, y, bounds.maxZ]];
+  const aboveGround = !Number.isFinite(resolved.foundationTopY) || sillY > resolved.foundationTopY + 1e-6;
+  // where the host's eave soffit meets its wall below the ceiling, the host
+  // wall carries on down to it across the opening
+  const headers = resolved.openSides.flatMap((wallName) => {
+    const side = sides[wallName];
+    if (Math.abs(bounds[side] - host.bounds[side]) > 1e-6) {
+      return [];
+    }
+    const alongKey = side === 'minX' || side === 'maxX' ? 'Z' : 'X';
+    const ends = [bounds[`min${alongKey}`], bounds[`max${alongKey}`]];
+    const soffits = ends.map((along) => hostEaveProfile(host, side, along))
+      .filter(Boolean)
+      .map(({ outline }) => Math.min(...outline.filter(([u]) => Math.abs(u - host.bounds[side]) < 1e-9).map(([, v]) => v)));
+    const bottom = soffits.length ? host.baseY + Math.min(...soffits) : plateY;
+    if (bottom >= plateY - 1e-9) {
+      return [];
+    }
+    const point = (along, y) => (alongKey === 'X' ? [along, y, bounds[side]] : [bounds[side], y, along]);
+    return polygonsToTriangles([[point(ends[0], bottom), point(ends[1], bottom), point(ends[1], plateY), point(ends[0], plateY)]]);
+  });
+  const structureMaterials = materialsFor(resolved, materials);
+  const parts = [
+    ['walls', [...wallFaces.values()].flat(), structureMaterials.wall],
+    ['header', headers, materials.wall],
+    ['ceiling', polygonsToTriangles([rectangle(plateY)]), structureMaterials.wall],
+    // on the ground the host's foundation top is the floor
+    ['floor', aboveGround ? polygonsToTriangles([rectangle(sillY)]) : [], materials.roof],
+    ['posts', openSidePosts(resolved, []), structureMaterials.wall],
+  ];
+  parts.forEach(([part, triangles, material]) => {
+    if (triangles.length) {
+      const mesh = new THREE.Mesh(trianglesToGeometry(triangles), material);
+      mesh.userData = {
+        structureId: resolved.id, recordId: resolved.recordId, structurePart: part, hostVolumeId: host.volumeId,
+      };
+      result.building.add(mesh);
+    }
+  });
+  result.structureFacades.push(structureFacade(resolved, wallFaces, [], []));
 }
 
 /**
@@ -904,7 +980,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
 
     const walls = new THREE.Mesh(createBoxWallGeometry(wallBounds, totalHeight), materials.wall);
     walls.position.y = foundationHeight;
-    walls.userData = { volumeId: volume.id };
+    walls.userData = { volumeId: volume.id, bodyPart: 'walls' };
     group.add(walls);
 
     const foundation = new THREE.Mesh(createBoxWallGeometry(wallBounds, foundationHeight), materials.foundation);
@@ -2971,6 +3047,7 @@ function addFacadePanels(group, footprint, layout, foundationHeight, config) {
         storyId: story.id,
         facadePanelId: facadePanel.id,
         material: materialKey,
+        bodyPart: 'facade-panel',
       };
       group.add(panel);
     });

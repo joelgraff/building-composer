@@ -42,6 +42,14 @@ export const STRUCTURE_UI_PRESETS = Object.freeze([
       wrap: { end: 'right', length: 4 },
     },
   },
+  {
+    key: 'integral-porch',
+    label: 'Integral porch (recessed under the roof)',
+    fields: {
+      kind: 'porch', mount: 'recess', setback: 0, depth: 2.4, width: 3.6, baseHeight: 'ground', wallHeight: 2.4,
+      roofType: 'flat', openSides: ['front'],
+    },
+  },
   { key: 'porch-on-roof', label: 'Porch on this roof', fields: { kind: 'porch' } },
   {
     key: 'sleeping-porch',

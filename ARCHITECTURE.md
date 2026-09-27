@@ -226,6 +226,10 @@ come out of the clip for every roof type). The rules that follow:
   piece per host face); its walls run down to the host wall top there, and
   knee walls close the attic around it.
 - A structure can stand on another; hosts are resolved first.
+- A recessed structure (`mount: 'recess'`: an integral porch, recessed
+  entry, or loggia) lives inside its host, under the host roof: the host's
+  walls are cut away across it, and it adds its own back and side walls,
+  ceiling, and posts at open corners.
 - A projecting porch reaching the end of its wall can wrap around the corner:
   it is built as two segments (past the corner, and back along the adjacent
   wall) under one hip roof that turns the corner, with no walls, posts, or

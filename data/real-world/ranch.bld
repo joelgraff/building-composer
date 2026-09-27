@@ -1,7 +1,7 @@
 {
   "format": "building-composer",
   "version": 1,
-  "note": "A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and a recessed entry porch in the ell.",
+  "note": "A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and an entry recessed under the roof in the ell.",
   "footprint": [
     [
       -10.21875,
@@ -54,25 +54,21 @@
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
       "hostSide": "maxZ",
-      "offset": 3,
-      "width": 4,
-      "setback": -1.8,
-      "mount": "join",
+      "offset": 1.5,
+      "width": 3,
+      "setback": 0,
+      "mount": "recess",
       "depth": 1.8,
       "wallHeight": 2.4,
       "baseHeight": "ground",
       "support": "auto",
       "openSides": [
-        "front",
-        "left"
+        "front"
       ],
       "inset": 0,
-      "roofType": "shed",
+      "roofType": "flat",
       "ridge": "perpendicular",
-      "roofShape": {
-        "mode": "slope",
-        "pitchRise": 2
-      },
+      "roofShape": null,
       "join": "auto",
       "wrap": null,
       "eaves": {},

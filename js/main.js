@@ -1423,6 +1423,7 @@ function renderStructurePanel() {
 
 function structureEditorHtml(structure) {
   const through = structure.mount === 'through';
+  const recess = structure.mount === 'recess';
   const standing = structure.baseHeight !== null;
   const baseMode = structure.baseHeight === null ? 'roof' : structure.baseHeight === 'ground' ? 'ground' : 'height';
   const parts = [
@@ -1433,45 +1434,57 @@ function structureEditorHtml(structure) {
     // a porch stands on its base; only a structure without one joins or rises through the roof
     parts.push(selectField('Meets the roof', 'mount', [['join', 'Joins one slope (a dormer)'], ['through', 'Rises through it (a cupola)']], structure.mount));
   }
+  if (standing) {
+    // an integral porch is cut into the house under its roof
+    parts.push(checkField('Recessed into the house, under its roof', 'recess', recess));
+  }
   parts.push(numberField('Offset along the side', 'offset', structure.offset));
   parts.push(numberField('Width', 'width', structure.width));
-  parts.push(checkField('Centered across the roof', 'setbackCenter', structure.setback === 'center'));
-  parts.push(numberField('Setback from the wall (negative projects)', 'setback', structure.setback === 'center' ? null : structure.setback, { disabled: structure.setback === 'center' }));
-  parts.push(checkField('Depth runs back to the roof', 'depthAuto', structure.depth === null));
-  parts.push(numberField('Depth', 'depth', structure.depth, { disabled: structure.depth === null }));
-  parts.push(numberField('Wall height', 'wallHeight', structure.wallHeight));
+  if (!recess) {
+    parts.push(checkField('Centered across the roof', 'setbackCenter', structure.setback === 'center'));
+    parts.push(numberField('Setback from the wall (negative projects)', 'setback', structure.setback === 'center' ? null : structure.setback, { disabled: structure.setback === 'center' }));
+    parts.push(checkField('Depth runs back to the roof', 'depthAuto', structure.depth === null));
+  }
+  parts.push(numberField(recess ? 'Depth into the house' : 'Depth', 'depth', structure.depth, { disabled: structure.depth === null }));
+  parts.push(numberField(recess ? 'Ceiling height' : 'Wall height', 'wallHeight', structure.wallHeight));
   if (!through) {
     parts.push(selectField('Base', 'baseMode', [['roof', 'Rises out of the roof (a dormer)'], ['ground', 'Stands on the ground (a porch)'], ['height', 'Stands at a height above the host plate (a porch)']], baseMode));
     if (baseMode === 'height') {
       parts.push(numberField('Base height above the host plate', 'baseHeight', structure.baseHeight));
     }
-    parts.push(numberField('Recessed front (inset)', 'inset', structure.inset));
+    if (!recess) {
+      parts.push(numberField('Recessed front (inset)', 'inset', structure.inset));
+    }
   }
-  parts.push(selectField('Roof', 'roofType', STRUCTURE_ROOF_OPTIONS, structure.roofType));
-  // a dormer's ridge always runs into the roof
-  if ((through || standing) && (structure.roofType === 'gable' || structure.roofType === 'hip')) {
-    parts.push(selectField('Ridge', 'ridge', [['perpendicular', 'Runs into the roof'], ['parallel', 'Runs along the side']], structure.ridge));
-  }
-  if (structure.roofType !== 'flat') {
-    parts.push(numberField('Roof pitch (rise per 12; empty for the building\'s)', 'pitch', structure.roofShape?.mode === 'slope' ? structure.roofShape.pitchRise : null, { length: false, step: 1, placeholder: 'building' }));
+  if (!recess) {
+    parts.push(selectField('Roof', 'roofType', STRUCTURE_ROOF_OPTIONS, structure.roofType));
+    // a dormer's ridge always runs into the roof
+    if ((through || standing) && (structure.roofType === 'gable' || structure.roofType === 'hip')) {
+      parts.push(selectField('Ridge', 'ridge', [['perpendicular', 'Runs into the roof'], ['parallel', 'Runs along the side']], structure.ridge));
+    }
+    if (structure.roofType !== 'flat') {
+      parts.push(numberField('Roof pitch (rise per 12; empty for the building\'s)', 'pitch', structure.roofShape?.mode === 'slope' ? structure.roofShape.pitchRise : null, { length: false, step: 1, placeholder: 'building' }));
+    }
   }
   if (!through && !standing) {
     parts.push(selectField('At the ridge', 'join', [['auto', 'Lower the roof only if it would pass the ridge'], ['snap-ridge', 'Always meet the ridge']], structure.join));
   }
-  if (standing && Number.isFinite(structure.setback) && structure.setback < 0) {
+  if (!recess && standing && Number.isFinite(structure.setback) && structure.setback < 0) {
     // a porch past its wall can turn the corner at either end
     parts.push(selectField('Wraps around the corner', 'wrapEnd', [['', 'No'], ['left', 'At the left end'], ['right', 'At the right end']], structure.wrap?.end ?? ''));
     if (structure.wrap) {
       parts.push(numberField('Length along the side wall', 'wrapLength', structure.wrap.length));
     }
   }
-  if (Number.isFinite(structure.setback) && structure.setback < 0) {
+  if (!recess && Number.isFinite(structure.setback) && structure.setback < 0) {
     parts.push(selectField('Held up by', 'support', STRUCTURE_SUPPORTS.map((key) => [key, key === 'auto' ? 'Automatic' : `${key[0].toUpperCase()}${key.slice(1)}`]), structure.support));
   }
   parts.push('<div class="field"><label>Open sides</label>'
     + STRUCTURE_WALLS.map((wall) => checkField(wall, `open:${wall}`, structure.openSides.includes(wall))).join('') + '</div>');
   parts.push(selectField('Wall material', 'wallMaterial', MATERIAL_OPTIONS, structure.materials?.wall ?? ''));
-  parts.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
+  if (!recess) {
+    parts.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
+  }
   parts.push('<div class="actions"><button data-action="delete">Delete</button></div>');
   return parts.join('');
 }
@@ -1565,7 +1578,19 @@ structureEditor.addEventListener('change', (event) => {
       case 'depthAuto': edited.depth = input.checked ? null : 2.4; break;
       case 'depth': edited.depth = Math.max(0.1, length()); break;
       case 'wallHeight': edited.wallHeight = Math.max(0.1, length()); break;
-      case 'baseMode': edited.baseHeight = { roof: null, ground: 'ground', height: 0 }[input.value]; break;
+      case 'baseMode':
+        edited.baseHeight = { roof: null, ground: 'ground', height: 0 }[input.value];
+        // only a structure on a base can be recessed
+        if (edited.baseHeight === null && edited.mount === 'recess') {
+          edited.mount = 'join';
+        }
+        break;
+      case 'recess':
+        edited.mount = input.checked ? 'recess' : 'join';
+        if (input.checked) {
+          Object.assign(edited, { setback: 0, depth: Number.isFinite(edited.depth) ? edited.depth : 2.4, wrap: null, inset: 0 });
+        }
+        break;
       case 'baseHeight': edited.baseHeight = length(); break;
       case 'inset': edited.inset = Math.max(0, length()); break;
       case 'roofType': edited.roofType = input.value; break;

@@ -63,10 +63,9 @@
   },
   "bungalow": {
     "title": "Craftsman bungalow",
-    "note": "A story-and-a-half side-gabled bungalow of the 1910s-20s: a broad low roof on deep eaves, a wide shed dormer, and a front-gabled porch on tapered piers.",
+    "note": "A story-and-a-half side-gabled bungalow of the 1910s-20s: a broad low roof on deep eaves, a wide shed dormer, and an integral porch recessed into the corner under the main roof.",
     "front": "maxZ",
     "gaps": [
-      "Many bungalows have an integral porch: the main roof carries on over a porch recessed into the footprint. A recess at ground level would need a notch in the footprint with the roof running on over it; only dormers can be recessed.",
       "Exposed rafter tails, knee braces, and tapered piers are facade work."
     ],
     "issues": [],
@@ -120,10 +119,9 @@
   },
   "ranch": {
     "title": "L-shaped ranch (1950s)",
-    "note": "A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and a recessed entry porch in the ell.",
+    "note": "A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and an entry recessed under the roof in the ell.",
     "front": "maxZ",
     "gaps": [
-      "On a real ranch the main roof usually carries on over the entry porch; here the porch has its own shed roof tucked under the eave.",
       "The continuous (straight-skeleton) hip has no eave overhang or fascia, so the low, deep eaves that define a ranch are missing.",
       "A garage has a lower floor (at grade) than the house; floor levels are building-wide."
     ],

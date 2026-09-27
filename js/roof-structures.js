@@ -230,8 +230,12 @@ export function zoneRoofHeight(zone, point) {
 // ---------------------------------------------------------------------------
 
 export const STRUCTURE_KINDS = ['dormer', 'wall-dormer', 'recessed-porch', 'porch', 'cupola'];
-/** How a structure meets the roof: joining one face (a dormer), or rising through it (a cupola). */
-export const STRUCTURE_MOUNTS = ['join', 'through'];
+/**
+ * How a structure meets the roof: joining one face (a dormer), rising
+ * through it (a cupola), or recessed into the walls under it (an integral
+ * porch, see resolveRecess).
+ */
+export const STRUCTURE_MOUNTS = ['join', 'through', 'recess'];
 export const STRUCTURE_WALLS = ['front', 'left', 'right', 'back'];
 /** What holds up the part of a structure projecting past its host wall (see resolveRoofStructure). */
 export const STRUCTURE_SUPPORTS = ['auto', 'none', 'deck', 'posts', 'porch', 'brackets', 'enclosed'];
@@ -640,6 +644,11 @@ export function resolveRoofStructure(structure, host, config = {}) {
     ? highestHostRoof(host, bounds)
     : hostFaceY(pointOn(frame, alongCenter, front));
   const plateY = sillY + structure.wallHeight;
+  if (structure.mount === 'recess') {
+    return resolveRecess(structure, host, {
+      frame, bounds, along, front, back, wall, setback, sillY, plateY, errors, warnings, fail,
+    });
+  }
 
   const projecting = setback < -GEOMETRY_EPSILON;
   const groundLevel = Number.isFinite(host.foundationTopY) && sillY <= host.foundationTopY + GEOMETRY_EPSILON;
@@ -847,12 +856,95 @@ export function resolveRoofStructure(structure, host, config = {}) {
 }
 
 /**
+ * A structure recessed into its host's walls under the host roof (an
+ * integral porch, a recessed entry, an upper-story loggia): a box from its
+ * floor to its ceiling, open at the host wall. The host's walls are cut away
+ * across it and the host roof and eave run on over it; it adds its own back
+ * and closed side walls, a ceiling, posts at its open corners, and a floor
+ * when above the ground. It stands on a base (`baseHeight`), has an explicit
+ * depth, no setback, and must fit inside the host below its wall top.
+ */
+function resolveRecess(structure, host, {
+  frame, bounds, along, front, back, wall, setback, errors, warnings, fail, ...levels
+}) {
+  if (structure.baseHeight === null) {
+    return fail('recess-needs-base', 'A recessed porch needs a floor level: the ground, or a height below the host plate.');
+  }
+  // a floor level inside the walls is measured from their top (the plate), not the lifted roof
+  const sillY = structure.baseHeight === 'ground' || !Number.isFinite(host.wallTopY)
+    ? levels.sillY
+    : host.wallTopY + structure.baseHeight;
+  const plateY = sillY + structure.wallHeight;
+  if (structure.depth === null || Math.abs(setback) > GEOMETRY_EPSILON) {
+    return fail('recess-placement', 'A recessed porch starts at the host wall (no setback) and needs an explicit depth.');
+  }
+  const [inwardMinKey, inwardMaxKey] = axisKeys(frame.inward);
+  const farWall = host.bounds[frame.sign > 0 ? inwardMaxKey : inwardMinKey];
+  if (frame.sign * (back - farWall) > GEOMETRY_EPSILON) {
+    return fail('outside-host', `The recess runs past the far wall of ${host.volumeId}.`);
+  }
+  if (plateY > host.wallTopY + GEOMETRY_EPSILON) {
+    return fail('recess-too-tall', `The recess's ceiling is above ${host.volumeId}'s wall top; it must stay under the roof.`);
+  }
+  if (Number.isFinite(host.foundationTopY) && sillY < host.foundationTopY - GEOMETRY_EPSILON) {
+    return fail('recess-too-low', 'The recess\'s floor is below the host\'s ground floor.');
+  }
+  // the front is open; a side on the host's outside wall (a corner recess) may be too
+  const openSides = [...new Set(['front', ...structure.openSides])];
+  return {
+    resolved: {
+      id: structure.id,
+      recordId: structure.id,
+      kind: structure.kind,
+      hostVolumeId: host.volumeId,
+      hostSide: structure.hostSide,
+      frame,
+      bounds,
+      along,
+      front,
+      back,
+      sillY,
+      plateY,
+      baseY: plateY,
+      roofType: 'flat',
+      roofHeight: 0,
+      planes: [],
+      slabThickness: 0,
+      topY: plateY,
+      hostContact: [],
+      removedRoof: [],
+      flush: false,
+      through: false,
+      recess: true,
+      setback: 0,
+      projecting: false,
+      support: 'none',
+      wallLine: wall,
+      foundationTopY: host.foundationTopY,
+      hostStructureId: structure.hostStructureId,
+      standing: true,
+      openSides,
+      seamSides: [],
+      inset: 0,
+      eaves: structure.eaves,
+      materials: structure.materials,
+    },
+    errors,
+    warnings,
+  };
+}
+
+/**
  * Where a structure actually stands, in plan, as convex polygons: the host
  * roof it removes, plus any part projecting past the host wall. Its buried
  * back (running on under the host roof to the ridge) is clipped away when it
  * is built, so it does not count.
  */
 function occupiedPlan(resolved, host) {
+  if (resolved.recess) {
+    // under the host roof, below anything standing on it
+    return [];
+  }
   const { frame, bounds } = resolved;
   const wall = host.bounds[resolved.hostSide];
   const rectangle = [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]];
@@ -918,6 +1010,18 @@ export function validateRoofStructures(structures, roofZones, config = {}, { des
         errors: [error('host-missing', `Host structure ${structure.hostStructureId} does not exist, could not be built, or stands on this one.`)],
         warnings: [],
       };
+    if (result.resolved?.recess) {
+      // it opens onto the outside: not a wall shared with another volume
+      const { frame, bounds, front, along } = result.resolved;
+      const outside = (a) => (frame.inward === 'x' ? [front - frame.sign * 0.01, a] : [a, front - frame.sign * 0.01]);
+      const probes = [along[0] + 0.01, (along[0] + along[1]) / 2, along[1] - 0.01].map(outside);
+      const blocking = [...zones.values()].find((zone) => zone.volumeId !== structure.hostVolumeId && probes.some(([x, z]) => (
+        x > zone.bounds.minX && x < zone.bounds.maxX && z > zone.bounds.minZ && z < zone.bounds.maxZ)));
+      if (blocking) {
+        result.errors.push(error('recess-not-outside', `The recess opens into ${blocking.volumeId}; it must open on an outside wall.`));
+        result.resolved = null;
+      }
+    }
     if (result.resolved) {
       const hostId = structure.hostStructureId ?? structure.hostVolumeId;
       const plan = occupiedPlan(result.resolved, host);
