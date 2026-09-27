@@ -424,7 +424,7 @@ The exposed part of a partly shared eave side gets its own eave strip (top, fasc
 
 ## Roof-borne structures (dormers, raised porches) — plan
 
-Status: Phases 0–5 (with 4a–4f) complete; 6–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+Status: Phases 0–6 (with 4a–4f) complete; 7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
 
 ### Core idea
 
@@ -755,13 +755,23 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
      - structure materials.
    - Mutation checks: flipping u, or unclipping railings, fails the tests.
    - Windows, doors, trim, and railing geometry themselves are Tasks 6–7; these are the surfaces they target.
-6. **UI and picking.**
-   - Selected-element picker entries for structures.
-   - An "Add roof structure" action on a selected volume, with presets: gable dormer, shed dormer, hip dormer, flat dormer, wall dormer, sleeping porch.
-   - Controls: side, offset, width, setback, wall height, base, open sides, and roof type/ridge/pitch/rise/join, reusing the roof-zone and eave controls keyed by structure id.
-   - Pick targets and the amber/cyan cues come from the structure's clipped solid. Top-view outline.
-   - Validation errors appear inline.
-   - GLB export includes structures. Pick targets stay editor-only.
+6. **UI and picking.** Complete.
+   - A **Roof structures** panel:
+     - **Add**: presets from `STRUCTURE_UI_PRESETS` in the new `js/structure-ui.js`: gable, shed, and hip dormers, wall dormer, recessed porch, ground porch, upper porch on posts, porch on this roof, sleeping porch on the selected porch, cupola, and widow's walk. Each goes on the selected volume (or the first), facing the chosen side; the sleeping porch goes on the selected porch.
+     - **List**: the building's structures, each with its error or warning inline in red.
+     - **Editor** for the selected structure, showing only the fields that apply: facing; joins or rises through (not for porches); fill and margin; offset, width, centered or setback, auto or fixed depth; wall or railing height; base (roof, ground, or a height); inset; roof type (including none); ridge; pitch (empty for the building's); ridge join; support (when projecting); open sides; wall and roof materials; and Delete, which also deletes anything standing on it.
+     - Lengths are in the display units. Edits normalize the records and rebuild.
+   - Picking: structures are picked on their own meshes, whichever of a volume or structure is nearest under the pointer. The hover cue (amber) and selection cue (cyan) are editor-only boxes around the structure's meshes, and show in the top view too. The selected-element label names the selected structure (`structureLabel`). Clicking a volume returns to editing it.
+   - Roof settings: the Volume Configuration panel shows a mansard's or gambrel's break height and lower and upper pitches (hiding the single pitch and rise), and a hip's flat deck height. These edit the selected volume or the building defaults, with the type's defaults as fallbacks (`TWO_SLOPE_DEFAULTS`, now exported). A volume's shape settings are merged on edit, not replaced, so a break height survives a pitch change.
+   - Export and save: GLB export includes structure meshes and leaves out the cues (all editor-only); `.bld` saves the structures.
+   - Tests: `tests/structure_ui.test.js` checks that every preset builds without errors on a two-story house (the cupola on a gable, the widow's walk on a decked hip), that an upper porch stands one story down on posts, that the sleeping porch takes the whole selected porch, that ids are unique, and the labels.
+   - Checked in the browser:
+     - adding, editing, and deleting structures;
+     - inline refusal messages;
+     - hover and click picking of structures and volumes;
+     - the mansard and deck fields;
+     - saving stacked porches;
+     - a GLB with 27 meshes and no cue lines.
 7. **Docs.** Update ARCHITECTURE.md (§3 data model, §4 addressing, §5 envelope modifiers, and a "Roof structures" roof-shell note) and the README feature list.
 
 ### Risks and decisions

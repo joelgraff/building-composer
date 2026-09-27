@@ -2362,7 +2362,7 @@ export function createShedRoofGeometry(bounds, config) {
 }
 
 /** Defaults for the two-slope roofs, per type (pitches are rise per 12 run). */
-const TWO_SLOPE_DEFAULTS = Object.freeze({
+export const TWO_SLOPE_DEFAULTS = Object.freeze({
   mansard: Object.freeze({ breakHeight: 2.4, lowerPitchRise: 30, upperPitchRise: 4 }),
   gambrel: Object.freeze({ breakHeight: 2.4, lowerPitchRise: 20, upperPitchRise: 6 }),
 });

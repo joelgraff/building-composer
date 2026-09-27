@@ -44,7 +44,7 @@ npm test
 
 - **Roof System & Variants**:
   - Roof forms supported: **Flat**, **Gable**, **Hip**, **Shed**, **Mansard**, and **Gambrel**.
-  - Mansard and gambrel roofs: a steep lower slope to a break (curb) and a shallow or flat upper slope, with a horizontal cornice at the eaves; a gambrel has gable ends with rakes following its broken profile. Break height and both pitches are building defaults any volume can override.
+  - Mansard and gambrel roofs: a steep lower slope to a break (curb) and a shallow or flat upper slope, with a horizontal cornice at the eaves; a gambrel has gable ends with rakes following its broken profile. Break height and both pitches are building defaults any volume can override (Volume Configuration panel).
   - A hip roof can be cut flat at a deck height, giving the flat top a widow's walk stands on.
   - Dual control authority: edit roof pitch ratio (rise per 12 run) or geometric roof rise.
   - Straight skeleton WebAssembly solver (`straight-skeleton` CGAL library) for multi-volume equal-height hip roofs, with automatic fall-through to gridded distance fields.
@@ -57,7 +57,7 @@ npm test
   - Flat or roof-parallel soffits (eaves default flat, rakes default parallel), with boxed corners where they meet.
   - Every setting is a building default that any volume can override; a main roof keeps its eave where a gable merges into it.
 
-- **Roof Structures** (dormers and porches; no editor UI yet, so they are loaded from `.bld` files, see `data/examples/`):
+- **Roof Structures** (dormers, porches, cupolas, widow's walks; added and edited in the **Roof structures** panel, picked in the 3D view; examples in `data/examples/`):
   - **Dormers** rising out of one roof slope, with gable, hip, shed, or flat roofs. Their walls stand clear of the roof, their roofs die into it along exact valleys, and the host roof is cut to meet them as one closed shell. A roof that would pass the host ridge is lowered to it.
   - **Wall dormers** (zero setback) carry the main wall up through the eave, which stops and is capped on either side.
   - **Recessed porches**: a dormer, usually set up the roof above an intact strip of roof and eave, whose front wall is set back (`inset`), leaving an open porch with a floor, side walls, and the dormer roof over it.
@@ -101,7 +101,8 @@ building-composer/
 │   ├── main.js            # UI controller, scene management, dual viewport rendering
 │   ├── materials.js       # Shared PBR material definitions and palette presets
 │   ├── roof-planes.js     # Roof eave planes and their heights (shared by roofs and structures)
-│   └── roof-structures.js # Dormer/porch records, placement, validation, and convex-solid clipping
+│   ├── roof-structures.js # Dormer/porch records, placement, validation, and convex-solid clipping
+│   └── structure-ui.js    # Roof structure presets and labels for the editor
 ├── tests/
 │   ├── eaves.test.js      # Overhang, fascia/soffit, and closure tests
 │   ├── extrusion.test.js  # Massing, extrusion, and NaN validation tests
@@ -112,6 +113,9 @@ building-composer/
 │   ├── roof_resolver.test.js # Roof merge, planarity, and story-count tests
 │   ├── roof_structures.test.js # Structure records, placement, validation, clipping, persistence
 │   ├── roof_structure_geometry.test.js # Dormer and porch geometry: closure, cuts, supports, stacking
+│   ├── structure_facades.test.js # Roof structure wall runs, stories, railing runs, materials
+│   ├── structure_ui.test.js # Roof structure editor presets and labels
+│   └── two_slope_roofs.test.js # Mansard, gambrel, and decked hip roofs; widow's walks
 ├── index.html             # App shell, toolbar, sidebar panels, and viewport canvases
 ├── ARCHITECTURE.md        # Architectural specification and data model
 └── IMPLEMENTATION_PLAN.md # Milestone roadmap and execution log

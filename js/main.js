@@ -1,7 +1,11 @@
 import * as THREE from '../node_modules/three/build/three.module.js';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import { validateFootprint, normalizeFootprint, computeFootprintMetrics } from './footprint.js';
-import { createBuildingFromFootprint, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder } from './extrusion.js';
+import {
+  createBuildingFromFootprint, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS,
+} from './extrusion.js';
+import { normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS } from './roof-structures.js';
+import { STRUCTURE_UI_PRESETS, newRoofStructure, structureLabel } from './structure-ui.js';
 import {
   computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades,
 } from './facade.js';
@@ -56,6 +60,19 @@ const loadBtn = document.getElementById('load-btn');
 const saveBtn = document.getElementById('save-btn');
 const exportBtn = document.getElementById('export-btn');
 const resetViewBtn = document.getElementById('reset-view-btn');
+const roofPitchField = document.getElementById('roof-pitch-field');
+const roofHeightField = document.getElementById('roof-height-field');
+const twoSlopeFields = document.getElementById('two-slope-fields');
+const roofBreakHeightInput = document.getElementById('roof-break-height');
+const roofLowerPitchInput = document.getElementById('roof-lower-pitch');
+const roofUpperPitchInput = document.getElementById('roof-upper-pitch');
+const roofDeckField = document.getElementById('roof-deck-field');
+const roofDeckHeightInput = document.getElementById('roof-deck-height');
+const structurePresetSelect = document.getElementById('structure-preset');
+const structureSideSelect = document.getElementById('structure-side');
+const structureAddBtn = document.getElementById('structure-add-btn');
+const structureList = document.getElementById('structure-list');
+const structureEditor = document.getElementById('structure-editor');
 
 const viewportCanvas = document.getElementById('viewport');
 const topViewCanvas = document.getElementById('top-view');
@@ -112,6 +129,11 @@ let activeLayout = null;
 let activeFoundationHeight = 0;
 let hoveredVolumeId = null;
 let pointerDown = null;
+// roof structures: the one being edited, what the last build made of each, and their meshes (for picking)
+let selectedStructureId = null;
+let hoveredStructureId = null;
+let activeStructureEntries = [];
+let structureMeshes = [];
 
 let loadedFootprint = null;
 let activeBuildingSize = new THREE.Vector3(30, 0, 30);
@@ -183,6 +205,9 @@ function syncUnitLabels() {
   roofEaveUnit.textContent = label;
   roofRakeUnit.textContent = label;
   roofFasciaUnit.textContent = label;
+  document.querySelectorAll('.unit-label').forEach((span) => {
+    span.textContent = label;
+  });
 }
 
 function syncLengthInputs() {
@@ -352,9 +377,15 @@ function renderElementSelector(layout) {
   }
   elementSelect.innerHTML = options.join('');
   elementSelect.value = selectedElementId;
-  selectedElementLabel.textContent = selectedElementId === 'building-defaults'
-    ? 'Building defaults'
-    : `Volume: ${selectedElementId.replace('-', ' ')}`;
+  const structure = selectedStructureId ? structureRecord(selectedStructureId) : null;
+  if (selectedStructureId && !structure) {
+    selectedStructureId = null;
+  }
+  selectedElementLabel.textContent = structure
+    ? `Roof structure: ${structureLabel(structure)}`
+    : selectedElementId === 'building-defaults'
+      ? 'Building defaults'
+      : `Volume: ${selectedElementId.replace('-', ' ')}`;
 }
 
 function selectedVolume(layout) {
@@ -381,6 +412,7 @@ function syncSelectedRoofZoneControls(layout) {
     syncVolumeRoofShapeInputs(volume);
   }
   syncEaveInputs(volume && layout.volumes.length > 1 ? volume.id : null);
+  syncRoofShapeFields(roofType);
   roofConnectionField.style.display = canMerge ? '' : 'none';
   if (canMerge) {
     // Default to "standalone" only the first time this volume becomes
@@ -681,8 +713,20 @@ async function loadFootprint(footprintData, preserveView = true) {
     updateFacadeSummary(activeLayout);
   }
   activeFoundationHeight = foundationHeight;
+  activeStructureEntries = roofStructures;
+  structureMeshes = [];
+  building.traverse((child) => {
+    if (child.isMesh && child.userData?.structureId) {
+      structureMeshes.push(child);
+    }
+  });
   addVolumePickTargets(layout, foundationHeight);
-  renderSelectedVolumeHighlight(layout, foundationHeight);
+  if (selectedStructureId) {
+    renderStructureCue(selectedStructureId, 0x00a6b8, group);
+  } else {
+    renderSelectedVolumeHighlight(layout, foundationHeight);
+  }
+  renderStructurePanel();
   if (normalized.length === 4) {
     renderFootprintPreview(normalized);
   }
@@ -720,6 +764,7 @@ async function loadSampleFootprint() {
   modelConfig.volumeEaves = {};
   modelConfig.roofStructures = [];
   selectedElementId = 'building-defaults';
+  selectedStructureId = null;
   const presetFiles = {
     sample: 'sample_footprint.json',
     u: 'footprint_u.json',
@@ -796,24 +841,50 @@ function clearHoverCue() {
 }
 
 function updateHoveredVolume(event) {
-  if (!activeLayout || pickTargets.length === 0) {
+  if (!activeLayout || (pickTargets.length === 0 && structureMeshes.length === 0)) {
     return;
   }
   const rect = viewportCanvas.getBoundingClientRect();
   pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const hit = raycaster.intersectObjects(pickTargets, false)[0];
-  const volumeId = hit?.object.userData.volumeId ?? null;
-  if (volumeId === hoveredVolumeId) {
+  // the nearest of the volumes and the roof structures under the pointer
+  const hit = raycaster.intersectObjects([...pickTargets, ...structureMeshes], false)[0];
+  const structureId = hit?.object.userData.structureId ?? null;
+  const volumeId = structureId ? null : hit?.object.userData.volumeId ?? null;
+  if (volumeId === hoveredVolumeId && structureId === hoveredStructureId) {
     return;
   }
   hoveredVolumeId = volumeId;
+  hoveredStructureId = structureId;
   clearHoverCue();
+  if (structureId && structureId !== selectedStructureId) {
+    renderStructureCue(structureId, 0xf4b400, hoverGroup);
+  }
   const volume = activeLayout.volumes.find((candidate) => candidate.id === volumeId);
-  if (volume && volume.id !== selectedElementId) {
+  if (volume && (volume.id !== selectedElementId || selectedStructureId)) {
     renderVolumeCue(volume, activeFoundationHeight, 0xf4b400, 0.06, hoverGroup);
   }
-  viewportCanvas.style.cursor = volume ? 'pointer' : 'default';
+  viewportCanvas.style.cursor = volume || structureId ? 'pointer' : 'default';
+}
+
+/** A box around a roof structure's visible meshes, as a selection or hover cue. */
+function renderStructureCue(structureId, color, parent) {
+  const box = new THREE.Box3();
+  let found = false;
+  structureMeshes.forEach((mesh) => {
+    if (mesh.userData.structureId === structureId) {
+      box.expandByObject(mesh);
+      found = true;
+    }
+  });
+  if (!found) {
+    return;
+  }
+  const helper = new THREE.Box3Helper(box, color);
+  helper.material.depthTest = false;
+  helper.material.transparent = true;
+  helper.userData.editorOnly = true;
+  parent.add(helper);
 }
 
 function handleFileInput(event) {
@@ -830,6 +901,7 @@ function handleFileInput(event) {
   modelConfig.edgePitchOverrides = {};
   modelConfig.roofStructures = [];
   selectedElementId = 'building-defaults';
+  selectedStructureId = null;
 
   const reader = new FileReader();
   reader.onload = () => {
@@ -954,7 +1026,7 @@ roofPitchRiseInput.addEventListener('input', () => {
   const targetVolume = volumeShapeTarget();
   if (targetVolume) {
     const pitchRise = Math.max(1, Math.min(24, Math.round(Number(roofPitchRiseInput.value) || 1)));
-    modelConfig.volumeRoofShapes[targetVolume] = { mode: 'slope', pitchRise };
+    modelConfig.volumeRoofShapes[targetVolume] = { ...(modelConfig.volumeRoofShapes[targetVolume] ?? {}), mode: 'slope', pitchRise };
     if (loadedFootprint) {
       loadFootprint(loadedFootprint);
     }
@@ -974,7 +1046,7 @@ roofHeightInput.addEventListener('input', () => {
   const targetVolume = volumeShapeTarget();
   if (targetVolume) {
     const height = Math.max(0.1, (Number(roofHeightInput.value) || 0.1) / unitFactor());
-    modelConfig.volumeRoofShapes[targetVolume] = { mode: 'height', height };
+    modelConfig.volumeRoofShapes[targetVolume] = { ...(modelConfig.volumeRoofShapes[targetVolume] ?? {}), mode: 'height', height };
     if (loadedFootprint) {
       loadFootprint(loadedFootprint);
     }
@@ -1109,6 +1181,7 @@ resetViewBtn.addEventListener('click', () => {
 viewportCanvas.addEventListener('pointermove', updateHoveredVolume);
 viewportCanvas.addEventListener('pointerleave', () => {
   hoveredVolumeId = null;
+  hoveredStructureId = null;
   clearHoverCue();
   viewportCanvas.style.cursor = 'default';
 });
@@ -1121,12 +1194,313 @@ viewportCanvas.addEventListener('pointerup', (event) => {
     return;
   }
   pointerDown = null;
-  if (!hoveredVolumeId || hoveredVolumeId === selectedElementId) {
+  if (hoveredStructureId) {
+    if (hoveredStructureId !== selectedStructureId) {
+      selectedStructureId = hoveredStructureId;
+      loadFootprint(loadedFootprint);
+    }
     return;
   }
+  if (!hoveredVolumeId || (hoveredVolumeId === selectedElementId && !selectedStructureId)) {
+    return;
+  }
+  selectedStructureId = null;
   selectedElementId = hoveredVolumeId;
   elementSelect.value = selectedElementId;
   loadFootprint(loadedFootprint);
+});
+
+// --- Mansard, gambrel, and hip deck settings --------------------------------
+
+/**
+ * Shows the settings of the selected roof type: a mansard's or gambrel's
+ * break height and two pitches (in place of the single pitch and rise), and a
+ * hip's flat deck height. They edit the selected volume, or the building
+ * defaults (see volumeShapeTarget).
+ */
+function syncRoofShapeFields(roofType) {
+  const twoSlope = roofType === 'mansard' || roofType === 'gambrel';
+  twoSlopeFields.style.display = twoSlope ? '' : 'none';
+  roofPitchField.style.display = twoSlope ? 'none' : '';
+  roofHeightField.style.display = twoSlope ? 'none' : '';
+  roofDeckField.style.display = roofType === 'hip' ? '' : 'none';
+  const target = volumeShapeTarget();
+  const own = target ? modelConfig.volumeRoofShapes[target] ?? {} : {};
+  if (twoSlope) {
+    const defaults = TWO_SLOPE_DEFAULTS[roofType];
+    const pick = (key, buildingKey) => own[key] ?? modelConfig[buildingKey] ?? defaults[key];
+    roofBreakHeightInput.value = (pick('breakHeight', 'roofBreakHeight') * unitFactor()).toFixed(1);
+    roofLowerPitchInput.value = String(pick('lowerPitchRise', 'roofLowerPitchRise'));
+    roofUpperPitchInput.value = String(pick('upperPitchRise', 'roofUpperPitchRise'));
+  }
+  const deck = own.deckHeight ?? modelConfig.roofDeckHeight;
+  roofDeckHeightInput.value = Number.isFinite(deck) ? (deck * unitFactor()).toFixed(1) : '';
+}
+
+function setRoofShapeValue(key, buildingKey, value) {
+  const target = volumeShapeTarget();
+  if (target) {
+    const own = { ...(modelConfig.volumeRoofShapes[target] ?? {}) };
+    if (value === undefined) {
+      delete own[key];
+    } else {
+      own[key] = value;
+    }
+    modelConfig.volumeRoofShapes[target] = own;
+  } else {
+    modelConfig[buildingKey] = value;
+  }
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+}
+
+roofBreakHeightInput.addEventListener('change', () => {
+  setRoofShapeValue('breakHeight', 'roofBreakHeight', Math.max(0.1, (Number(roofBreakHeightInput.value) || 0.1) / unitFactor()));
+});
+roofLowerPitchInput.addEventListener('change', () => {
+  setRoofShapeValue('lowerPitchRise', 'roofLowerPitchRise', Math.max(1, Number(roofLowerPitchInput.value) || 1));
+});
+roofUpperPitchInput.addEventListener('change', () => {
+  setRoofShapeValue('upperPitchRise', 'roofUpperPitchRise', Math.max(0, Number(roofUpperPitchInput.value) || 0));
+});
+roofDeckHeightInput.addEventListener('change', () => {
+  const value = Number(roofDeckHeightInput.value);
+  setRoofShapeValue('deckHeight', 'roofDeckHeight', roofDeckHeightInput.value === '' || !(value > 0) ? undefined : value / unitFactor());
+});
+
+// --- Roof structures -----------------------------------------------------------
+
+const SIDE_OPTIONS = [['minZ', 'Z-min side'], ['maxZ', 'Z-max side'], ['minX', 'X-min side'], ['maxX', 'X-max side']];
+const STRUCTURE_ROOF_OPTIONS = [['gable', 'Gable'], ['hip', 'Hip'], ['shed', 'Shed'], ['flat', 'Flat'], ['none', 'None (a platform)']];
+const MATERIAL_OPTIONS = [['', 'Building default'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['metal', 'Metal'], ['stone', 'Stone']];
+
+function structureRecord(id) {
+  return modelConfig.roofStructures.find((structure) => structure.id === id) ?? null;
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function lengthText(meters) {
+  return meters === null || meters === undefined || !Number.isFinite(meters) ? '' : String(Number((meters * unitFactor()).toFixed(2)));
+}
+
+function optionsHtml(options, value) {
+  return options.map(([key, label]) => `<option value="${key}"${key === value ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
+}
+
+function numberField(label, field, value, { length = true, step = 0.1, disabled = false, placeholder = '' } = {}) {
+  const shown = length ? lengthText(value) : (value ?? '');
+  return `<div class="field"><label>${escapeHtml(label)}${length ? ` (${unitLabel()})` : ''}</label>`
+    + `<input type="number" data-field="${field}" step="${step}" value="${shown}"${disabled ? ' disabled' : ''}${placeholder ? ` placeholder="${placeholder}"` : ''} /></div>`;
+}
+
+function selectField(label, field, options, value) {
+  return `<div class="field"><label>${escapeHtml(label)}</label><select data-field="${field}">${optionsHtml(options, value)}</select></div>`;
+}
+
+function checkField(label, field, checked) {
+  return `<label class="field-inline" style="margin-bottom:8px;"><input type="checkbox" data-field="${field}"${checked ? ' checked' : ''} />${escapeHtml(label)}</label>`;
+}
+
+/** The "Add" menu, the list of the building's structures with how each built, and the selected one's editor. */
+function renderStructurePanel() {
+  if (!structurePresetSelect.options.length) {
+    structurePresetSelect.innerHTML = STRUCTURE_UI_PRESETS.map((preset) => `<option value="${preset.key}">${escapeHtml(preset.label)}</option>`).join('');
+  }
+  const selected = selectedStructureId ? structureRecord(selectedStructureId) : null;
+  [...structurePresetSelect.options].forEach((option) => {
+    const preset = STRUCTURE_UI_PRESETS.find((candidate) => candidate.key === option.value);
+    option.disabled = Boolean(preset?.onStructure) && !selected;
+  });
+  if (structurePresetSelect.selectedOptions[0]?.disabled) {
+    structurePresetSelect.value = STRUCTURE_UI_PRESETS[0].key;
+  }
+  const preset = STRUCTURE_UI_PRESETS.find((candidate) => candidate.key === structurePresetSelect.value);
+  const hostVolume = activeLayout ? selectedVolume(activeLayout) ?? activeLayout.volumes[0] : null;
+  structureSideSelect.disabled = Boolean(preset?.onStructure);
+  structureAddBtn.textContent = preset?.onStructure
+    ? `Add on ${selected?.id ?? 'the selected porch'}`
+    : `Add to ${hostVolume ? hostVolume.id.replace('-', ' ') : 'the building'}`;
+
+  structureList.innerHTML = modelConfig.roofStructures.length
+    ? modelConfig.roofStructures.map((structure) => {
+      const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
+      const problem = entry?.errors?.[0] ?? entry?.warnings?.[0];
+      const note = problem
+        ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(problem.message)}</span>`
+        : '';
+      return `<button class="structure-row${structure.id === selectedStructureId ? ' selected' : ''}" data-structure-id="${structure.id}">`
+        + `${escapeHtml(structure.id)}: ${escapeHtml(structureLabel(structure))}${note}</button>`;
+    }).join('')
+    : '<div style="color:var(--muted);">No roof structures. Pick one above and add it to the selected volume.</div>';
+
+  structureEditor.innerHTML = selected ? structureEditorHtml(selected) : '';
+}
+
+function structureEditorHtml(structure) {
+  const through = structure.mount === 'through';
+  const roofless = structure.roofType === 'none';
+  const standing = structure.baseHeight !== null;
+  const baseMode = structure.baseHeight === null ? 'roof' : structure.baseHeight === 'ground' ? 'ground' : 'height';
+  const parts = [
+    `<div style="margin:10px 0 8px; font-weight:700;">Editing ${escapeHtml(structure.id)}</div>`,
+    selectField('Facing', 'hostSide', SIDE_OPTIONS, structure.hostSide),
+  ];
+  if (!standing) {
+    // a porch stands on its base; only a structure without one joins or rises through the roof
+    parts.push(selectField('Meets the roof', 'mount', [['join', 'Joins one slope (a dormer)'], ['through', 'Rises through it (a cupola)']], structure.mount));
+  }
+  if (through) {
+    parts.push(checkField('Fill the flat roof top', 'fill', structure.fill));
+  }
+  if (structure.fill && through) {
+    parts.push(numberField('Margin', 'fillMargin', structure.fillMargin));
+  } else {
+    parts.push(numberField('Offset along the side', 'offset', structure.offset));
+    parts.push(numberField('Width', 'width', structure.width));
+    parts.push(checkField('Centered across the roof', 'setbackCenter', structure.setback === 'center'));
+    parts.push(numberField('Setback from the wall (negative projects)', 'setback', structure.setback === 'center' ? null : structure.setback, { disabled: structure.setback === 'center' }));
+    parts.push(checkField('Depth runs back to the roof', 'depthAuto', structure.depth === null));
+    parts.push(numberField('Depth', 'depth', structure.depth, { disabled: structure.depth === null }));
+  }
+  parts.push(numberField(roofless ? 'Railing height' : 'Wall height', 'wallHeight', structure.wallHeight));
+  if (!through) {
+    parts.push(selectField('Base', 'baseMode', [['roof', 'Rises out of the roof (a dormer)'], ['ground', 'Stands on the ground (a porch)'], ['height', 'Stands at a height above the host plate (a porch)']], baseMode));
+    if (baseMode === 'height') {
+      parts.push(numberField('Base height above the host plate', 'baseHeight', structure.baseHeight));
+    }
+    parts.push(numberField('Recessed front (inset)', 'inset', structure.inset));
+  }
+  parts.push(selectField('Roof', 'roofType', STRUCTURE_ROOF_OPTIONS, structure.roofType));
+  if (structure.roofType === 'gable' || structure.roofType === 'hip') {
+    parts.push(selectField('Ridge', 'ridge', [['perpendicular', 'Runs into the roof'], ['parallel', 'Runs along the side']], structure.ridge));
+  }
+  if (!['flat', 'none'].includes(structure.roofType)) {
+    parts.push(numberField('Roof pitch (rise per 12; empty for the building\'s)', 'pitch', structure.roofShape?.mode === 'slope' ? structure.roofShape.pitchRise : null, { length: false, step: 1, placeholder: 'building' }));
+  }
+  if (!through && !standing) {
+    parts.push(selectField('At the ridge', 'join', [['auto', 'Lower the roof only if it would pass the ridge'], ['snap-ridge', 'Always meet the ridge']], structure.join));
+  }
+  if (Number.isFinite(structure.setback) && structure.setback < 0) {
+    parts.push(selectField('Held up by', 'support', STRUCTURE_SUPPORTS.map((key) => [key, key === 'auto' ? 'Automatic' : `${key[0].toUpperCase()}${key.slice(1)}`]), structure.support));
+  }
+  parts.push('<div class="field"><label>Open sides</label>'
+    + STRUCTURE_WALLS.map((wall) => checkField(wall, `open:${wall}`, structure.openSides.includes(wall))).join('') + '</div>');
+  parts.push(selectField('Wall material', 'wallMaterial', MATERIAL_OPTIONS, structure.materials?.wall ?? ''));
+  if (!roofless) {
+    parts.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
+  }
+  parts.push('<div class="actions"><button data-action="delete">Delete</button></div>');
+  return parts.join('');
+}
+
+function rebuildWithStructures(structures) {
+  modelConfig.roofStructures = normalizeRoofStructures(structures);
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+}
+
+structurePresetSelect.addEventListener('change', renderStructurePanel);
+
+structureAddBtn.addEventListener('click', () => {
+  if (!activeLayout) {
+    setStatus('Load a footprint before adding roof structures.', 'error');
+    return;
+  }
+  const hostVolume = selectedVolume(activeLayout) ?? activeLayout.volumes[0];
+  const record = newRoofStructure(structurePresetSelect.value, {
+    hostVolumeId: hostVolume.id,
+    hostSide: structureSideSelect.value,
+    storyHeight: modelConfig.storyHeight,
+    hostStructure: selectedStructureId ? structureRecord(selectedStructureId) : undefined,
+  }, modelConfig.roofStructures);
+  if (!record) {
+    setStatus('Select the porch to stand it on first.', 'error');
+    return;
+  }
+  selectedStructureId = record.id;
+  rebuildWithStructures([...modelConfig.roofStructures, record]);
+});
+
+structureList.addEventListener('click', (event) => {
+  const row = event.target.closest('[data-structure-id]');
+  if (!row) {
+    return;
+  }
+  selectedStructureId = row.dataset.structureId === selectedStructureId ? null : row.dataset.structureId;
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
+
+structureEditor.addEventListener('click', (event) => {
+  if (!event.target.closest('[data-action="delete"]')) {
+    return;
+  }
+  // a structure goes with everything standing on it
+  const doomed = new Set([selectedStructureId]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    modelConfig.roofStructures.forEach((structure) => {
+      if (structure.hostStructureId && doomed.has(structure.hostStructureId) && !doomed.has(structure.id)) {
+        doomed.add(structure.id);
+        grew = true;
+      }
+    });
+  }
+  selectedStructureId = null;
+  rebuildWithStructures(modelConfig.roofStructures.filter((structure) => !doomed.has(structure.id)));
+});
+
+structureEditor.addEventListener('change', (event) => {
+  const input = event.target.closest('[data-field]');
+  const record = structureRecord(selectedStructureId);
+  if (!input || !record) {
+    return;
+  }
+  const edited = { ...record, materials: { ...record.materials } };
+  const length = () => (Number(input.value) || 0) / unitFactor();
+  const field = input.dataset.field;
+  if (field.startsWith('open:')) {
+    const wall = field.slice(5);
+    edited.openSides = input.checked ? [...new Set([...record.openSides, wall])] : record.openSides.filter((side) => side !== wall);
+  } else {
+    switch (field) {
+      case 'hostSide': edited.hostSide = input.value; break;
+      case 'mount': edited.mount = input.value; break;
+      case 'fill': edited.fill = input.checked; break;
+      case 'fillMargin': edited.fillMargin = Math.max(0, length()); break;
+      case 'offset': edited.offset = length(); break;
+      case 'width': edited.width = Math.max(0.1, length()); break;
+      case 'setbackCenter':
+        edited.setback = input.checked ? 'center' : 0;
+        if (input.checked && record.depth === null) {
+          edited.depth = record.width;
+        }
+        break;
+      case 'setback': edited.setback = length(); break;
+      case 'depthAuto': edited.depth = input.checked ? null : 2.4; break;
+      case 'depth': edited.depth = Math.max(0.1, length()); break;
+      case 'wallHeight': edited.wallHeight = Math.max(0.1, length()); break;
+      case 'baseMode': edited.baseHeight = { roof: null, ground: 'ground', height: 0 }[input.value]; break;
+      case 'baseHeight': edited.baseHeight = length(); break;
+      case 'inset': edited.inset = Math.max(0, length()); break;
+      case 'roofType': edited.roofType = input.value; break;
+      case 'ridge': edited.ridge = input.value; break;
+      case 'pitch': edited.roofShape = input.value === '' ? null : { mode: 'slope', pitchRise: Math.max(0, Number(input.value) || 0) }; break;
+      case 'join': edited.join = input.value; break;
+      case 'support': edited.support = input.value; break;
+      case 'wallMaterial': edited.materials.wall = input.value || undefined; break;
+      case 'roofMaterial': edited.materials.roof = input.value || undefined; break;
+      default: return;
+    }
+  }
+  rebuildWithStructures(modelConfig.roofStructures.map((structure) => (structure.id === record.id ? edited : structure)));
 });
 
 function resizeRenderer() {

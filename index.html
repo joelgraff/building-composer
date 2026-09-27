@@ -223,6 +223,42 @@
         font: inherit;
       }
 
+      .structure-row {
+        display: block;
+        width: 100%;
+        text-align: left;
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+
+      .structure-row.selected {
+        border-color: #00a6b8;
+        box-shadow: inset 3px 0 0 #00a6b8;
+      }
+
+      .structure-row .structure-note {
+        display: block;
+        font-weight: 400;
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+
+      .structure-row .structure-note.error {
+        color: #c0392b;
+      }
+
+      .field-inline {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      .field-inline input[type="checkbox"] {
+        width: auto;
+      }
+
       .status {
         margin-top: 18px;
         background: rgba(50, 107, 245, 0.08);
@@ -378,14 +414,32 @@
               <option value="z-max">High edge: Z-max</option>
             </select>
           </div>
-          <div class="field">
+          <div class="field" id="roof-pitch-field">
             <label for="roof-pitch-rise">Roof pitch rise (per 12 run)</label>
             <input id="roof-pitch-rise" type="number" min="1" max="24" step="1" value="6" />
             <div id="roof-pitch-display" style="font-size:0.8rem; color:var(--muted);">6:12 (approximately 26.6°)</div>
           </div>
-          <div class="field">
+          <div class="field" id="roof-height-field">
             <label for="roof-height">Roof rise (<span id="roof-height-unit">feet</span>)</label>
             <input id="roof-height" type="number" min="0.1" max="100" step="0.1" />
+          </div>
+          <div id="two-slope-fields" style="display:none;">
+            <div class="field">
+              <label for="roof-break-height">Break height (<span class="unit-label">feet</span>)</label>
+              <input id="roof-break-height" type="number" min="0.1" max="100" step="0.1" />
+            </div>
+            <div class="field">
+              <label for="roof-lower-pitch">Lower slope pitch (rise per 12 run)</label>
+              <input id="roof-lower-pitch" type="number" min="1" max="72" step="1" />
+            </div>
+            <div class="field">
+              <label for="roof-upper-pitch">Upper slope pitch (rise per 12 run; 0 for a flat top)</label>
+              <input id="roof-upper-pitch" type="number" min="0" max="24" step="1" />
+            </div>
+          </div>
+          <div class="field" id="roof-deck-field" style="display:none;">
+            <label for="roof-deck-height">Flat deck height (<span class="unit-label">feet</span>; empty for none)</label>
+            <input id="roof-deck-height" type="number" min="0" max="100" step="0.1" placeholder="none" />
           </div>
           <div class="field">
             <label for="roof-eave-depth">Eave depth (<span id="roof-eave-unit">feet</span>)</label>
@@ -431,6 +485,28 @@
             Selected volume massing
           </div>
           <div id="volume-controls"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Roof structures</h3>
+          <div class="field">
+            <label for="structure-preset">Add</label>
+            <select id="structure-preset"></select>
+          </div>
+          <div class="field">
+            <label for="structure-side">Facing</label>
+            <select id="structure-side">
+              <option value="minZ">Z-min side</option>
+              <option value="maxZ">Z-max side</option>
+              <option value="minX">X-min side</option>
+              <option value="maxX">X-max side</option>
+            </select>
+          </div>
+          <div class="actions" style="margin-bottom:10px;">
+            <button id="structure-add-btn">Add</button>
+          </div>
+          <div id="structure-list" style="font-size:0.85rem; line-height:1.5;"></div>
+          <div id="structure-editor"></div>
         </div>
 
         <details class="advanced-panel" open>

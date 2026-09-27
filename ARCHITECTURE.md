@@ -133,7 +133,11 @@ clutter. Massing volumes and roof zones are currently a deliberate one-to-one
 pair; separate roof-zone partitioning is deferred. Volumes are also direct
 manipulation targets in the 3D view: hovering highlights the volume and its
 roof perimeter in amber, while clicking makes it the selected cyan target and
-synchronizes the property controls.
+synchronizes the property controls. Roof structures are picked the same way on
+their own meshes (the nearest of a volume or structure wins), and edited in the
+**Roof structures** panel: add from presets onto the selected volume, see each
+structure's validation inline, and edit the selected one's placement, base,
+roof, open sides, support, and materials.
 
 **Roof shell connections.** Every roof must form a closed shell: boundaries
 that do not connect to another roof face receive fascia, gable-end, or vertical
