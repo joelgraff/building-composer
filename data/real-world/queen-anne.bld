@@ -60,6 +60,7 @@
   "volumeRoofConnections": {
     "volume-1": "merge-plane"
   },
+  "volumeKneeWalls": {},
   "roofStructures": [
     {
       "id": "structure-1",

@@ -61,12 +61,15 @@ export function createBuildingFromFootprint(footprint, config = {}) {
 
   const volumes = config.volumes ?? [];
   const overrides = config.volumeStoryOverrides ?? {};
+  const buildingWallHeight = volumeWallHeight(null, config);
   const hasVolumeOverrides = volumes.length > 1
-    && volumes.some((volume) => overrides[volume.id] !== undefined && overrides[volume.id] !== storyCount);
+    && volumes.some((volume) => Math.abs(volumeWallHeight(volume.id, config) - buildingWallHeight) > 1e-9);
 
   if (hasVolumeOverrides) {
     return withStructuresAndWalks(createMultiVolumeBuilding(volumes, overrides, {
       wallMaterial: config.wallMaterial,
+      kneeWallHeight: config.kneeWallHeight,
+      volumeKneeWalls: config.volumeKneeWalls,
       storyCount, storyHeight, foundationDepth, roofEaveDepth, roofType, roofHeight, roofPitchRise, roofPitchRun, roofHeightMode: config.roofHeightMode, volumeRidgeDirections: config.volumeRidgeDirections, volumeRoofTypes: config.volumeRoofTypes, volumeRoofConnections: config.volumeRoofConnections, volumeRoofShapes: config.volumeRoofShapes,
       ...pickEaveConfig({ ...config, roofEaveDepth }),
     }), config);
@@ -74,7 +77,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
 
   const materials = createMaterials(config);
   const group = new THREE.Group();
-  const totalHeight = storyCount * storyHeight;
+  const totalHeight = buildingWallHeight;
   const foundationHeight = foundationDepth;
   const primaryRoofZone = config.roofZones?.[0];
   const resolvedRoofType = primaryRoofZone?.roofType ?? roofType;
@@ -209,6 +212,20 @@ function zoneWalk(zone) {
     pieces: [region],
     edges,
   }];
+}
+
+/**
+ * The height of a volume's walls above its foundation: its stories (its own
+ * count, `volumeStoryOverrides`, or the building's), plus the knee wall of a
+ * half story above them if it has one (a story and a half: the top floor
+ * rises only that far before the roof starts; `volumeKneeWalls`, or the
+ * building's `kneeWallHeight`). Without a volume id, the building's.
+ */
+export function volumeWallHeight(volumeId, config = {}) {
+  const stories = (volumeId && config.volumeStoryOverrides?.[volumeId]) ?? config.storyCount ?? 1;
+  const own = volumeId ? config.volumeKneeWalls?.[volumeId] : undefined;
+  const knee = Number.isFinite(own) ? own : config.kneeWallHeight;
+  return stories * (config.storyHeight ?? 3.2) + (knee > 0 ? knee : 0);
 }
 
 /**
@@ -959,15 +976,14 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
   let maxTotalHeight = 0;
   const roofZones = [];
   const volumePlateHeights = Object.fromEntries(
-    roofVolumes.map((volume) => [volume.id, (overrides[volume.id] ?? storyCount) * storyHeight])
+    roofVolumes.map((volume) => [volume.id, volumeWallHeight(volume.id, { ...config, volumeStoryOverrides: overrides })])
   );
   const connections = resolveRoofConnections(roofVolumes, { ...config, volumePlateHeights });
   const adjacentSides = adjacentSidesByVolume(roofVolumes, volumePlateHeights);
   const setups = buildRoofSetups(roofVolumes, config, connections, adjacentSides, (volume) => config.volumeRoofTypes?.[volume.id] ?? roofType);
 
   roofVolumes.forEach((volume) => {
-    const volumeStoryCount = overrides[volume.id] ?? storyCount;
-    const totalHeight = volumeStoryCount * storyHeight;
+    const totalHeight = volumePlateHeights[volume.id];
     maxTotalHeight = Math.max(maxTotalHeight, totalHeight);
     const roofTypeForVolume = config.volumeRoofTypes?.[volume.id] ?? roofType;
     const volumeConnections = connections.get(volume.id);

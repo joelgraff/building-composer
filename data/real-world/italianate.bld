@@ -53,6 +53,7 @@
     "volume-0": "shed"
   },
   "volumeRoofConnections": {},
+  "volumeKneeWalls": {},
   "roofStructures": [
     {
       "id": "structure-1",

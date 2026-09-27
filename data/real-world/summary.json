@@ -18,9 +18,7 @@
     "title": "Upright-and-wing (gable-front-and-wing)",
     "note": "The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front \"upright\" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing.",
     "front": "maxZ",
-    "gaps": [
-      "The wing is a story and a half: a knee wall under a steep roof. Stories are whole, so it is one story with a tall roof."
-    ],
+    "gaps": [],
     "issues": [],
     "refused": [],
     "zones": 2,

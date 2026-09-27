@@ -69,7 +69,7 @@ const houses = {
     config: { roofPitchRise: 10 },
     volumes: [
       { at: [-3.6, 0], ridge: 'x-min' },
-      { at: [3, 0], storyCount: 1, ridge: 'z-min' },
+      { at: [3, 0], storyCount: 1, kneeWall: 0.9, ridge: 'z-min' },
     ],
     structures: [
       {
@@ -78,9 +78,7 @@ const houses = {
       },
       { at: [3, 0], kind: 'dormer', hostSide: 'maxZ', width: 1.4, wallHeight: 1.1, setback: 0.4, roofType: 'gable', offset: 1.5 },
     ],
-    gaps: [
-      'The wing is a story and a half: a knee wall under a steep roof. Stories are whole, so it is one story with a tall roof.',
-    ],
+    gaps: [],
   },
   'queen-anne': {
     title: 'Gable-front Queen Anne (Reagan Boyhood Home type)',
@@ -129,7 +127,7 @@ const houses = {
     note: 'A story-and-a-half side-gabled bungalow of the 1910s-20s: a broad low roof on deep eaves, a wide shed dormer, and an integral porch recessed into the corner under the main roof.',
     footprint: box(-6.1, -4.9, 6.1, 4.9),
     config: {
-      storyCount: 1, storyHeight: 2.9, roofPitchRise: 8, roofEaveDepth: 0.75, roofRakeDepth: 0.6,
+      storyCount: 1, storyHeight: 2.9, kneeWallHeight: 0.9, roofPitchRise: 8, roofEaveDepth: 0.75, roofRakeDepth: 0.6,
     },
     structures: [
       {
@@ -195,7 +193,7 @@ const houses = {
     note: 'A 1940s story-and-a-half Cape Cod: a steep side-gabled roof with two gabled dormers and a small gabled entry.',
     footprint: box(-4.9, -3.65, 4.9, 3.65),
     config: {
-      storyCount: 1, storyHeight: 2.6, roofPitchRise: 12, roofEaveDepth: 0.2, roofRakeDepth: 0.1,
+      storyCount: 1, storyHeight: 2.6, kneeWallHeight: 0.6, roofPitchRise: 12, roofEaveDepth: 0.2, roofRakeDepth: 0.1,
     },
     structures: [-2.4, 2.4].map((offset) => ({
       at: [0, 0], kind: 'dormer', hostSide: 'maxZ', offset, width: 1.5, wallHeight: 1.3, setback: 1, roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 12 },
@@ -245,8 +243,9 @@ for (const [name, house] of Object.entries(houses)) {
   const volumeRidgeDirections = {};
   const volumeRoofTypes = {};
   const volumeRoofConnections = {};
+  const volumeKneeWalls = {};
   (house.volumes ?? []).forEach(({
-    at, storyCount, roofType, ridge, connection,
+    at, storyCount, kneeWall, roofType, ridge, connection,
   }) => {
     const id = volumeAt(at);
     if (!id) {
@@ -256,13 +255,14 @@ for (const [name, house] of Object.entries(houses)) {
     if (roofType) volumeRoofTypes[id] = roofType;
     if (ridge) volumeRidgeDirections[id] = ridge;
     if (connection) volumeRoofConnections[id] = connection;
+    if (kneeWall !== undefined) volumeKneeWalls[id] = kneeWall;
   });
   const roofStructures = normalizeRoofStructures((house.structures ?? []).map(({ at, ...fields }) => ({
     hostSide: 'maxZ', ...fields, hostVolumeId: volumeAt(at),
   })));
   const roofHeight = roofHeightFromPitch(norm, cfg.roofDirection, cfg.roofPitchRise, 12, layout.volumes);
   const full = {
-    ...cfg, roofHeight, volumeStoryOverrides, volumeRidgeDirections, volumeRoofTypes, volumeRoofConnections,
+    ...cfg, roofHeight, volumeStoryOverrides, volumeRidgeDirections, volumeRoofTypes, volumeRoofConnections, volumeKneeWalls,
   };
   const result = createBuildingFromFootprint(norm, {
     ...full, volumes: layout.volumes, roofZones: layout.roofZones, foundationDepth: 0.7, roofStructures,

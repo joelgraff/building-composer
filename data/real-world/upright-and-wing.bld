@@ -52,6 +52,9 @@
   },
   "volumeRoofTypes": {},
   "volumeRoofConnections": {},
+  "volumeKneeWalls": {
+    "volume-1": 0.9
+  },
   "roofStructures": [
     {
       "id": "structure-1",

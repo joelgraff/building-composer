@@ -18,16 +18,19 @@ export function computeFacadeLayout(footprint, config = {}) {
   const storyCount = config.storyCount ?? 1;
   const storyHeight = config.storyHeight ?? 3.2;
   const panelsPerRun = Math.max(1, Math.floor(config.panelsPerRun ?? 2));
-  const totalHeight = storyCount * storyHeight;
+  // a half story: the top floor's walls rise only to a knee wall under the roof
+  const kneeWall = config.kneeWallHeight > 0 ? config.kneeWallHeight : 0;
+  const totalHeight = storyCount * storyHeight + kneeWall;
   const wallMaterial = config.wallMaterial ?? 'wood';
   const storyMaterials = config.storyMaterials ?? [];
   const panelMaterials = config.panelMaterials ?? [];
 
-  const stories = Array.from({ length: storyCount }, (_, index) => ({
+  const stories = Array.from({ length: storyCount + (kneeWall ? 1 : 0) }, (_, index) => ({
     id: `story-${index + 1}`,
     index,
     minY: index * storyHeight,
-    maxY: (index + 1) * storyHeight,
+    maxY: index < storyCount ? (index + 1) * storyHeight : storyCount * storyHeight + kneeWall,
+    ...(index >= storyCount ? { half: true } : {}),
     material: storyMaterials[index] ?? wallMaterial,
   }));
 
@@ -575,6 +578,8 @@ export function serializeBuildingState(layout, modelConfig) {
     roofHeightMode: modelConfig.roofHeightMode,
     volumeSplit: modelConfig.volumeSplit ?? 'z',
     volumeStoryOverrides: modelConfig.volumeStoryOverrides ?? {},
+    kneeWallHeight: modelConfig.kneeWallHeight,
+    volumeKneeWalls: modelConfig.volumeKneeWalls ?? {},
     volumeRidgeDirections: modelConfig.volumeRidgeDirections ?? {},
     volumeRoofTypes: modelConfig.volumeRoofTypes ?? {},
     volumeRoofConnections: modelConfig.volumeRoofConnections ?? {},
@@ -669,6 +674,9 @@ export function deserializeBuildingState(data) {
       roofHeightMode: data.roofHeightMode ?? 'slope',
       volumeSplit,
       volumeStoryOverrides: data.volumeStoryOverrides ?? {},
+      // a half story's knee wall, for the building and by volume
+      kneeWallHeight: Number.isFinite(data.kneeWallHeight) && data.kneeWallHeight > 0 ? data.kneeWallHeight : undefined,
+      volumeKneeWalls: data.volumeKneeWalls ?? {},
       volumeRidgeDirections: data.volumeRidgeDirections ?? {},
       volumeRoofTypes: data.volumeRoofTypes ?? {},
       volumeRoofConnections: data.volumeRoofConnections ?? {},

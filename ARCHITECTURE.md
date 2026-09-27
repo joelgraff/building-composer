@@ -43,6 +43,7 @@ surface. Detached objects (appurtenances) and separate structures
 | Roof | Top cap | Type (flat, gable, hip, shed, mansard, gambrel), pitch, break height and lower/upper pitches (mansard, gambrel), widow's walk height (hip), overhang/eave depth |
 | Facade | Subdivided surface of the envelope | See §4 |
 | Substructure * | Associated separate footprint (shed, garage, gazebo) | Parent reference, relative transform, own extrusion params |
+| Half story | A top floor under the roof whose walls rise only a knee wall above the full stories (a story and a half) | Knee wall height, for the building or a volume |
 | Roof structure | Dormer or porch outside the footprint (an envelope modifier) | Host volume or structure and side, offset, width, setback, depth, wall height, base height, own roof and eaves, open sides, support |
 | Appurtenance * | Detached object in the building's immediate vicinity | Type, relative placement (face + offset + distance), scale, mesh reference |
 
