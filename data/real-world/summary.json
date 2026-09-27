@@ -16,10 +16,9 @@
   },
   "upright-and-wing": {
     "title": "Upright-and-wing (gable-front-and-wing)",
-    "note": "The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front \"upright\" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing. Faces +X (see the gaps).",
-    "front": "maxX",
+    "note": "The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front \"upright\" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing.",
+    "front": "maxZ",
     "gaps": [
-      "Volumes come from splitting the footprint into bands along Z. Facing +Z, the upright's rear half and the wing became one volume (one roof), so the house is modeled facing +X, where the bands match the massing. Volumes should follow the massing (or be chosen) whatever the orientation.",
       "The wing is a story and a half: a knee wall under a steep roof. Stories are whole, so it is one story with a tall roof."
     ],
     "issues": [],
@@ -29,10 +28,9 @@
   },
   "queen-anne": {
     "title": "Gable-front Queen Anne (Reagan Boyhood Home type)",
-    "note": "A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner. Faces +X (see the gaps).",
-    "front": "maxX",
+    "note": "A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner.",
+    "front": "maxZ",
     "gaps": [
-      "As with the upright-and-wing, facing +Z the side projection and the middle of the main block became one volume and the main block split in three; facing +X the volumes match the massing.",
       "A porch cannot run past the end of its wall, so a wraparound porch leaves its corner square empty.",
       "A wraparound porch is two porches meeting at the corner; their hip roofs meet as two roofs, not one continuous roof turning the corner.",
       "Towers and turrets (round or polygonal, often with a conical roof) cannot be modeled: structures are rectangles.",
@@ -43,7 +41,7 @@
       {
         "label": "front porch running on past the corner (the wraparound's corner)",
         "errors": [
-          "The structure runs past the ends of volume-0's maxX wall."
+          "The structure runs past the ends of volume-0's maxZ wall."
         ],
         "warnings": []
       }

@@ -38,7 +38,7 @@ npm test
 
 - **Parametric 3D Massing Engine**:
   - Extrudes foundation below grade, vertical walls per story, and roof envelope.
-  - Rectilinear volume decomposition (`decomposeIntoVolumes`): automatically splits complex rectilinear footprints into constituent massing blocks.
+  - Rectilinear volume decomposition (`decomposeIntoVolumes`): automatically splits complex rectilinear footprints into constituent massing blocks, cutting the way that follows the massing (or along a chosen axis).
   - Independent volume editing: configure story counts, roof forms, and ridge directions per volume or at the building-default level.
   - Interactive 3D volume picking: hover over building volumes for amber highlighting and click to select for direct parametric control.
 

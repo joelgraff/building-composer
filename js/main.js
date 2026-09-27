@@ -33,6 +33,8 @@ const roofHeightInput = document.getElementById('roof-height');
 const roofEaveDepthInput = document.getElementById('roof-eave-depth');
 const roofHeightModeSelect = document.getElementById('roof-height-mode');
 const roofHeightModeField = document.getElementById('roof-height-mode-field');
+const volumeSplitSelect = document.getElementById('volume-split');
+const volumeSplitField = document.getElementById('volume-split-field');
 const roofConnectionSelect = document.getElementById('roof-connection');
 const roofConnectionField = document.getElementById('roof-connection-field');
 const storyHeightUnit = document.getElementById('story-height-unit');
@@ -170,6 +172,8 @@ let modelConfig = {
   eaveSoffit: 'flat',
   rakeSoffit: 'sloped',
   roofHeightMode: roofHeightModeSelect.value,
+  // how an L, T, or U footprint is cut into volumes (see decomposeIntoVolumes)
+  volumeSplit: 'auto',
   wallMaterial: wallMaterialSelect.value,
   storyMaterials: [],
   panelMaterials: [],
@@ -251,6 +255,7 @@ function updateRoofControlAvailability(vertices) {
 
 function updateRoofHeightModeVisibility(volumeCount) {
   roofHeightModeField.style.display = volumeCount > 1 ? '' : 'none';
+  volumeSplitField.style.display = volumeCount > 1 ? '' : 'none';
 }
 
 syncUnitLabels();
@@ -658,6 +663,7 @@ async function loadFootprint(footprintData, preserveView = true) {
   const normalized = normalizeFootprint(vertices, { expectedWinding: windingPreference });
   updateRoofControlAvailability(normalized);
   const layout = computeFacadeLayout(normalized, {
+    volumeSplit: modelConfig.volumeSplit,
     storyCount: modelConfig.storyCount,
     storyHeight: modelConfig.storyHeight,
     panelsPerRun: modelConfig.panelsPerRun,
@@ -789,6 +795,9 @@ async function loadSampleFootprint() {
   modelConfig.volumeRoofShapes = {};
   modelConfig.volumeEaves = {};
   modelConfig.roofStructures = [];
+  // a new footprint: cut it to follow its massing (a .bld sets its own)
+  modelConfig.volumeSplit = 'auto';
+  volumeSplitSelect.value = 'auto';
   selectedElementId = 'building-defaults';
   selectedStructureId = null;
   const presetFiles = {
@@ -927,6 +936,9 @@ function handleFileInput(event) {
   modelConfig.volumeEaves = {};
   modelConfig.edgePitchOverrides = {};
   modelConfig.roofStructures = [];
+  // a new footprint: cut it to follow its massing (a .bld sets its own)
+  modelConfig.volumeSplit = 'auto';
+  volumeSplitSelect.value = 'auto';
   selectedElementId = 'building-defaults';
   selectedStructureId = null;
 
@@ -944,6 +956,7 @@ function handleFileInput(event) {
           roofDirectionSelect.value = modelConfig.roofDirection;
           roofPitchRiseInput.value = modelConfig.roofPitchRise;
           roofHeightModeSelect.value = modelConfig.roofHeightMode;
+          volumeSplitSelect.value = modelConfig.volumeSplit;
           syncUnitLabels();
           syncLengthInputs();
           updateRoofPitchDisplay();
@@ -1032,6 +1045,27 @@ roofTypeSelect.addEventListener('change', () => {
   }
   if (loadedFootprint) {
     loadFootprint(loadedFootprint);
+  }
+});
+
+volumeSplitSelect.addEventListener('change', () => {
+  modelConfig.volumeSplit = volumeSplitSelect.value;
+  // volumes are renumbered, so settings kept by volume no longer apply
+  const hadVolumeSettings = ['volumeStoryOverrides', 'volumeRidgeDirections', 'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves']
+    .some((key) => Object.keys(modelConfig[key] ?? {}).length);
+  ['volumeStoryOverrides', 'volumeRidgeDirections', 'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves'].forEach((key) => {
+    modelConfig[key] = {};
+  });
+  selectedElementId = 'building-defaults';
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+  const notes = [
+    hadVolumeSettings ? 'Per-volume settings were cleared, since the volumes were renumbered.' : '',
+    modelConfig.roofStructures.length ? 'Check the roof structures: each stays on the volume with its id.' : '',
+  ].filter(Boolean);
+  if (notes.length) {
+    setStatus(notes.join(' '), 'default');
   }
 });
 

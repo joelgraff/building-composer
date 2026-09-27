@@ -33,6 +33,7 @@
   "eaveSoffit": "flat",
   "rakeSoffit": "sloped",
   "wallMaterial": "wood",
+  "volumeSplit": "auto",
   "roofHeight": 3.65,
   "volumeStoryOverrides": {},
   "volumeRidgeDirections": {},

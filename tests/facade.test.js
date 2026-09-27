@@ -2,7 +2,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { normalizeFootprint } from '../js/footprint.js';
-import { computeFacadeLayout, decomposeIntoVolumes } from '../js/facade.js';
+import {
+  computeFacadeLayout, decomposeIntoVolumes, serializeBuildingState, deserializeBuildingState,
+} from '../js/facade.js';
 
 const sampleFootprint = JSON.parse(readFileSync('./data/sample_footprint.json', 'utf8'));
 const uFootprint = JSON.parse(readFileSync('./data/footprint_u.json', 'utf8'));
@@ -51,5 +53,48 @@ describe('Facade Subdivision & Volume Decomposition', () => {
 
     const wideWingVolumes = decomposeIntoVolumes(normalizeFootprint(wideWingFootprint));
     assert.equal(wideWingVolumes.length, 2);
+  });
+});
+
+describe('cutting a footprint into volumes that follow its massing', () => {
+  const size = (volume) => [+(volume.maxX - volume.minX).toFixed(3), +(volume.maxZ - volume.minZ).toFixed(3)];
+  // an upright-and-wing: an 18 x 30 ft gable-front upright, and a wing set back from its front
+  const uprightAndWing = [[-6.4, -4.6], [6.4, -4.6], [6.4, 2.4], [-0.9, 2.4], [-0.9, 4.6], [-6.4, 4.6]];
+  // a main block with a projection in the middle of one side
+  const sideProjection = [[-3.65, -6.1], [3.65, -6.1], [3.65, -1], [6.1, -1], [6.1, 3], [3.65, 3], [3.65, 6.1], [-3.65, 6.1]];
+
+  it('Z bands can cut against the massing; X bands and the automatic choice follow it', () => {
+    assert.deepEqual(decomposeIntoVolumes(uprightAndWing).map(size), [[12.8, 7], [5.5, 2.2]], 'the upright\'s rear merged with the wing');
+    const expected = [[5.5, 9.2], [7.3, 7]];
+    assert.deepEqual(decomposeIntoVolumes(uprightAndWing, { split: 'x' }).map(size), expected);
+    assert.deepEqual(decomposeIntoVolumes(uprightAndWing, { split: 'auto' }).map(size), expected);
+  });
+
+  it('keeps a main block whole rather than cutting it in three', () => {
+    assert.equal(decomposeIntoVolumes(sideProjection).length, 3);
+    assert.deepEqual(decomposeIntoVolumes(sideProjection, { split: 'auto' }).map(size), [[7.3, 12.2], [2.45, 4]]);
+  });
+
+  it('keeps the Z bands where both cuts are as good, so the samples don\'t change', () => {
+    [sampleFootprint, uFootprint, lFootprint, leanToFootprint, wideWingFootprint].forEach((footprint) => {
+      const norm = normalizeFootprint(footprint);
+      assert.deepEqual(decomposeIntoVolumes(norm, { split: 'auto' }), decomposeIntoVolumes(norm));
+    });
+  });
+
+  it('the layout cuts as its config says', () => {
+    assert.equal(computeFacadeLayout(uprightAndWing, { volumeSplit: 'auto' }).volumes[0].maxX - computeFacadeLayout(uprightAndWing, { volumeSplit: 'auto' }).volumes[0].minX, 5.5);
+    assert.equal(computeFacadeLayout(uprightAndWing, {}).volumes[0].maxX - computeFacadeLayout(uprightAndWing, {}).volumes[0].minX, 12.8);
+  });
+
+  it('a project saves its cut; older files keep the Z bands their volume ids came from', () => {
+    const layout = computeFacadeLayout(uprightAndWing, { volumeSplit: 'x' });
+    const saved = serializeBuildingState(layout, { volumeSplit: 'x' });
+    assert.equal(saved.volumeSplit, 'x');
+    assert.equal(deserializeBuildingState(saved).state.volumeSplit, 'x');
+    const older = { format: 'building-composer', version: 1, footprint: uprightAndWing, roofStructures: [{ id: 'd', hostVolumeId: 'volume-1', hostSide: 'maxZ' }] };
+    const { state, warnings } = deserializeBuildingState(older);
+    assert.equal(state.volumeSplit, 'z');
+    assert.deepEqual(warnings, [], 'volume-1 exists in the Z bands');
   });
 });

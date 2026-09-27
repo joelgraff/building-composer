@@ -70,7 +70,7 @@ export function computeFacadeLayout(footprint, config = {}) {
     }
   });
 
-  const volumes = decomposeIntoVolumes(footprint);
+  const volumes = decomposeIntoVolumes(footprint, { split: config.volumeSplit });
   const roofGraph = buildRoofGraph(footprint, volumes, config);
 
   const enhancedWallRuns = wallRuns.map((wallRun, index) => {
@@ -137,10 +137,72 @@ export function withStructureFacades(layout, structureFacades = [], roofWalks = 
  * merge vertically-adjacent bands that share an identical X-run into a
  * single rectangle.
  *
+ * An L or T can be cut two ways, and which one matches the house depends on
+ * its massing: `split` picks the cut. `'z'` (the default, and what files
+ * saved before the choice existed use) cuts between Z coordinates, so each
+ * volume runs the full X width of its band; `'x'` cuts between X
+ * coordinates; `'auto'` picks whichever matches the massing (see
+ * pickVolumeSplit). Volume ids follow the decomposition, so changing the
+ * cut renumbers the volumes.
+ *
  * @param {Array<[number, number]>} footprint
+ * @param {{ split?: 'z'|'x'|'auto' }} [options]
  * @returns {Array<{ id: string, minX: number, maxX: number, minZ: number, maxZ: number, ridgeAxis: 'x'|'z', width: number, length: number }>}
  */
-export function decomposeIntoVolumes(footprint) {
+export function decomposeIntoVolumes(footprint, { split = 'z' } = {}) {
+  if (split === 'auto') {
+    return pickVolumeSplit(footprint);
+  }
+  if (split === 'x') {
+    // cut the other way: decompose the footprint with x and z swapped, and swap back
+    const swapped = decomposeInBands(footprint.map(([x, z]) => [z, x]));
+    return swapped.map((volume) => withVolumeShape({
+      id: volume.id, minX: volume.minZ, maxX: volume.maxZ, minZ: volume.minX, maxZ: volume.maxX,
+    }));
+  }
+  return decomposeInBands(footprint);
+}
+
+/** A volume with its ridge axis and extents from its rectangle. */
+function withVolumeShape(volume) {
+  const width = volume.maxX - volume.minX;
+  const length = volume.maxZ - volume.minZ;
+  return {
+    ...volume,
+    ridgeAxis: length >= width ? 'z' : 'x',
+    width: Math.min(width, length),
+    length: Math.max(width, length),
+  };
+}
+
+/**
+ * The decomposition, of the two cut directions, that best matches how a
+ * house is massed: the fewest volumes, then no thin slivers (the largest
+ * smallest dimension of any volume); a tie keeps the Z bands. A wing
+ * beside a gable-front upright, or a projection in the middle of a side,
+ * comes out as its own volume with the main block whole, whichever way the
+ * house faces.
+ */
+function pickVolumeSplit(footprint) {
+  const candidates = ['z', 'x'].map((split) => decomposeIntoVolumes(footprint, { split }));
+  const score = (volumes) => [
+    -volumes.length,
+    Math.min(...volumes.map((volume) => Math.min(volume.maxX - volume.minX, volume.maxZ - volume.minZ))),
+  ];
+  const better = (a, b) => {
+    const [sa, sb] = [score(a), score(b)];
+    for (let k = 0; k < sa.length; k += 1) {
+      if (Math.abs(sa[k] - sb[k]) > 1e-6) {
+        return sa[k] > sb[k];
+      }
+    }
+    return false;
+  };
+  return better(candidates[1], candidates[0]) ? candidates[1] : candidates[0];
+}
+
+/** Row-run decomposition: bands between the footprint's z coordinates, merged where their x-runs match. */
+function decomposeInBands(footprint) {
   const xs = [...new Set(footprint.map(([x]) => x))].sort((a, b) => a - b);
   const zs = [...new Set(footprint.map(([, z]) => z))].sort((a, b) => a - b);
 
@@ -511,6 +573,7 @@ export function serializeBuildingState(layout, modelConfig) {
     roofHeight: modelConfig.roofHeight,
     roofEaveDepth: modelConfig.roofEaveDepth,
     roofHeightMode: modelConfig.roofHeightMode,
+    volumeSplit: modelConfig.volumeSplit ?? 'z',
     volumeStoryOverrides: modelConfig.volumeStoryOverrides ?? {},
     volumeRidgeDirections: modelConfig.volumeRidgeDirections ?? {},
     volumeRoofTypes: modelConfig.volumeRoofTypes ?? {},
@@ -559,7 +622,9 @@ export function deserializeBuildingState(data) {
   // another structure; one whose host is gone (the file was edited, or
   // decomposition changed) is dropped rather than guessed onto another host,
   // and so is anything standing on it.
-  const volumeIds = new Set(decomposeIntoVolumes(data.footprint).map((volume) => volume.id));
+  // files saved before the cut could be chosen used Z bands; keep their volume ids
+  const volumeSplit = ['auto', 'x', 'z'].includes(data.volumeSplit) ? data.volumeSplit : 'z';
+  const volumeIds = new Set(decomposeIntoVolumes(data.footprint, { split: volumeSplit }).map((volume) => volume.id));
   const warnings = [];
   // a widow's walk was once a structure standing on a hip's flat top; it is
   // now that flat top itself (roofWalkHeight), so the structure is dropped
@@ -602,6 +667,7 @@ export function deserializeBuildingState(data) {
       roofHeight: data.roofHeight ?? 2,
       roofEaveDepth: data.roofEaveDepth ?? 0.35,
       roofHeightMode: data.roofHeightMode ?? 'slope',
+      volumeSplit,
       volumeStoryOverrides: data.volumeStoryOverrides ?? {},
       volumeRidgeDirections: data.volumeRidgeDirections ?? {},
       volumeRoofTypes: data.volumeRoofTypes ?? {},

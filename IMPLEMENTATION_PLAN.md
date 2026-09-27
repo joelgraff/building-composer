@@ -838,6 +838,22 @@ A review after phase 7 found and fixed:
   - Windows and railings themselves, which belong to Tasks 6–7 and only need the surfaces from phase 5.
   - A continuous mansard around an L or U footprint (4e builds per-volume two-slope roofs).
 
+## Real-world evaluation, round 1
+
+Nine house types common in Dixon, Illinois (`data/real-world/`, report with renders published separately) were modeled to test the system before facade modifiers. Three bugs were fixed on the spot: wall material and widow's walk surfaces lost on buildings whose volumes differ in story count, and a ground porch's deck z-fighting its floor. The gaps, worked through in this order:
+
+1. **Volumes follow the massing.** Done. `decomposeIntoVolumes(footprint, { split })` cuts in Z bands (`'z'`, the old behavior and the default for files without the setting), X bands (`'x'`), or automatically (`'auto'`: the fewest volumes, then the largest smallest dimension, a tie keeping Z). New projects use `'auto'`; `volumeSplit` is saved. The app's **Volumes** control switches it and clears per-volume settings, since ids are renumbered. The upright-and-wing and Queen Anne now model facing +Z.
+2. Porches that turn a corner (a wraparound): past the wall end, with one roof around the corner.
+3. Porches recessed into the footprint under the main roof (an integral porch).
+4. Story-and-a-half (knee walls).
+5. Per-volume story height and floor level.
+6. Eaves on continuous (straight-skeleton) hips.
+7. Dormers crossing a two-slope break.
+8. Canted bays and towers (non-rectangular structures).
+9. Entry hoods (a roof on brackets, no floor).
+10. Foundation height as a setting.
+11. Dormer refusals that say which limit was hit and by how much.
+
 ## Immediate next implementation step
 
 - Facade modifiers (Tasks 6–7): windows, doors, trim, and railings, placed on the footprint's wall runs and on roof structures' wall runs (within their visible pieces) and railing runs.

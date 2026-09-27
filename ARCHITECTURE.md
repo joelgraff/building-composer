@@ -94,7 +94,13 @@ rectangular-footprint-only.
 
 **Independent roof zones.** A rectilinear footprint is automatically
 decomposed into its minimal set of rectangular volumes (`decomposeIntoVolumes`
-in `js/facade.js`), each with its own longitudinal ridge axis. For a
+in `js/facade.js`), each with its own longitudinal ridge axis. An L or T can
+be cut two ways, and the right one depends on the massing (a gable-front
+upright beside its wing, or a main block with a projection in the middle of a
+side). The **Volumes** control picks the cut: automatic (the fewest volumes,
+then no thin slivers, a tie keeping the Z bands), or bands along either axis.
+Files saved before the choice existed keep the Z bands, so their volume ids
+are unchanged. For a
 multi-volume hip roof, the roof is resolved as one continuous surface across
 the footprint, allowing side ridges to project into the spanning roof rather
 than stopping at internal walls. The **Multi-volume ridge** control selects

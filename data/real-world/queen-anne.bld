@@ -1,39 +1,39 @@
 {
   "format": "building-composer",
   "version": 1,
-  "note": "A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner. Faces +X (see the gaps).",
+  "note": "A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner.",
   "footprint": [
     [
-      -6.00086991705442,
-      -4.133259154359701
+      -4.1332591543597,
+      -6.1991300829455795
     ],
     [
-      6.1991300829455795,
-      -4.133259154359701
+      3.1667408456402995,
+      -6.1991300829455795
     ],
     [
-      6.1991300829455795,
-      3.1667408456402995
+      3.1667408456402995,
+      -1.0991300829455795
     ],
     [
-      1.0991300829455795,
-      3.1667408456402995
+      5.616740845640299,
+      -1.0991300829455795
     ],
     [
-      1.0991300829455795,
-      5.616740845640299
+      5.616740845640299,
+      2.9008699170544205
     ],
     [
-      -2.9008699170544205,
-      5.616740845640299
+      3.1667408456402995,
+      2.9008699170544205
     ],
     [
-      -2.9008699170544205,
-      3.1667408456402995
+      3.1667408456402995,
+      6.00086991705442
     ],
     [
-      -6.00086991705442,
-      3.1667408456402995
+      -4.1332591543597,
+      6.00086991705442
     ]
   ],
   "storyCount": 2,
@@ -49,11 +49,12 @@
   "eaveSoffit": "flat",
   "rakeSoffit": "sloped",
   "wallMaterial": "wood",
+  "volumeSplit": "auto",
   "roofHeight": 3.0416667461395264,
   "volumeStoryOverrides": {},
   "volumeRidgeDirections": {
-    "volume-0": "z-min",
-    "volume-1": "x-min"
+    "volume-0": "x-min",
+    "volume-1": "z-min"
   },
   "volumeRoofTypes": {},
   "volumeRoofConnections": {
@@ -65,7 +66,7 @@
       "kind": "porch",
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
-      "hostSide": "maxX",
+      "hostSide": "maxZ",
       "offset": 0,
       "width": 7.3,
       "setback": -2.4,
@@ -95,9 +96,9 @@
       "kind": "porch",
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
-      "hostSide": "maxZ",
-      "offset": 3.55,
-      "width": 5.1,
+      "hostSide": "maxX",
+      "offset": 4.55,
+      "width": 3.1,
       "setback": -2.4,
       "mount": "join",
       "depth": 2.4,

@@ -23,7 +23,7 @@ const box = (x0, z0, x1, z1) => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
 const defaults = {
   storyCount: 2, storyHeight: 2.9, roofType: 'gable', roofDirection: 'z-min', roofPitchRise: 8, roofPitchRun: 12,
   roofHeightMode: 'slope', roofEaveDepth: 0.35, roofRakeDepth: 0.25, roofFasciaDepth: 0.1524, eaveSoffit: 'flat', rakeSoffit: 'sloped',
-  wallMaterial: 'wood',
+  wallMaterial: 'wood', volumeSplit: 'auto',
 };
 
 /**
@@ -64,51 +64,47 @@ const houses = {
   },
   'upright-and-wing': {
     title: 'Upright-and-wing (gable-front-and-wing)',
-    note: 'The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front "upright" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing. Faces +X (see the gaps).',
-    front: 'maxX',
-    footprint: [[-4.6, -6.4], [2.4, -6.4], [2.4, 0.9], [4.6, 0.9], [4.6, 6.4], [-4.6, 6.4]],
+    note: 'The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front "upright" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing.',
+    footprint: [[-6.4, -4.6], [6.4, -4.6], [6.4, 2.4], [-0.9, 2.4], [-0.9, 4.6], [-6.4, 4.6]],
     config: { roofPitchRise: 10 },
     volumes: [
-      { at: [0, 3.6], ridge: 'z-min' },
-      { at: [0, -3], storyCount: 1, ridge: 'x-min' },
+      { at: [-3.6, 0], ridge: 'x-min' },
+      { at: [3, 0], storyCount: 1, ridge: 'z-min' },
     ],
     structures: [
       {
-        at: [0, -3], kind: 'porch', hostSide: 'maxX', width: 7.3, setback: -2.2, depth: 2.2, baseHeight: 'ground', wallHeight: 2.6,
+        at: [3, 0], kind: 'porch', hostSide: 'maxZ', width: 7.3, setback: -2.2, depth: 2.2, baseHeight: 'ground', wallHeight: 2.6,
         roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 3 }, openSides: ['front', 'left', 'right'],
       },
-      { at: [0, -3], kind: 'dormer', hostSide: 'maxX', width: 1.4, wallHeight: 1.1, setback: 0.4, roofType: 'gable', offset: -1.5 },
+      { at: [3, 0], kind: 'dormer', hostSide: 'maxZ', width: 1.4, wallHeight: 1.1, setback: 0.4, roofType: 'gable', offset: 1.5 },
     ],
     gaps: [
-      'Volumes come from splitting the footprint into bands along Z. Facing +Z, the upright\'s rear half and the wing became one volume (one roof), so the house is modeled facing +X, where the bands match the massing. Volumes should follow the massing (or be chosen) whatever the orientation.',
       'The wing is a story and a half: a knee wall under a steep roof. Stories are whole, so it is one story with a tall roof.',
     ],
   },
   'queen-anne': {
     title: 'Gable-front Queen Anne (Reagan Boyhood Home type)',
-    note: 'A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner. Faces +X (see the gaps).',
-    front: 'maxX',
-    footprint: [[-6.1, -3.65], [6.1, -3.65], [6.1, 3.65], [1, 3.65], [1, 6.1], [-3, 6.1], [-3, 3.65], [-6.1, 3.65]],
+    note: 'A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner.',
+    footprint: [[-3.65, -6.1], [3.65, -6.1], [3.65, -1], [6.1, -1], [6.1, 3], [3.65, 3], [3.65, 6.1], [-3.65, 6.1]],
     config: { roofPitchRise: 10 },
     volumes: [
-      { at: [0, 0], ridge: 'z-min' },
-      { at: [-1, 5], ridge: 'x-min', connection: 'merge-plane' },
+      { at: [0, 0], ridge: 'x-min' },
+      { at: [5, 1], ridge: 'z-min', connection: 'merge-plane' },
     ],
     refused: [
-      { label: 'front porch running on past the corner (the wraparound\'s corner)', structure: { at: [0, 0], kind: 'porch', hostSide: 'maxX', width: 9.7, offset: 1.2, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8, roofType: 'hip', openSides: ['front', 'left', 'right'] } },
+      { label: 'front porch running on past the corner (the wraparound\'s corner)', structure: { at: [0, 0], kind: 'porch', width: 9.7, offset: 1.2, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8, roofType: 'hip', openSides: ['front', 'left', 'right'] } },
     ],
     structures: [
       {
-        at: [0, 0], kind: 'porch', hostSide: 'maxX', width: 7.3, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8,
+        at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 7.3, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8,
         roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: ['front', 'left', 'right'],
       },
       {
-        at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 5.1, offset: 3.55, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8,
+        at: [0, 0], kind: 'porch', hostSide: 'maxX', width: 3.1, offset: 4.55, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8,
         roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: ['front', 'left', 'right'],
       },
     ],
     gaps: [
-      'As with the upright-and-wing, facing +Z the side projection and the middle of the main block became one volume and the main block split in three; facing +X the volumes match the massing.',
       'A porch cannot run past the end of its wall, so a wraparound porch leaves its corner square empty.',
       'A wraparound porch is two porches meeting at the corner; their hip roofs meet as two roofs, not one continuous roof turning the corner.',
       'Towers and turrets (round or polygonal, often with a conical roof) cannot be modeled: structures are rectangles.',

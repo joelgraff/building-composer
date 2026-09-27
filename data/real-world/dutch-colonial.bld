@@ -33,6 +33,7 @@
   "eaveSoffit": "flat",
   "rakeSoffit": "sloped",
   "wallMaterial": "wood",
+  "volumeSplit": "auto",
   "roofBreakHeight": 2.6,
   "roofLowerPitchRise": 24,
   "roofUpperPitchRise": 6,

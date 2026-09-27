@@ -1,31 +1,31 @@
 {
   "format": "building-composer",
   "version": 1,
-  "note": "The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front \"upright\" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing. Faces +X (see the gaps).",
+  "note": "The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front \"upright\" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing.",
   "footprint": [
     [
-      -4.047295968534907,
-      -6.834267453294003
+      -5.965732546705998,
+      -4.047295968534907
     ],
     [
-      2.9527040314650934,
-      -6.834267453294003
+      6.834267453294003,
+      -4.047295968534907
     ],
     [
-      2.9527040314650934,
-      0.4657325467059979
+      6.834267453294003,
+      2.9527040314650934
     ],
     [
-      5.152704031465093,
-      0.4657325467059979
+      -0.4657325467059979,
+      2.9527040314650934
     ],
     [
-      5.152704031465093,
-      5.965732546705998
+      -0.4657325467059979,
+      5.152704031465093
     ],
     [
-      -4.047295968534907,
-      5.965732546705998
+      -5.965732546705998,
+      5.152704031465093
     ]
   ],
   "storyCount": 2,
@@ -41,13 +41,14 @@
   "eaveSoffit": "flat",
   "rakeSoffit": "sloped",
   "wallMaterial": "wood",
+  "volumeSplit": "auto",
   "roofHeight": 2.916666666666667,
   "volumeStoryOverrides": {
-    "volume-0": 1
+    "volume-1": 1
   },
   "volumeRidgeDirections": {
-    "volume-1": "z-min",
-    "volume-0": "x-min"
+    "volume-0": "x-min",
+    "volume-1": "z-min"
   },
   "volumeRoofTypes": {},
   "volumeRoofConnections": {},
@@ -55,9 +56,9 @@
     {
       "id": "structure-1",
       "kind": "porch",
-      "hostVolumeId": "volume-0",
+      "hostVolumeId": "volume-1",
       "hostStructureId": null,
-      "hostSide": "maxX",
+      "hostSide": "maxZ",
       "offset": 0,
       "width": 7.3,
       "setback": -2.2,
@@ -85,10 +86,10 @@
     {
       "id": "structure-2",
       "kind": "dormer",
-      "hostVolumeId": "volume-0",
+      "hostVolumeId": "volume-1",
       "hostStructureId": null,
-      "hostSide": "maxX",
-      "offset": -1.5,
+      "hostSide": "maxZ",
+      "offset": 1.5,
       "width": 1.4,
       "setback": 0.4,
       "mount": "join",
