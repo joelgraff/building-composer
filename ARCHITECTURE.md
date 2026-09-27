@@ -179,14 +179,14 @@ a deck height (an added level plane), the flat top a widow's walk stands on.
 high-side return, and triangular end closures down to the supporting wall top.
 A shed is the half-gable special case: one of a gable's two slopes.
 
-**Roof structures.** Dormers and porches change the roof shell and have their
-own walls, but are not part of the footprint (`js/roof-structures.js`; built by
+**Roof structures.** Dormers, porches, cupolas, and widow's walks change the
+roof shell and have their own walls (or a deck), but are not part of the footprint (`js/roof-structures.js`; built by
 `withRoofStructures` in `js/extrusion.js`). They are envelope modifiers (§5). A
 structure is a small rectangle placed in the frame of one side of its host (a
 volume, or another structure): offset along the side, width, setback from the
 wall (0 = flush, negative = projecting), depth, wall height, and either no base
 (a *dormer*, rising out of the roof) or a base height (a *standing* structure,
-a porch). It has its own roof (any of the four types) and eave settings, open
+a porch). It has its own roof (flat, gable, hip, shed, or none) and eave settings, open
 sides, an optional inset (the front wall set back behind an open porch under
 its roof: a recessed porch), and, when projecting, a support (deck, posts,
 ground-level porch, brackets, or an enclosed base).
@@ -301,9 +301,9 @@ the building. Three categories, distinguished by a two-step test:
 
 | Category | Test | Examples |
 |----------|------|----------|
-| Facade modifier | Surface-applied; no functional space | Windows, doors, dentil courses, water table, window casings, cornices, gutters, eave depth, widow's walks |
+| Facade modifier | Surface-applied; no functional space | Windows, doors, dentil courses, water table, window casings, cornices, gutters, eave depth, railings (including a widow's walk's) |
 | Footprint modifier | Extends the plan; no functional space | Exterior steps, basement window wells, freestanding stoops, open porches |
-| Envelope modifier | Creates/extends functional space (regardless of enclosure) | Attached porches, bay windows, towers (Queen Anne), enclosed verandas |
+| Envelope modifier | Creates/extends functional space (regardless of enclosure) | Attached porches, bay windows, towers (Queen Anne), enclosed verandas, dormers, cupolas, widow's walks (the platform) |
 
 **The test:**
 1. Does it share a boundary with the footprint polygon?
