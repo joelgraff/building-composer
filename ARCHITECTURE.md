@@ -43,6 +43,7 @@ surface. Detached objects (appurtenances) and separate structures
 | Roof | Top cap | Type (gable, hip, flat, mansard…), pitch, overhang/eave depth |
 | Facade | Subdivided surface of the envelope | See §4 |
 | Substructure * | Associated separate footprint (shed, garage, gazebo) | Parent reference, relative transform, own extrusion params |
+| Roof structure | Dormer or porch outside the footprint (an envelope modifier) | Host volume or structure and side, offset, width, setback, depth, wall height, base height, own roof and eaves, open sides, support |
 | Appurtenance * | Detached object in the building's immediate vicinity | Type, relative placement (face + offset + distance), scale, mesh reference |
 
 \* Post-MVP (bonus features).
@@ -162,6 +163,38 @@ shed 1, gable 2, hip 4) so neighbors can be intersected analytically:
 high-side return, and triangular end closures down to the supporting wall top.
 A shed is the half-gable special case: one of a gable's two slopes.
 
+**Roof structures.** Dormers and porches change the roof shell and have their
+own walls, but are not part of the footprint (`js/roof-structures.js`; built by
+`withRoofStructures` in `js/extrusion.js`). They are envelope modifiers (§5). A
+structure is a small rectangle placed in the frame of one side of its host (a
+volume, or another structure): offset along the side, width, setback from the
+wall (0 = flush, negative = projecting), depth, wall height, and either no base
+(a *dormer*, rising out of the roof) or a base height (a *standing* structure,
+a porch). It has its own roof (any of the four types) and eave settings, open
+sides, and, when projecting, a support (deck, posts, ground-level porch,
+brackets, or an enclosed base).
+
+It relates to the building through convex solids. Every volume's resolved
+roof (its *zone descriptor*: wall and roof rectangles, final planes after
+merges, plate elevation) gives a convex solid: the wall box capped by the roof
+planes. A structure's walls and roof are built too large and clipped to what
+lies outside every volume's solid, and every roof is clipped to what lies
+outside the structure's solid; the cuts are exact, so the two meet along the
+same lines as one closed shell (valleys, ridge ends, and wall-on-roof seams
+come out of the clip for every roof type). The rules that follow:
+
+- A dormer stands on one roof face and its roof never passes the host ridge.
+- A flush front wall carries its host wall up through the eave: the eave is
+  cut away across it and capped either side, unless the host is open on that
+  side (then the eave runs on as a beam).
+- A standing structure replaces the host roof inside its footprint (one convex
+  piece per host face); its walls run down to the host wall top there, and
+  knee walls close the attic around it.
+- A structure can stand on another; hosts are resolved first.
+
+The porch arrangements are provisional: they were developed without real
+buildings to model against, and are expected to be revisited with actual cases.
+
 The skeleton path applies when equal-height multi-volume hip roofs are rendered.
 Independent story-height overrides still use separate roofs because their
 different eave elevations require a weighted 3D intersection solve.
@@ -252,6 +285,10 @@ factor; functional contribution is.
 **Queen Anne towers.** If the tower is in the footprint → it is a volume
 (`shape: tower`). If it is not in the footprint → it is an envelope modifier.
 No special category is needed.
+
+**Dormers and upper-story porches** are envelope modifiers that are not in the
+footprint: they add functional space in or on the roof (see *Roof structures*
+in §2).
 
 ## 6. Materials & Textures
 

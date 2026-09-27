@@ -1,0 +1,68 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A ground-level porch on a solid deck, open on three sides with posts, its shed roof butting the wall below the second floor.",
+  "footprint": [
+    [
+      -8,
+      -4.5
+    ],
+    [
+      8,
+      -4.5
+    ],
+    [
+      8,
+      4.5
+    ],
+    [
+      -8,
+      4.5
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 3.2,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 8,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofHeight": 3,
+  "volumeStoryOverrides": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 9,
+      "setback": -2.4,
+      "depth": 2.4,
+      "wallHeight": 2.6,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 3
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

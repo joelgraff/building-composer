@@ -268,6 +268,15 @@ describe('roof structure records', () => {
     assert.equal(normalizeRoofStructure({ hostVolumeId: 'volume-0', hostSide: 'north' }), null);
   });
 
+  it('read supports, ground-level bases, and structure hosts', () => {
+    const upper = normalizeRoofStructure({ hostStructureId: 'structure-1', hostSide: 'minZ', baseHeight: 'ground', support: 'posts' });
+    assert.equal(upper.hostStructureId, 'structure-1');
+    assert.equal(upper.hostVolumeId, null);
+    assert.equal(upper.baseHeight, 'ground');
+    assert.equal(upper.support, 'posts');
+    assert.equal(normalizeRoofStructure({ hostVolumeId: 'volume-0', hostSide: 'minZ', support: 'stilts' }).support, 'auto');
+  });
+
   it('get unique ids, keeping valid ones', () => {
     const list = normalizeRoofStructures([
       { id: 'structure-2', hostVolumeId: 'volume-0', hostSide: 'minZ' },
@@ -467,6 +476,21 @@ describe('roof structure persistence', () => {
     assert.deepEqual(loaded.state.roofStructures.map((structure) => structure.id), ['structure-1', 'structure-2']);
     assert.equal(loaded.warnings.length, 1);
     assert.match(loaded.warnings[0], /structure-9/);
+  });
+
+  it('keeps a structure standing on another, and drops it with its host', () => {
+    const stacked = normalizeRoofStructures([
+      { id: 'ground', kind: 'porch', hostVolumeId: 'volume-0', hostSide: 'maxZ', setback: -2 },
+      { id: 'upper', kind: 'porch', hostStructureId: 'ground', hostSide: 'maxZ' },
+    ]);
+    const kept = deserializeBuildingState(JSON.parse(JSON.stringify(serializeBuildingState(layout, { roofStructures: stacked }))));
+    assert.deepEqual(kept.state.roofStructures.map((structure) => structure.id), ['ground', 'upper']);
+    assert.deepEqual(kept.warnings, []);
+    const orphaned = deserializeBuildingState(JSON.parse(JSON.stringify(serializeBuildingState(layout, {
+      roofStructures: [{ ...stacked[0], hostVolumeId: 'volume-7' }, stacked[1]],
+    }))));
+    assert.deepEqual(orphaned.state.roofStructures, []);
+    assert.equal(orphaned.warnings.length, 2);
   });
 
   it('loads older files without structures', () => {

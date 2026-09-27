@@ -414,7 +414,7 @@ Superseded approaches worth not repeating: recomputing only a height at the unmo
 
 Also in this slice: roof faces are flat-shaded (indexed builders shared vertices so normals smoothed across closure faces and shaded near-black); `clearModel` disposes nested groups; `.bld` files persist `volumeRoofConnections` and `volumeRoofShapes`.
 
-Known limits: hip and flat roofs do not act as the merging (lower/joining) roof; a hip neighbor's boundary is always at its eave, so only ridge-directed joins apply against it; non-footprint attached elements (dormers, porch roofs, widow's walks) are not designed yet — the eave-plane/zone model is expected to extend to an "attached" roof zone. Tests: `tests/roof_resolver.test.js`.
+Known limits: hip and flat roofs do not act as the merging (lower/joining) roof; a hip neighbor's boundary is always at its eave, so only ridge-directed joins apply against it; non-footprint attached elements (dormers and porches) are now roof structures, built on the resolved zone descriptors (see [Roof-borne structures](#roof-borne-structures-dormers-raised-porches--plan)); widow's walks and cupolas are planned there (4d). Tests: `tests/roof_resolver.test.js`.
 
 ### Eaves (implemented)
 
@@ -424,7 +424,7 @@ The exposed part of a partly shared eave side gets its own eave strip (top, fasc
 
 ## Roof-borne structures (dormers, raised porches) — plan
 
-Status: Phases 0–4 complete; phases 4a–4d (added after the example review) and 5–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+Status: Phases 0–4, 4a, and 4b complete; 4c, 4d, and 5–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
 
 ### Core idea
 
@@ -589,20 +589,41 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
    - The test helper `meshTriangles` now reads indexed geometry.
    *Review of the first examples (2026-09-26).* Dormers (roof, wall, hip-roof, attic) are right. The porch examples were not realistic: a projecting porch with nothing under it; a porch on a wing that left slivers of the wing roof and climbed into the main roof like a dormer; a porch straddling a ridge; a rooftop porch flush with the wall. Those examples were withdrawn. The two sleeping/smoking porch arrangements to model are **over a ground-level porch** and **recessed into the roof**. The common rooftop structure is a **cupola/belvedere**. Phases 4a–4d cover this; the Phase 4 machinery (standing structures, removed roof, knee walls, headers, floors) is the base for all of them.
 
-4a. **Supports.** A projecting structure (`setback < 0`) gets `support`:
-   - `'posts'`: posts from the floor's outer corners down to the foundation top. A post size and spacing along the front are added later with facade modifiers.
-   - `'brackets'`: diagonal braces from the floor's outer edge back to the host wall. Valid only for shallow projections; a validation rule caps the depth.
-   - `'enclosed'`: walls from the floor down to grade on the projecting part, with foundation. Effectively a two-story bay.
-   - `'porch'`: the space below is a ground-floor porch. See 4b; the upper structure's floor is the lower porch's ceiling.
-   - `'none'`: only for a structure standing on something else (a wing, another structure).
+4a. **Supports.** Complete. `support` on a structure: `auto` (default), `none`, `deck`, `posts`, `porch`, `brackets`, `enclosed`.
+   - `auto` resolves to `none` unless the structure projects past its host wall; a projecting structure at ground level gets `deck`, a raised one `posts`.
+   - Any other value on a non-projecting structure is refused (`support-not-projecting`). Brackets carry at most `MAX_BRACKET_PROJECTION` (1.5 m; `brackets-too-deep`).
+   - `structureSupports` in `js/extrusion.js`, over the projecting part only:
+     - `deck`: a foundation-material box from grade to the floor.
+     - `posts`: 0.2 m posts from grade to the floor along the front, at the ends and at most 3 m apart (`MAX_POST_SPAN`), flush with the outer faces.
+     - `porch`: the same posts on a ground-level deck.
+     - `brackets`: triangular braces under the floor, back to the wall, 45°, at most 1.8 m apart.
+     - `enclosed`: wall-material skirts on the front and both sides from the foundation top to the floor, over a foundation box.
+   - `openSidePosts`: any structure with open sides gets posts from floor to plate along them, at the ends and at most 3 m apart. None at an end against one of its own closed walls, or against the host or another volume (the roof bears on that wall).
+   - Posts and brackets use the wall material and are tagged `structurePart: 'posts'`; skirts are `support`, decks and foundations `foundation`.
+   - `baseHeight: 'ground'` puts the floor at the host's foundation top. Zone descriptors now carry `foundationTopY`.
 
-   Supports are plain boxes and quads outside the host, clipped outside every volume. Open sides at ground level also get posts at their open corners, from floor to plate, for any open-sided structure (ground porches included).
+4b. **Ground porches and stacking.** Complete.
+   - A ground porch is a projecting structure with `baseHeight: 'ground'`. Its roof tucks under the eave or butts the wall, which Phase 4 already handles.
+   - Stacking: `hostStructureId` stands a structure on another; `hostVolumeId` is then unused.
+     - `validateRoofStructures` resolves hosts first, whatever the list order. It refuses a missing or circular host (`host-missing`) and gives each structure a `level`. It returns each result with the `host` descriptor it was resolved against.
+     - A resolved structure becomes a host through `structureAsHost`: the zone-descriptor shape with its plate as both roof base and wall top, its solid starting at its floor (`floorY`), and overhang and eave settings supplied by the builder (`describeStructure`).
+   - `withRoofStructures` builds structures lowest level first, clips each outside every volume and every structure already built (except its host), and adds each built structure's roof to the meshes later structures cut. A standing floor lying exactly on its host's wall top is kept: it is the lower space's ceiling. A flush structure only breaks its host's eave where the host has a wall under it; a host structure open on that side (a ground porch under a sleeping porch) keeps its roof edge as a continuous band and beam at the floor line (`openBoundsSides` on the host descriptor).
+   - `.bld` loading keeps a structure whose host structure survives, and drops a chain whose base is gone.
+   - Tests:
+     - posts (count, extent, flush);
+     - `auto` resolving to posts or deck (deck size, floor at the foundation);
+     - brackets (placement, too-deep refusal);
+     - enclosed skirts and foundation;
+     - the `porch` support;
+     - `support-not-projecting`;
+     - open-corner posts (none against the wall);
+     - the stacked sleeping porch: level, floor = ground porch ceiling, ground roof replaced under it, roof under the main eave, back wall absent, watertight;
+     - hosts resolved in either list order; missing and circular hosts;
+     - `.bld` round-trip for stacked structures.
+   - Mutation checks: dropping the floor-on-wall-top fix fails the stacking test; removing open-side posts fails the posts test.
+   - Examples: `ground-porch`, `sleeping-porch`, `porch-supports`.
 
-4b. **Ground porches and stacking.**
-   - A ground-level porch is a projecting structure with its base at grade: `baseHeight` = −(plate height above the foundation top), with posts at open corners and its roof tucked under the eave or run into the wall. This is expressible now; it gains its posts from 4a.
-   - Stacking: a structure may name another *structure* as its host (`hostStructureId`). The resolved structure already has the zone-descriptor shape (bounds, plate `baseY`, planes, slab), so it can be the host solid. Its side frame, sill, removed roof, and eave cut then work unchanged.
-   - Structures resolve in dependency order, and a host structure must be resolved and built first.
-   - The sleeping-porch example becomes a ground porch plus an enclosed or screened second-floor porch standing on its roof, the upper roof tucked under the main eave or merged into it.
+   *Review of the 4a/4b demo (2026-09-26).* Better, but porches are hard to develop further without actual buildings to model against. The porch arrangements, supports, and stacking are provisional, to be revisited with real cases.
 
 4c. **Recessed (inset) porches.** These are subtractive: a porch carved into the host volume instead of added to it.
    - A recess is a box on a host side (the same frame and placement fields), from a floor level up through the roof.

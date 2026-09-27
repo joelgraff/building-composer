@@ -521,18 +521,29 @@ export function deserializeBuildingState(data) {
     return { valid: false, errors: ['Invalid file format: footprint array missing or incomplete.'] };
   }
 
-  // Structures are placed on a volume of the footprint's decomposition; one
-  // whose host is gone (the file was edited, or decomposition changed) is
-  // dropped rather than guessed onto another volume.
+  // Structures are placed on a volume of the footprint's decomposition, or on
+  // another structure; one whose host is gone (the file was edited, or
+  // decomposition changed) is dropped rather than guessed onto another host,
+  // and so is anything standing on it.
   const volumeIds = new Set(decomposeIntoVolumes(data.footprint).map((volume) => volume.id));
   const warnings = [];
-  const roofStructures = normalizeRoofStructures(data.roofStructures).filter((structure) => {
-    if (volumeIds.has(structure.hostVolumeId)) {
-      return true;
-    }
-    warnings.push(`Dropped roof structure ${structure.id}: host volume ${structure.hostVolumeId} does not exist.`);
-    return false;
-  });
+  let roofStructures = normalizeRoofStructures(data.roofStructures);
+  let dropped = true;
+  while (dropped) {
+    const structureIds = new Set(roofStructures.map((structure) => structure.id));
+    const kept = roofStructures.filter((structure) => {
+      const hostOk = structure.hostStructureId
+        ? structureIds.has(structure.hostStructureId) && structure.hostStructureId !== structure.id
+        : volumeIds.has(structure.hostVolumeId);
+      if (!hostOk) {
+        const hostName = structure.hostStructureId ? `structure ${structure.hostStructureId}` : `volume ${structure.hostVolumeId}`;
+        warnings.push(`Dropped roof structure ${structure.id}: host ${hostName} does not exist.`);
+      }
+      return hostOk;
+    });
+    dropped = kept.length < roofStructures.length;
+    roofStructures = kept;
+  }
 
   return {
     valid: true,

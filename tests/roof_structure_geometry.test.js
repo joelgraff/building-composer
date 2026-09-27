@@ -45,6 +45,24 @@ function trianglesOf(building, predicate) {
 const isHostRoof = (data) => Boolean(data.roofType);
 const isStructure = (data) => Boolean(data.structureId);
 
+/** Heights at which a surface crosses the vertical line through (x, z). */
+function surfaceHeightsAt(tris, x, z) {
+  const heights = [];
+  tris.forEach(([a, b, c]) => {
+    const det = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+    if (Math.abs(det) < 1e-12) {
+      return;
+    }
+    const l1 = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / det;
+    const l2 = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / det;
+    const l3 = 1 - l1 - l2;
+    if (l1 >= -1e-9 && l2 >= -1e-9 && l3 >= -1e-9) {
+      heights.push(l1 * a[1] + l2 * b[1] + l3 * c[1]);
+    }
+  });
+  return heights;
+}
+
 /** Plan (XZ) area of a set of triangles. */
 const planArea = (tris) => tris.reduce((sum, [a, b, c]) => sum
   + Math.abs((b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2])) / 2, 0);
@@ -99,6 +117,23 @@ function assertOneShell(result, label) {
     assert.ok(onHostWall || onStructureWall || onHostOutsideHole, `${label}: open edge ${JSON.stringify(edge)}`);
   });
 }
+
+/**
+ * Nothing to see through: every open edge in the whole building lies on
+ * another surface, except where a volume's roof sits its ROOF_LIFT above
+ * its own wall top (as every roof does), and along a structure's open
+ * sides (`openPlanes`: [axis index, coordinate]).
+ */
+function assertWatertight(result, label, openPlanes = []) {
+  const tris = trianglesOf(result.building, () => true);
+  const lift = (edge) => result.roofZones.some((zone) => edge.every((p) => Math.abs(p[1] - zone.baseY) < 1e-3
+    && ['minX', 'maxX', 'minZ', 'maxZ'].some((side) => Math.abs(p[side === 'minX' || side === 'maxX' ? 0 : 2] - zone.bounds[side]) < 1e-3)));
+  const opening = (edge) => openPlanes.some(([k, value]) => edge.every((p) => Math.abs(p[k] - value) < 1e-3));
+  const gaps = uncoveredEdges(tris).filter((edge) => !lift(edge) && !opening(edge));
+  assert.deepEqual(gaps, [], `${label}: see-through edges`);
+}
+
+const partOf = (result, part) => trianglesOf(result.building, (data) => data.structurePart === part);
 
 describe('roof dormers', () => {
   ['gable', 'hip', 'shed', 'flat'].forEach((roofType) => {
@@ -328,22 +363,6 @@ describe('porches', () => {
     }]),
   });
 
-  /**
-   * Nothing to see through: every open edge in the whole building lies on
-   * another surface, except where a volume's roof sits its ROOF_LIFT above
-   * its own wall top (as every roof does), and along a structure's open
-   * sides (`openPlanes`: [axis index, coordinate]).
-   */
-  function assertWatertight(result, label, openPlanes = []) {
-    const tris = trianglesOf(result.building, () => true);
-    const lift = (edge) => result.roofZones.some((zone) => edge.every((p) => Math.abs(p[1] - zone.baseY) < 1e-3
-      && ['minX', 'maxX', 'minZ', 'maxZ'].some((side) => Math.abs(p[side === 'minX' || side === 'maxX' ? 0 : 2] - zone.bounds[side]) < 1e-3)));
-    const opening = (edge) => openPlanes.some(([k, value]) => edge.every((p) => Math.abs(p[k] - value) < 1e-3));
-    const gaps = uncoveredEdges(tris).filter((edge) => !lift(edge) && !opening(edge));
-    assert.deepEqual(gaps, [], `${label}: see-through edges`);
-  }
-
-  const partOf = (result, part) => trianglesOf(result.building, (data) => data.structurePart === part);
 
   it('a second-floor porch projecting from the wall, rising through the eave, is watertight', () => {
     const result = build([projecting({ roofShape: { mode: 'slope', pitchRise: 4 } })], twoStory);
@@ -454,3 +473,157 @@ describe('porches', () => {
 function near(a, b, message) {
   assert.ok(Math.abs(a - b) < 1e-6, `${message ?? ''} expected ${b}, got ${a}`);
 }
+
+describe('supports', () => {
+  // two stories on the 20 x 10 rectangle: foundation 0.6, plate 6.62; porches project 2.4 m from the front
+  const twoStory = { storyCount: 2, storyHeight: 3 };
+  const FOUNDATION = 0.6;
+  const SILL = 3.62; // one story below the plate
+  const porch = (fields = {}) => build([{
+    kind: 'porch', hostVolumeId: 'volume-0', hostSide: 'minZ', setback: -2.4, depth: 2.4, width: 6,
+    baseHeight: -3, wallHeight: 2.4, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 1 }, openSides: [], ...fields,
+  }], twoStory);
+  const boundsOf = (tris) => {
+    const points = tris.flat();
+    return [0, 1, 2].map((k) => [Math.min(...points.map((p) => p[k])), Math.max(...points.map((p) => p[k]))]);
+  };
+  const FRONT = -7.4;
+  const openFront = [[2, FRONT]];
+  const openThree = [[2, FRONT], [0, -3], [0, 3]];
+
+  it('posts carry a raised porch down to grade, along its front no more than 3 m apart', () => {
+    const result = porch({ support: 'posts' });
+    assert.equal(result.roofStructures[0].resolved.support, 'posts');
+    const posts = partOf(result, 'posts');
+    assert.equal(posts.length, 3 * 12, 'three posts over a 6 m front');
+    const [xs, ys, zs] = boundsOf(posts);
+    assert.ok(Math.abs(ys[0]) < 1e-6 && Math.abs(ys[1] - SILL) < 1e-5, 'from grade to the floor');
+    assert.ok(Math.abs(zs[0] - FRONT) < 1e-6 && Math.abs(zs[1] - (FRONT + 0.2)) < 1e-6, 'flush with the front');
+    assert.ok(Math.abs(xs[0] - -3) < 1e-6 && Math.abs(xs[1] - 3) < 1e-6, 'flush with the sides');
+    assertWatertight(result, 'posts');
+  });
+
+  it('a raised porch gets posts by default; one at ground level gets a solid deck', () => {
+    assert.equal(porch().roofStructures[0].resolved.support, 'posts');
+    const ground = porch({ baseHeight: 'ground', wallHeight: 2.8 });
+    const { resolved } = ground.roofStructures[0];
+    assert.equal(resolved.support, 'deck');
+    assert.ok(Math.abs(resolved.sillY - FOUNDATION) < 1e-9, 'floor at the foundation top');
+    const deck = partOf(ground, 'foundation');
+    const [xs, ys, zs] = boundsOf(deck);
+    assert.deepEqual([xs, ys, zs].map(([lo, hi]) => +(hi - lo).toFixed(6)), [6, FOUNDATION, 2.4]);
+    assertWatertight(ground, 'deck');
+  });
+
+  it('brackets brace a shallow projection back to the wall; a deep one is refused', () => {
+    const result = porch({ support: 'brackets', setback: -1.2, depth: 1.2 });
+    assert.deepEqual(result.roofStructures[0].errors, []);
+    const brackets = partOf(result, 'posts');
+    assert.ok(brackets.length > 0);
+    const [, ys, zs] = boundsOf(brackets);
+    assert.ok(ys[1] <= SILL + 1e-6 && ys[0] >= SILL - 1.2, 'under the floor, no deeper than the projection');
+    assert.ok(zs[1] <= -5 + 1e-6 && zs[0] >= -6.2 - 1e-6, 'between the wall and the front');
+    assertWatertight(result, 'brackets');
+    assert.deepEqual(porch({ support: 'brackets' }).roofStructures[0].errors.map((e) => e.code), ['brackets-too-deep']);
+  });
+
+  it('an enclosed base walls the projection down to a foundation: a two-story bay', () => {
+    const result = porch({ support: 'enclosed' });
+    const skirt = partOf(result, 'support');
+    const height = SILL - FOUNDATION;
+    assert.ok(Math.abs(totalArea(skirt) - (6 * height + 2 * 2.4 * height)) < 1e-6, 'front and both sides');
+    assert.ok(Math.abs(planArea(partOf(result, 'foundation')) - 2 * 6 * 2.4) < 1e-4, 'a foundation box under it');
+    assertWatertight(result, 'enclosed');
+  });
+
+  it('a porch support is posts on a ground-level deck under the raised porch', () => {
+    const result = porch({ support: 'porch', openSides: ['front'] });
+    const [, postYs] = boundsOf(partOf(result, 'posts').filter((tri) => tri.every((v) => v[1] <= SILL + 1e-6)));
+    assert.ok(Math.abs(postYs[0] - FOUNDATION) < 1e-6 && Math.abs(postYs[1] - SILL) < 1e-6);
+    assert.ok(partOf(result, 'foundation').length > 0);
+    assertWatertight(result, 'porch support', openFront);
+  });
+
+  it('only a projecting structure takes a support', () => {
+    const result = build([{ hostVolumeId: 'volume-0', hostSide: 'minZ', support: 'posts' }]);
+    assert.deepEqual(result.roofStructures[0].errors.map((e) => e.code), ['support-not-projecting']);
+  });
+
+  it('an open porch has posts at its open corners and along its open front, none against the host wall', () => {
+    const result = porch({ baseHeight: 'ground', wallHeight: 2.8, openSides: ['front', 'left', 'right'] });
+    const { resolved } = result.roofStructures[0];
+    const posts = partOf(result, 'posts');
+    assert.equal(posts.length, 3 * 12, 'front corners and one mid-front post; the back corners bear on the wall');
+    const [, ys, zs] = boundsOf(posts);
+    assert.ok(Math.abs(ys[0] - resolved.sillY) < 1e-6 && Math.abs(ys[1] - resolved.plateY) < 1e-6, 'floor to plate');
+    assert.ok(zs[1] <= FRONT + 0.2 + 1e-6, 'all along the front');
+    assertWatertight(result, 'open ground porch', openThree);
+  });
+});
+
+describe('stacked structures', () => {
+  const twoStory = { storyCount: 2, storyHeight: 3 };
+  // a ground porch with a flat roof, open on three sides, and a sleeping porch standing on it
+  const ground = {
+    id: 'ground', kind: 'porch', hostVolumeId: 'volume-0', hostSide: 'minZ', setback: -2.4, depth: 2.4, width: 6,
+    baseHeight: 'ground', wallHeight: 2.9, roofType: 'flat', openSides: ['front', 'left', 'right'],
+  };
+  const sleeping = {
+    id: 'sleeping', kind: 'porch', hostStructureId: 'ground', hostSide: 'minZ', setback: 0, depth: 2.4, width: 6,
+    baseHeight: 0, wallHeight: 2.4, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 2 }, openSides: [],
+  };
+  const openThree = [[2, -7.4], [0, -3], [0, 3]];
+
+  it('a sleeping porch stands on a ground porch, whose roof becomes its floor', () => {
+    const result = build([ground, sleeping], twoStory);
+    const [lower, upper] = result.roofStructures;
+    assert.deepEqual([lower.errors, upper.errors], [[], []]);
+    assert.equal(upper.resolved.level, 1);
+    assert.equal(upper.host.volumeId, 'ground');
+    assert.ok(Math.abs(upper.resolved.sillY - lower.resolved.plateY) < 1e-9, 'on the ground porch plate');
+    // the upper floor is the ground porch's ceiling, over its whole footprint
+    const floor = trianglesOf(result.building, (data) => data.structureId === 'sleeping' && data.structurePart === 'floor');
+    assert.ok(Math.abs(planArea(floor) - 6 * 2.4) < 1e-6);
+    // the ground porch's own flat roof is replaced under it
+    const lowerRoof = trianglesOf(result.building, (data) => data.structureId === 'ground' && data.structurePart === 'roof');
+    lowerRoof.forEach((tri) => {
+      const [x, , z] = [0, 1, 2].map((k) => (tri[0][k] + tri[1][k] + tri[2][k]) / 3);
+      assert.ok(!(Math.abs(x) < 3 - 1e-3 && z < -5 - 1e-3 && z > -7.4 + 1e-3), 'no ground porch roof inside the sleeping porch');
+    });
+    assertWatertight(result, 'stacked', openThree);
+  });
+
+  it('the ground porch\'s roof edge runs on as a beam under the sleeping porch, which has no wall to carry up', () => {
+    const result = build([ground, sleeping], twoStory);
+    assert.equal(partOf(result, 'eave-caps').length, 0);
+    // the flat roof's 0.3 m overhang still runs across the whole front, corners included
+    const lowerRoof = trianglesOf(result.building, (data) => data.structureId === 'ground' && data.structurePart === 'roof');
+    const { plateY } = result.roofStructures[0].resolved;
+    [-3.15, -2.9, 0, 2.9, 3.15].forEach((x) => {
+      const heights = surfaceHeightsAt(lowerRoof, x, -7.55);
+      assert.ok(heights.some((h) => Math.abs(h - (plateY + 0.08)) < 1e-4), `slab top at x=${x}: ${heights}`);
+    });
+    assertWatertight(result, 'stacked', openThree);
+  });
+
+  it('resolves hosts first whatever the list order, and refuses missing or circular hosts', () => {
+    const reversed = build([sleeping, ground], twoStory);
+    assert.deepEqual(reversed.roofStructures.map((entry) => entry.errors), [[], []]);
+    assert.deepEqual(build([sleeping], twoStory).roofStructures[0].errors.map((e) => e.code), ['host-missing']);
+    const circular = build([
+      { ...sleeping, id: 'a', hostStructureId: 'b' },
+      { ...sleeping, id: 'b', hostStructureId: 'a' },
+    ], twoStory);
+    assert.deepEqual(circular.roofStructures.map((entry) => entry.errors.map((e) => e.code)), [['host-missing'], ['host-missing']]);
+  });
+
+  it('the sleeping porch roof tucks under the main eave and its back wall is the main wall', () => {
+    const result = build([ground, sleeping], twoStory);
+    const upperRoof = trianglesOf(result.building, (data) => data.structureId === 'sleeping' && data.structurePart === 'roof');
+    // main eave soffit at the wall: plate 6.62 less the eave drop (0.5 x 0.3) and fascia (0.1524)
+    assert.ok(Math.max(...upperRoof.flat().map((v) => v[1])) < 6.62 - 0.15 - 0.1524 + 1e-6);
+    const backWall = trianglesOf(result.building, (data) => data.structureId === 'sleeping' && data.structurePart === 'walls')
+      .filter((tri) => tri.every((v) => Math.abs(v[2] - -5) < 1e-6));
+    assert.equal(backWall.length, 0);
+  });
+});

@@ -160,14 +160,15 @@ function roofPlaneHalfSpace(plane, baseY) {
  * The convex solid a roof zone encloses: its wall box, from `floorY` up,
  * capped by its roof planes (a flat roof by the top of its slab). Heights are
  * absolute, so solids from different volumes (and different plates) can be
- * clipped against each other. Overhangs are not part of the solid.
+ * clipped against each other. Overhangs are not part of the solid. A
+ * structure's solid starts at its floor (`zone.floorY`), a volume's at grade.
  *
  * @param {{ bounds: { minX: number, maxX: number, minZ: number, maxZ: number }, baseY: number, planes: Array<object>, slabThickness?: number }} zone
  *   A resolved roof zone descriptor (`roofZones` from createBuildingFromFootprint).
  * @param {{ floorY?: number }} [options]
  * @returns {Array<{ normal: number[], offset: number }>}
  */
-export function volumeSolid(zone, { floorY = 0 } = {}) {
+export function volumeSolid(zone, { floorY = zone.floorY ?? 0 } = {}) {
   const { bounds, baseY } = zone;
   const walls = [
     normalizedHalfSpace([-1, 0, 0], -bounds.minX),
@@ -188,6 +189,10 @@ export function volumeSolid(zone, { floorY = 0 } = {}) {
 
 export const STRUCTURE_KINDS = ['dormer', 'wall-dormer', 'porch'];
 export const STRUCTURE_WALLS = ['front', 'left', 'right', 'back'];
+/** What holds up the part of a structure projecting past its host wall (see resolveRoofStructure). */
+export const STRUCTURE_SUPPORTS = ['auto', 'none', 'deck', 'posts', 'porch', 'brackets', 'enclosed'];
+/** Brackets carry only a shallow projection. */
+export const MAX_BRACKET_PROJECTION = 1.5;
 const SIDES = ['minX', 'maxX', 'minZ', 'maxZ'];
 const ROOF_TYPES = ['flat', 'gable', 'hip', 'shed'];
 const GEOMETRY_EPSILON = 1e-6;
@@ -235,15 +240,26 @@ function normalizeRoofShape(shape) {
  * - `depth`: front-to-back length, or null to run back to the host ridge
  *   (the structure's own roof ends it where it meets the host roof).
  * - `wallHeight`: plate height above the front sill.
- * - `baseHeight`: null to rise out of the host roof, or a floor level above
- *   the host plate.
+ * - `baseHeight`: null to rise out of the host roof, a floor level above
+ *   the host plate, or `'ground'` for a floor at the host's foundation top.
+ * - `support`: what holds up a projecting structure: `deck` (a solid base),
+ *   `posts` (to grade), `porch` (posts on a ground-level deck), `brackets`
+ *   (back to the wall), `enclosed` (walls down to a foundation), or `none`;
+ *   `auto` is a deck at ground level and posts above it.
+ * - `hostStructureId`: stand on another structure instead of a volume (a
+ *   sleeping porch on a ground porch's roof); its side frame is the host
+ *   structure's rectangle.
  * - `openSides`: walls left open (`front`, `back`, and `left`/`right` as
  *   seen from outside, facing the front wall).
  *
  * @returns {object|null}
  */
 export function normalizeRoofStructure(raw) {
-  if (!raw || typeof raw !== 'object' || typeof raw.hostVolumeId !== 'string' || !SIDES.includes(raw.hostSide)) {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const hostStructureId = typeof raw.hostStructureId === 'string' && raw.hostStructureId ? raw.hostStructureId : null;
+  if (!SIDES.includes(raw.hostSide) || (typeof raw.hostVolumeId !== 'string' && !hostStructureId)) {
     return null;
   }
   const kind = STRUCTURE_KINDS.includes(raw.kind) ? raw.kind : 'dormer';
@@ -251,14 +267,16 @@ export function normalizeRoofStructure(raw) {
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : null,
     kind,
-    hostVolumeId: raw.hostVolumeId,
+    hostVolumeId: typeof raw.hostVolumeId === 'string' ? raw.hostVolumeId : null,
+    hostStructureId,
     hostSide: raw.hostSide,
     offset: finite(raw.offset, 0),
     width: finite(raw.width, preset.width),
     setback: finite(raw.setback, preset.setback),
     depth: raw.depth === null ? null : finite(raw.depth, preset.depth),
     wallHeight: finite(raw.wallHeight, preset.wallHeight),
-    baseHeight: raw.baseHeight === null ? null : finite(raw.baseHeight, preset.baseHeight),
+    baseHeight: raw.baseHeight === null || raw.baseHeight === 'ground' ? raw.baseHeight : finite(raw.baseHeight, preset.baseHeight),
+    support: STRUCTURE_SUPPORTS.includes(raw.support) ? raw.support : 'auto',
     openSides: Array.isArray(raw.openSides)
       ? STRUCTURE_WALLS.filter((wall) => raw.openSides.includes(wall))
       : [...preset.openSides],
@@ -420,10 +438,31 @@ export function resolveRoofStructure(structure, host, config = {}) {
     : { minX: inward[0], maxX: inward[1], minZ: along[0], maxZ: along[1] };
 
   const hostFaceY = ([x, z]) => host.baseY + evalPlaneHeight(face ?? { constantHeight: 0 }, x, z);
-  const sillY = structure.baseHeight !== null
+  if (structure.baseHeight === 'ground' && !Number.isFinite(host.foundationTopY)) {
+    return fail('host-missing', `Host ${host.volumeId} has no ground level to stand on.`);
+  }
+  const sillY = structure.baseHeight === 'ground'
+    ? host.foundationTopY
+    : structure.baseHeight !== null
     ? host.baseY + structure.baseHeight
     : hostFaceY(pointOn(frame, alongCenter, front));
   const plateY = sillY + structure.wallHeight;
+
+  const projecting = structure.setback < -GEOMETRY_EPSILON;
+  const groundLevel = Number.isFinite(host.foundationTopY) && sillY <= host.foundationTopY + GEOMETRY_EPSILON;
+  let support = structure.support ?? 'auto';
+  if (support === 'auto') {
+    support = !projecting ? 'none' : (groundLevel ? 'deck' : 'posts');
+  }
+  if (support !== 'none' && !projecting) {
+    return fail('support-not-projecting', `A ${support} support only holds up a structure projecting past its host wall.`);
+  }
+  if (support === 'brackets' && -structure.setback > MAX_BRACKET_PROJECTION + GEOMETRY_EPSILON) {
+    return fail('brackets-too-deep', `Brackets carry at most ${MAX_BRACKET_PROJECTION} m of projection.`);
+  }
+  if (support !== 'none' && !Number.isFinite(host.foundationTopY)) {
+    return fail('host-missing', `Host ${host.volumeId} has no ground level for a ${support} support.`);
+  }
 
   // The structure's own roof.
   const { roofType } = structure;
@@ -549,7 +588,11 @@ export function resolveRoofStructure(structure, host, config = {}) {
       // the front wall stands on the host wall line: it carries the wall up through the eave
       flush: Math.abs(structure.setback) <= GEOMETRY_EPSILON,
       // its front wall is out past the host wall (a projecting porch)
-      projecting: structure.setback < -GEOMETRY_EPSILON,
+      projecting,
+      support,
+      wallLine: host.bounds[structure.hostSide],
+      foundationTopY: host.foundationTopY,
+      hostStructureId: structure.hostStructureId,
       standing,
       openSides: structure.openSides,
       eaves: structure.eaves,
@@ -595,29 +638,93 @@ function convexOverlap(a, b) {
  * Resolves every structure against the building's roof zones and checks
  * them against each other: structures on the same host may not overlap where
  * they actually stand (see occupiedPlan; the later one in the list is
- * rejected).
+ * rejected). A structure standing on another (`hostStructureId`) is resolved
+ * after its host, against the host's descriptor (see structureAsHost), and
+ * gets `level` one above it. Results come back in list order, each with the
+ * `host` descriptor it was resolved against.
  *
  * @returns {Array<{ id: string, structure: object, resolved: object|null, errors: Array<object>, warnings: Array<object> }>}
  */
-export function validateRoofStructures(structures, roofZones, config = {}) {
+export function validateRoofStructures(structures, roofZones, config = {}, { describeStructure } = {}) {
   const zones = new Map((roofZones ?? []).map((zone) => [zone.volumeId, zone]));
+  const list = structures ?? [];
+  const results = new Map();
+  const hosts = new Map(); // structure id -> its descriptor as a host
   const accepted = [];
-  return (structures ?? []).map((structure) => {
-    const result = resolveRoofStructure(structure, zones.get(structure.hostVolumeId), config);
+  const resolveOne = (structure, chain = []) => {
+    if (results.has(structure.id)) {
+      return results.get(structure.id);
+    }
+    let host;
+    let level = 0;
+    if (structure.hostStructureId) {
+      const hostStructure = list.find((candidate) => candidate.id === structure.hostStructureId);
+      if (hostStructure && !chain.includes(hostStructure.id)) {
+        const hostResult = resolveOne(hostStructure, [...chain, structure.id]);
+        host = hosts.get(hostStructure.id);
+        level = (hostResult.resolved?.level ?? 0) + 1;
+      }
+    } else {
+      host = zones.get(structure.hostVolumeId);
+    }
+    const result = host || !structure.hostStructureId
+      ? resolveRoofStructure(structure, host, config)
+      : {
+        resolved: null,
+        errors: [error('host-missing', `Host structure ${structure.hostStructureId} does not exist, could not be built, or stands on this one.`)],
+        warnings: [],
+      };
     if (result.resolved) {
-      const host = zones.get(structure.hostVolumeId);
+      const hostId = structure.hostStructureId ?? structure.hostVolumeId;
       const plan = occupiedPlan(result.resolved, host);
-      const clash = accepted.find((other) => other.hostVolumeId === result.resolved.hostVolumeId
+      const clash = accepted.find((other) => other.hostId === hostId
         && other.plan.some((piece) => plan.some((mine) => convexOverlap(piece, mine))));
       if (clash) {
         result.errors.push(error('overlap', `Overlaps ${clash.id} on the same roof.`));
         result.resolved = null;
       } else {
-        accepted.push({ ...result.resolved, plan });
+        result.resolved = { ...result.resolved, level };
+        accepted.push({ ...result.resolved, hostId, plan });
+        hosts.set(structure.id, structureAsHost(result.resolved, host, describeStructure));
       }
     }
-    return { id: structure.id, structure, ...result };
-  });
+    const entry = { id: structure.id, structure, host, ...result };
+    results.set(structure.id, entry);
+    return entry;
+  };
+  return list.map((structure) => resolveOne(structure));
+}
+
+/**
+ * A resolved structure as a host for another standing on it: the zone
+ * descriptor shape, with its plate as both roof base and wall top (a
+ * structure's roof sits right on its walls) and its solid starting at its
+ * floor. `describeStructure(resolved)` supplies its roof overhang and eave
+ * settings (`{ overhang, eaves }`), which the builder computes.
+ */
+function structureAsHost(resolved, host, describeStructure) {
+  return {
+    volumeId: resolved.id,
+    structureId: resolved.id,
+    roofType: resolved.roofType,
+    bounds: resolved.bounds,
+    roofBounds: resolved.bounds,
+    ridgeAxis: resolved.ridgeAxis,
+    roofHighEdge: resolved.roofHighEdge,
+    roofHeight: resolved.roofHeight,
+    planes: resolved.planes,
+    slabThickness: resolved.slabThickness,
+    overhang: {},
+    eaves: {},
+    ...(describeStructure ? describeStructure(resolved) : {}),
+    exact: true,
+    // the host sides with no wall under the eave (a flush structure on one of these does not break it)
+    openBoundsSides: resolved.openSides.map((wallName) => structureWallSides(resolved.frame)[wallName]),
+    baseY: resolved.plateY,
+    wallTopY: resolved.plateY,
+    floorY: resolved.sillY,
+    foundationTopY: host?.foundationTopY,
+  };
 }
 
 // ---------------------------------------------------------------------------

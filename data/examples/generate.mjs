@@ -57,6 +57,30 @@ const examples = {
       { hostVolumeId: 'volume-0', hostSide: 'minZ', kind: 'dormer', offset: 3, width: 2, roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 12 } },
     ],
   },
+  'ground-porch': {
+    note: 'A ground-level porch on a solid deck, open on three sides with posts, its shed roof butting the wall below the second floor.',
+    footprint: rect(16, 9),
+    structures: [
+      on('volume-0', { kind: 'porch', setback: -2.4, depth: 2.4, width: 9, baseHeight: 'ground', wallHeight: 2.6, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 3 }, openSides: ['front', 'left', 'right'] }),
+    ],
+  },
+  'sleeping-porch': {
+    note: 'Key example: a sleeping porch standing on a flat-roofed ground porch. The ground porch is open with posts; the sleeping porch is enclosed, its shed roof tucked just under the main eave.',
+    footprint: rect(16, 9),
+    structures: [
+      on('volume-0', { id: 'ground-porch', kind: 'porch', setback: -2.4, depth: 2.4, width: 7, baseHeight: 'ground', wallHeight: 3.2, roofType: 'flat', openSides: ['front', 'left', 'right'] }),
+      { id: 'sleeping-porch', kind: 'porch', hostStructureId: 'ground-porch', hostSide: 'maxZ', setback: 0, depth: 2.4, width: 7, baseHeight: 0, wallHeight: 2.4, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 1.5 }, openSides: [] },
+    ],
+  },
+  'porch-supports': {
+    note: 'Second-floor porches and how they are held up: an open porch on posts, a shallow balcony on brackets, and an enclosed base (a two-story bay).',
+    footprint: rect(18, 9),
+    structures: [
+      on('volume-0', { kind: 'porch', offset: -5.5, setback: -2.4, depth: 2.4, width: 3.6, baseHeight: -3.2, wallHeight: 2.4, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 1.5 }, openSides: ['front', 'left', 'right'], support: 'posts' }),
+      on('volume-0', { kind: 'porch', offset: 0, setback: -1.2, depth: 1.2, width: 3, baseHeight: -3.2, wallHeight: 2.4, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 3 }, openSides: ['front'], support: 'brackets' }),
+      on('volume-0', { kind: 'porch', offset: 5.5, setback: -1.8, depth: 1.8, width: 3.6, baseHeight: -3.2, wallHeight: 2.4, roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 6 }, openSides: [], support: 'enclosed' }),
+    ],
+  },
 };
 
 let failed = false;

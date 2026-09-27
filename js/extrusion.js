@@ -9,7 +9,7 @@ import {
   resolveVolumeEaves, sideOverhangs, buildGableTrim, buildHipTrim, buildShedTrim, buildPartialEaveStrips,
 } from './eaves.js';
 import {
-  clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, clipInsideConvexSolid, planPrism, volumeSolid,
+  clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, clipInsideConvexSolid, planPrism, volumeSolid, isInsideSolid,
   validateRoofStructures, structureWallPolygons, structureWallSides, structureFloorPolygon, hostEaveProfile, hostEaveCovers,
 } from './roof-structures.js';
 import {
@@ -125,6 +125,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   roofZones.forEach((zone) => {
     zone.baseY = roof.position.y;
     zone.wallTopY = foundationHeight + totalHeight;
+    zone.foundationTopY = foundationHeight;
   });
   roof.userData = {
     roofZoneId: primaryRoofZone?.id ?? 'roof-zone-main',
@@ -176,12 +177,17 @@ function withRoofStructures(result, config) {
   if (structures.length === 0) {
     return { ...result, roofStructures: [] };
   }
-  const results = validateRoofStructures(structures, result.roofZones, config);
-  const built = results.filter((entry) => entry.resolved);
+  const results = validateRoofStructures(structures, result.roofZones, config, {
+    describeStructure: (resolved) => {
+      const setup = structureEaveSetup(resolved, config);
+      return { overhang: setup.overhang, eaves: setup.eaves };
+    },
+  });
+  // lowest first: a structure standing on another is built after it
+  const built = results.filter((entry) => entry.resolved).sort((a, b) => a.resolved.level - b.resolved.level);
   if (built.length === 0) {
     return { ...result, roofStructures: results };
   }
-  const zones = new Map(result.roofZones.map((zone) => [zone.volumeId, zone]));
   const materials = createMaterials(config);
   const roofMeshes = [];
   result.building.traverse((child) => {
@@ -189,19 +195,26 @@ function withRoofStructures(result, config) {
       roofMeshes.push(child);
     }
   });
+  const builtSolids = [];
+  const clipOutside = (triangles, solids) => solids.reduce((kept, solid) => clipOutsideConvexSolid(kept, solid), triangles);
 
-  built.forEach(({ resolved }) => {
-    const host = zones.get(resolved.hostVolumeId);
-    // Every other volume is solid too: a porch that runs into a taller
-    // neighbor merges into its walls and roof the same way it meets its host.
-    const others = result.roofZones.filter((zone) => zone.volumeId !== host.volumeId).map((zone) => volumeSolid(zone));
+  built.forEach(({ resolved, host }) => {
+    // Every volume and every structure already built is solid too: a porch
+    // that runs into a taller neighbor merges into its walls and roof the
+    // same way it meets its host.
+    const others = [
+      ...result.roofZones.filter((zone) => zone.volumeId !== host.volumeId).map((zone) => volumeSolid(zone)),
+      ...builtSolids.filter((entry) => entry.id !== host.volumeId).map((entry) => entry.solid),
+    ];
     const hostSolid = volumeSolid(host);
     // The host's body: its walls up to their top, without the roof. A
     // standing structure's floor stops at it, and so do its walls where the
     // host roof over them is cut away (see standingWalls).
     const hostBody = volumeSolid({ ...host, planes: [], slabThickness: 0, baseY: host.wallTopY });
-    const clipOutside = (triangles, solids) => solids.reduce((kept, solid) => clipOutsideConvexSolid(kept, solid), triangles);
-    const floorSolids = [hostBody, ...others];
+    // A floor lying right on the host's wall top (a porch on a ground porch's
+    // roof) is that lower space's ceiling, so it stays: only floor sunk below
+    // the wall top, inside the host, is cut away.
+    const floorSolids = [volumeSolid({ ...host, planes: [], slabThickness: 0, baseY: host.wallTopY - 1e-3 }), ...others];
 
     // walls start low enough to meet the host: its roof for a dormer, its
     // wall top (below the roof lift) for a structure standing on a base
@@ -221,17 +234,24 @@ function withRoofStructures(result, config) {
       ),
       ...(flushFront ? clipOutside(polygonsToTriangles([flushFront.polygon]), others) : []),
     ];
+    const supports = structureSupports(resolved, host);
     const parts = [
       ['walls', [...wallTriangles, ...clipOutside(kneeWalls(resolved, host), others)], materials.wall],
       ['roof', clipOutside(structureRoofTriangles(resolved, config), [hostSolid, ...others]), materials.roof],
       ['floor', resolved.standing ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved)]), floorSolids) : [], materials.roof],
+      ['posts', clipOutside([...openSidePosts(resolved, [hostBody, ...others]), ...supports.posts], [hostBody, ...others]), materials.wall],
+      ['support', clipOutside(supports.walls, [hostSolid, ...others]), materials.wall],
+      ['foundation', clipOutside(supports.foundation, [hostSolid, ...others]), materials.foundation],
       ['eave-caps', interruptsHostEave(resolved, host) ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
     ];
     parts.forEach(([part, triangles, material]) => {
       if (triangles.length) {
         const mesh = new THREE.Mesh(trianglesToGeometry(triangles), material);
-        mesh.userData = { structureId: resolved.id, structurePart: part, hostVolumeId: resolved.hostVolumeId };
+        mesh.userData = { structureId: resolved.id, structurePart: part, hostVolumeId: host.volumeId };
         result.building.add(mesh);
+        if (part === 'roof') {
+          roofMeshes.push(mesh); // a structure standing on this one cuts it too
+        }
       }
     });
 
@@ -239,15 +259,162 @@ function withRoofStructures(result, config) {
     // A standing structure's solid starts at its floor, so a flat host's slab
     // below the deck goes too; a dormer's reaches down through the host roof.
     const cut = volumeSolid(resolved, { floorY: resolved.standing ? resolved.sillY : 0 });
-    roofMeshes.forEach((mesh) => {
+    roofMeshes.filter((mesh) => mesh.userData?.structureId !== resolved.id).forEach((mesh) => {
       const y = mesh.position.y;
       const absolute = geometryTriangles(mesh.geometry).map((tri) => tri.map(([px, py, pz]) => [px, py + y, pz]));
       const kept = clipOutsideConvexSolid(absolute, cut).map((tri) => tri.map(([px, py, pz]) => [px, py - y, pz]));
       mesh.geometry.dispose();
       mesh.geometry = trianglesToGeometry(kept);
     });
+    builtSolids.push({ id: resolved.id, solid: volumeSolid(resolved, { floorY: resolved.sillY }) });
   });
   return { ...result, roofStructures: results };
+}
+
+/** Post size (square) and the longest span between posts along an open side or a supported front. */
+const POST_SIZE = 0.2;
+const MAX_POST_SPAN = 3;
+
+/** Closed surface of an axis-aligned box. */
+function boxTriangles([x0, y0, z0], [x1, y1, z1]) {
+  const p = (i) => [i & 1 ? x1 : x0, i & 2 ? y1 : y0, i & 4 ? z1 : z0];
+  const faces = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+  return faces.flatMap(([a, b, c, d]) => [[p(a), p(b), p(c)], [p(a), p(c), p(d)]]);
+}
+
+/** Evenly spaced positions from `a` to `b`, no more than `span` apart, ends included. */
+function spacedPositions(a, b, span) {
+  const count = Math.max(1, Math.ceil(Math.abs(b - a) / span - 1e-9));
+  return Array.from({ length: count + 1 }, (_, i) => a + ((b - a) * i) / count);
+}
+
+/**
+ * A square post standing at plan point `at`, pushed inside the structure's
+ * rectangle so its faces are flush with the rectangle's sides, from `y0` to `y1`.
+ */
+function postBox(bounds, [x, z], y0, y1) {
+  const s = POST_SIZE;
+  const clampTo = (value, lo, hi) => Math.min(Math.max(value - s / 2, lo), hi - s);
+  const px = clampTo(x, bounds.minX, bounds.maxX);
+  const pz = clampTo(z, bounds.minZ, bounds.maxZ);
+  return boxTriangles([px, y0, pz], [px + s, y1, pz + s]);
+}
+
+/**
+ * Posts holding up the roof along a structure's open sides: at each end and
+ * no more than MAX_POST_SPAN apart, from floor to plate. An end against a
+ * closed wall of its own, or against the host or another volume (where the
+ * roof bears on that wall), gets no post.
+ */
+function openSidePosts(resolved, solids) {
+  const sides = structureWallSides(resolved.frame);
+  const { bounds, sillY, plateY } = resolved;
+  const closedSides = Object.entries(sides).filter(([wallName]) => !resolved.openSides.includes(wallName)).map(([, side]) => side);
+  const onClosedWall = ([x, z]) => closedSides.some((side) => Math.abs((side === 'minX' || side === 'maxX' ? x : z) - bounds[side]) < 1e-6);
+  const midY = (sillY + plateY) / 2;
+  const againstSolid = ([x, z]) => solids.some((solid) => isInsideSolid([x, midY, z], solid, 1e-3));
+  const points = new Map();
+  resolved.openSides.forEach((wallName) => {
+    const side = sides[wallName];
+    const [a, b] = side === 'minX' || side === 'maxX'
+      ? [[bounds[side], bounds.minZ], [bounds[side], bounds.maxZ]]
+      : [[bounds.minX, bounds[side]], [bounds.maxX, bounds[side]]];
+    const k = side === 'minX' || side === 'maxX' ? 1 : 0;
+    // only the stretch of the side standing clear of the host and other volumes
+    spacedPositions(a[k], b[k], MAX_POST_SPAN).forEach((t) => {
+      const point = k === 1 ? [a[0], t] : [t, a[1]];
+      if (!onClosedWall(point) && !againstSolid(point)) {
+        points.set(point.map((v) => v.toFixed(6)).join(','), point);
+      }
+    });
+  });
+  return [...points.values()].flatMap((point) => postBox(bounds, point, sillY, plateY));
+}
+
+/**
+ * What holds up the part of a projecting structure past its host wall (see
+ * `support` in js/roof-structures.js), as triangles grouped by material:
+ * - `deck`: a solid base from grade to the floor;
+ * - `posts`: posts from grade to the floor along the front, no more than
+ *   MAX_POST_SPAN apart;
+ * - `porch`: the same posts standing on a ground-level deck;
+ * - `brackets`: triangular braces under the floor, back to the wall;
+ * - `enclosed`: walls from the foundation to the floor on the projecting
+ *   sides, over a foundation.
+ */
+function structureSupports(resolved, host) {
+  const empty = { posts: [], walls: [], foundation: [] };
+  if (!resolved.projecting || resolved.support === 'none') {
+    return empty;
+  }
+  const { frame, bounds, sillY } = resolved;
+  const groundY = 0;
+  const foundationY = Math.min(resolved.foundationTopY ?? host.foundationTopY ?? 0, sillY);
+  const wall = resolved.wallLine;
+  const front = resolved.front;
+  const [a0, a1] = resolved.along;
+  // the projecting part's rectangle, in plan
+  const [i0, i1] = [Math.min(front, wall), Math.max(front, wall)];
+  const box = (y0, y1) => (frame.along === 'x'
+    ? boxTriangles([a0, y0, i0], [a1, y1, i1])
+    : boxTriangles([i0, y0, a0], [i1, y1, a1]));
+  const frontPoint = (along) => (frame.along === 'x' ? [along, front] : [front, along]);
+  const frontPosts = (y0) => spacedPositions(a0, a1, MAX_POST_SPAN).flatMap((along) => postBox(bounds, frontPoint(along), y0, sillY));
+  switch (resolved.support) {
+    case 'deck':
+      return { ...empty, foundation: box(groundY, sillY) };
+    case 'posts':
+      return { ...empty, posts: frontPosts(groundY) };
+    case 'porch':
+      return { ...empty, posts: frontPosts(foundationY), foundation: box(groundY, foundationY) };
+    case 'enclosed': {
+      const skirt = STRUCTURE_WALLS_BELOW.flatMap((wallName) => enclosedBaseWall(resolved, wallName, foundationY, sillY));
+      return { ...empty, walls: skirt, foundation: box(groundY, foundationY) };
+    }
+    case 'brackets': {
+      const projection = Math.abs(front - wall);
+      const thickness = POST_SIZE * 0.6;
+      const reach = projection * 0.85;
+      return {
+        ...empty,
+        posts: spacedPositions(a0 + thickness / 2, a1 - thickness / 2, MAX_POST_SPAN * 0.6).flatMap((along) => {
+          // a right triangle in the (inward, y) plane: along the floor, then down the wall
+          const outward = -frame.sign;
+          const section = [[wall, sillY], [wall + outward * reach, sillY], [wall, sillY - reach]];
+          const at = (t, [c, y]) => (frame.along === 'x' ? [t, y, c] : [c, y, t]);
+          const [s0, s1] = [along - thickness / 2, along + thickness / 2];
+          const near = section.map((point) => at(s0, point));
+          const far = section.map((point) => at(s1, point));
+          return [
+            near, [far[0], far[2], far[1]],
+            ...[0, 1, 2].flatMap((i) => {
+              const j = (i + 1) % 3;
+              return [[near[i], near[j], far[j]], [near[i], far[j], far[i]]];
+            }),
+          ];
+        }),
+      };
+    }
+    default:
+      return empty;
+  }
+}
+
+const STRUCTURE_WALLS_BELOW = ['front', 'left', 'right'];
+
+/** One wall of an enclosed base, on the projecting part of the named side, from `y0` to `y1`. */
+function enclosedBaseWall(resolved, wallName, y0, y1) {
+  const { frame, bounds } = resolved;
+  const side = structureWallSides(frame)[wallName];
+  const sideAxis = side === 'minX' || side === 'maxX' ? 'x' : 'z';
+  const at = bounds[side];
+  // the front runs the structure's width; a side wall only its projecting part
+  const [alongMinKey, alongMaxKey] = frame.along === 'x' ? ['minX', 'maxX'] : ['minZ', 'maxZ'];
+  const [t0, t1] = sideAxis === frame.inward
+    ? [bounds[alongMinKey], bounds[alongMaxKey]]
+    : [Math.min(resolved.front, resolved.wallLine), Math.max(resolved.front, resolved.wallLine)];
+  const point = (t, y) => (sideAxis === 'x' ? [at, y, t] : [t, y, at]);
+  return polygonsToTriangles([[point(t0, y0), point(t1, y0), point(t1, y1), point(t0, y1)]]);
 }
 
 /**
@@ -332,12 +499,18 @@ function standingWalls(triangles, resolved, {
 }
 
 /**
- * Whether a structure breaks its host's eave. A flush front wall always
- * does. A projecting porch does when it rises past the host plate where it
+ * Whether a structure breaks its host's eave. A flush front wall does,
+ * where the host has a wall under the eave. A projecting porch does when it rises past the host plate where it
  * meets the wall; a lower one tucks under the eave, or its roof passes
  * through the soffit, which the structure's own solid already cuts.
  */
 function interruptsHostEave(resolved, host) {
+  // a flush wall carries the host's wall up through the eave; where the host
+  // is open on that side (a ground porch under a sleeping porch) there is no
+  // wall to carry, and the eave runs on as a beam
+  if (host.openBoundsSides?.includes(resolved.hostSide)) {
+    return false;
+  }
   if (resolved.flush) {
     return true;
   }
@@ -602,6 +775,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
       }),
       baseY: roof.position.y,
       wallTopY: foundationHeight + totalHeight,
+      foundationTopY: foundationHeight,
     });
     roof.userData = {
       volumeId: volume.id,

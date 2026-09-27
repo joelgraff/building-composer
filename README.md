@@ -55,6 +55,14 @@ npm test
   - Flat or roof-parallel soffits (eaves default flat, rakes default parallel), with boxed corners where they meet.
   - Every setting is a building default that any volume can override; a main roof keeps its eave where a gable merges into it.
 
+- **Roof Structures** (dormers and porches; no editor UI yet, so they are loaded from `.bld` files, see `data/examples/`):
+  - **Dormers** rising out of one roof slope, with gable, hip, shed, or flat roofs. Their walls stand clear of the roof, their roofs die into it along exact valleys, and the host roof is cut to meet them as one closed shell. A roof that would pass the host ridge is lowered to it.
+  - **Wall dormers** (zero setback) carry the main wall up through the eave, which stops and is capped on either side.
+  - **Porches** standing on a base: projecting past the wall (at ground level or above), or standing on a lower wing. Open sides get posts and headers, and knee walls close the attic where they replace part of the roof.
+  - **Supports** for projecting porches: a solid deck, posts, a ground-level porch, brackets, or an enclosed base (a two-story bay).
+  - **Stacking**: a structure can stand on another, e.g. a sleeping porch on a ground porch's roof.
+  - Every placement is validated (host side, fit on one roof face, overlaps, supports), and anything not built is reported in the status line.
+
 - **Roof Graph & Edge Roles**:
   - Automatically identifies and tags exterior perimeter edges by their architectural roof role:
     - **Eave**: Lower edge where the roof plane slopes upward (includes all hip edges, parallel gable edges, shed low eaves, and courtyard walls).
@@ -68,7 +76,7 @@ npm test
   - Secondary top-down orthographic plan view synchronized with camera controls and dynamic bounding frustum.
 
 - **Native Persistence & Interchange**:
-  - **Save Project (`.bld`)**: Serializes complete footprint, volumes, roof graph, story overrides, materials, edge pitches, per-volume roof shapes, and eave settings into a native JSON document.
+  - **Save Project (`.bld`)**: Serializes complete footprint, volumes, roof graph, story overrides, materials, edge pitches, per-volume roof shapes, eave settings, and roof structures into a native JSON document.
   - **Load Project**: Restores saved `.bld` files or raw footprint JSON arrays.
   - **GLB Export**: One-click binary GLTF/GLB export via Three.js `GLTFExporter`, cleanly omitting editor-only visual guides, outlines, and pick targets.
 
@@ -77,6 +85,7 @@ npm test
 ```
 building-composer/
 ├── data/                  # Preset footprint JSON fixtures (Rectangle, U, L, etc.)
+│   └── examples/          # Example .bld projects with dormers and porches (and their generator)
 ├── js/
 │   ├── eaves.js           # Eave/rake overhang, fascia, and soffit geometry
 │   ├── export.js          # GLTF/GLB binary export logic
@@ -84,14 +93,19 @@ building-composer/
 │   ├── facade.js          # Facade layout, volume decomposition, roof graph, .bld persistence
 │   ├── footprint.js       # 2D polygon validation, normalization, and metrics
 │   ├── main.js            # UI controller, scene management, dual viewport rendering
-│   └── materials.js       # Shared PBR material definitions and palette presets
+│   ├── materials.js       # Shared PBR material definitions and palette presets
+│   ├── roof-planes.js     # Roof eave planes and their heights (shared by roofs and structures)
+│   └── roof-structures.js # Dormer/porch records, placement, validation, and convex-solid clipping
 ├── tests/
 │   ├── eaves.test.js      # Overhang, fascia/soffit, and closure tests
 │   ├── extrusion.test.js  # Massing, extrusion, and NaN validation tests
 │   ├── facade.test.js     # Facade layout and volume decomposition tests
 │   ├── footprint.test.js  # Validation, winding, and metrics tests
+│   ├── helpers/mesh.js    # Mesh inspection helpers (open and uncovered edges, areas)
 │   ├── roof_graph.test.js # Edge role classification and serialization tests
-│   └── roof_resolver.test.js # Roof merge, planarity, and story-count tests
+│   ├── roof_resolver.test.js # Roof merge, planarity, and story-count tests
+│   ├── roof_structures.test.js # Structure records, placement, validation, clipping, persistence
+│   └── roof_structure_geometry.test.js # Dormer and porch geometry: closure, cuts, supports, stacking
 ├── index.html             # App shell, toolbar, sidebar panels, and viewport canvases
 ├── ARCHITECTURE.md        # Architectural specification and data model
 └── IMPLEMENTATION_PLAN.md # Milestone roadmap and execution log
