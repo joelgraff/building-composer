@@ -40,7 +40,7 @@ surface. Detached objects (appurtenances) and separate structures
 | Footprint | 2D polygon (supplied by main model) | Vertices, area, perimeter segments |
 | Foundation | Base below/at grade | Depth, above-grade height, material |
 | Walls | Vertical extrusion | Story count, per-story height, wall thickness |
-| Roof | Top cap | Type (gable, hip, flat, mansard…), pitch, overhang/eave depth |
+| Roof | Top cap | Type (flat, gable, hip, shed, mansard, gambrel), pitch, break height and lower/upper pitches (mansard, gambrel), deck height (hip), overhang/eave depth |
 | Facade | Subdivided surface of the envelope | See §4 |
 | Substructure * | Associated separate footprint (shed, garage, gazebo) | Parent reference, relative transform, own extrusion params |
 | Roof structure | Dormer or porch outside the footprint (an envelope modifier) | Host volume or structure and side, offset, width, setback, depth, wall height, base height, own roof and eaves, open sides, support |
@@ -159,6 +159,18 @@ shed 1, gable 2, hip 4) so neighbors can be intersected analytically:
   interacts with a taller neighbor, and only above that neighbor's eave; below
   it the roof butts the wall as a standalone roof.
 
+**Mansard and gambrel roofs.** Two-slope roofs: on each sloped side a steep
+lower plane rises to a break (curb) and a shallow upper plane carries on above
+it, and the roof is the min of these planes (so dormers, zone descriptors, and
+structures treat them like any other roof). A mansard slopes on all four sides,
+a gambrel on its two eave sides with gable ends. Their eaves are horizontal
+cornice boxes at the plate rather than the steep slope carried past the wall;
+a gambrel's rakes follow its broken profile. On a multi-volume footprint each
+volume gets its own two-slope roof, with sides fully covered by a neighbor left
+unsloped and closed with an end face clipped outside the neighbor; a continuous
+mansard around an L or U is later work. A hip roof can likewise be cut flat at
+a deck height (an added level plane), the flat top a widow's walk stands on.
+
 **Standalone shed shell.** Shed roofs emit a sloped roof plane, vertical
 high-side return, and triangular end closures down to the supporting wall top.
 A shed is the half-gable special case: one of a gable's two slopes.
@@ -188,7 +200,9 @@ come out of the clip for every roof type). The rules that follow:
 - A structure rising through the roof (`mount: 'through'`: a cupola,
   belvedere, or rooftop pavilion) does neither: it may straddle the ridge, its
   wall height is measured from the highest point of the roof under it, and it
-  leaves the host roof whole.
+  leaves the host roof whole. A roofless one (`roofType: 'none'`) is a
+  platform: a widow's walk, a deck on a level part of the roof, whose railing
+  is a facade element.
 - A flush front wall carries its host wall up through the eave: the eave is
   cut away across it and capped either side, unless the host is open on that
   side (then the eave runs on as a beam).

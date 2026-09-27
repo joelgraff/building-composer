@@ -1,69 +1,68 @@
 {
   "format": "building-composer",
   "version": 1,
-  "note": "A ground-level porch on a solid deck, open on three sides with posts, its shed roof butting the wall below the second floor.",
+  "note": "A widow's walk: a hip roof cut flat at 1.6 m, with a deck filling the flat top less 0.3 m. Its railing (1 m, the structure's wall height) comes with facade elements.",
   "footprint": [
     [
-      -8,
-      -4.5
+      -7,
+      -5.5
     ],
     [
-      8,
-      -4.5
+      7,
+      -5.5
     ],
     [
-      8,
-      4.5
+      7,
+      5.5
     ],
     [
-      -8,
-      4.5
+      -7,
+      5.5
     ]
   ],
   "storyCount": 2,
   "storyHeight": 3.2,
-  "roofType": "gable",
+  "roofType": "hip",
   "roofDirection": "z-min",
   "roofPitchRise": 8,
   "roofPitchRun": 12,
   "roofHeightMode": "slope",
-  "roofEaveDepth": 0.35,
+  "roofEaveDepth": 0.6,
   "roofRakeDepth": 0.25,
   "roofFasciaDepth": 0.1524,
   "eaveSoffit": "flat",
   "rakeSoffit": "sloped",
   "wallMaterial": "wood",
-  "roofHeight": 3,
+  "roofDeckHeight": 1.6,
+  "roofHeight": 3.6666666666666665,
   "volumeStoryOverrides": {},
   "roofStructures": [
     {
       "id": "structure-1",
-      "kind": "porch",
+      "kind": "widows-walk",
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
       "hostSide": "maxZ",
       "offset": 0,
-      "width": 9,
-      "setback": -2.4,
-      "mount": "join",
-      "fill": false,
+      "width": 3,
+      "setback": "center",
+      "mount": "through",
+      "fill": true,
       "fillMargin": 0.3,
-      "depth": 2.4,
-      "wallHeight": 2.6,
-      "baseHeight": "ground",
+      "depth": 3,
+      "wallHeight": 1,
+      "baseHeight": null,
       "support": "auto",
       "openSides": [
         "front",
+        "back",
         "left",
         "right"
       ],
       "inset": 0,
-      "roofType": "shed",
+      "roofType": "none",
       "ridge": "perpendicular",
-      "roofShape": {
-        "mode": "slope",
-        "pitchRise": 3
-      },
+      "roofShape": null,
       "join": "auto",
       "eaves": {},
       "materials": {}

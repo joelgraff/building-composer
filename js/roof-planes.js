@@ -50,6 +50,9 @@ export function evalZoneHeight(planes, x, z) {
  * renders.
  */
 export function computeVolumeEavePlanes(bounds, roofType, config) {
+  if (TWO_SLOPE_ROOF_TYPES.includes(roofType)) {
+    return twoSlopePlanes(bounds, roofType, config);
+  }
   const roofHeight = config.roofHeight ?? 0;
   if (roofType === 'flat' || !(roofHeight > 0)) {
     return [];
@@ -57,7 +60,13 @@ export function computeVolumeEavePlanes(bounds, roofType, config) {
 
   if (roofType === 'hip') {
     const pitchRatio = (config.roofPitchRise ?? 0) / (config.roofPitchRun ?? 12);
-    return ['minX', 'maxX', 'minZ', 'maxZ'].map((side) => makeEavePlane(bounds, side, pitchRatio));
+    const planes = ['minX', 'maxX', 'minZ', 'maxZ'].map((side) => makeEavePlane(bounds, side, pitchRatio));
+    // a hip cut flat at a deck (the flat top a widow's walk stands on)
+    const naturalPeak = pitchRatio * Math.min(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) / 2;
+    if (config.deckHeight > 0 && config.deckHeight < naturalPeak - 1e-9) {
+      planes.push({ constantHeight: config.deckHeight, tier: 'deck' });
+    }
+    return planes;
   }
 
   const ridgeAxis = config.roofDirection === 'x' ? 'x' : 'z';
@@ -78,4 +87,43 @@ export function computeVolumeEavePlanes(bounds, roofType, config) {
   }
 
   return [];
+}
+
+/** Roof types made of two slopes per sloped side (a steep lower and a shallow upper plane). */
+export const TWO_SLOPE_ROOF_TYPES = ['mansard', 'gambrel'];
+
+/**
+ * The sides a two-slope roof slopes on: a mansard on all four, a gambrel on
+ * its two eave sides (parallel to its ridge), less any `unslopedSides` (sides
+ * shared with a neighbor, closed with an end face instead).
+ */
+export function twoSlopeSides(roofType, ridgeAxis, unslopedSides = []) {
+  const all = roofType === 'gambrel'
+    ? (ridgeAxis === 'x' ? ['minZ', 'maxZ'] : ['minX', 'maxX'])
+    : ['minX', 'maxX', 'minZ', 'maxZ'];
+  return all.filter((side) => !unslopedSides.includes(side));
+}
+
+/**
+ * A mansard's or gambrel's planes: on each sloped side a steep lower plane
+ * (`lowerSlope`) from the eave, and a shallow upper plane (`upperSlope`) that
+ * meets it at the break, `breakHeight` above the plate. The roof is their
+ * min: below the break the steep plane is lower, above it the shallow one.
+ * Steep planes come first, so the plane found for a side is its lower slope
+ * (the one a dormer rises out of).
+ */
+function twoSlopePlanes(bounds, roofType, config) {
+  const breakHeight = config.breakHeight ?? 0;
+  const lowerSlope = config.lowerSlope ?? 0;
+  const upperSlope = config.upperSlope ?? 0;
+  if (!(breakHeight > 0) || !(lowerSlope > 0)) {
+    return [];
+  }
+  const ridgeAxis = config.roofDirection === 'x' ? 'x' : 'z';
+  const sides = twoSlopeSides(roofType, ridgeAxis, config.unslopedSides);
+  const inset = breakHeight / lowerSlope;
+  return [
+    ...sides.map((side) => ({ ...makeEavePlane(bounds, side, lowerSlope), tier: 'lower' })),
+    ...sides.map((side) => ({ ...makeEavePlane(bounds, side, upperSlope), offset: breakHeight - upperSlope * inset, tier: 'upper' })),
+  ];
 }

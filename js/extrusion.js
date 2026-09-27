@@ -11,9 +11,10 @@ import {
 import {
   clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, clipInsideConvexSolid, planPrism, volumeSolid, isInsideSolid,
   validateRoofStructures, structureWallPolygons, structureWallSides, structureFloorPolygon, structureRecess, hostEaveProfile, hostEaveCovers,
+  roofProfile, roofPeak, DECK_THICKNESS,
 } from './roof-structures.js';
 import {
-  computeVolumeEavePlanes, defaultHighEdgeForAxis, evalZoneHeight,
+  computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
 } from './roof-planes.js';
 
 export { computeVolumeEavePlanes, evalZoneHeight };
@@ -248,12 +249,22 @@ function withRoofStructures(result, config) {
           ...(resolved.standing ? openSidePosts(resolved, [hostBody, ...others]) : []),
           ...supports.posts,
         ], [hostBody, ...others]),
-        // a structure rising through the roof stands its posts on the roof
-        ...(resolved.through ? clipOutside(openSidePosts(resolved, others, host.baseY), [hostSolid, ...others]) : []),
+        // a structure rising through the roof stands its posts on the roof (a
+        // roofless one's railing posts are facade elements)
+        ...(resolved.through && resolved.roofType !== 'none'
+          ? clipOutside(openSidePosts(resolved, others, host.baseY), [hostSolid, ...others])
+          : []),
       ], materials.wall],
       ['support', clipOutside(supports.walls, [hostSolid, ...others]), materials.wall],
       ['foundation', clipOutside(supports.foundation, [hostSolid, ...others]), materials.foundation],
       ['eave-caps', interruptsHostEave(resolved, host) ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
+      // a roofless platform on a flat roof top (a widow's walk) is a deck
+      ['deck', resolved.through && resolved.roofType === 'none'
+        ? clipOutside(boxTriangles(
+          [resolved.bounds.minX, resolved.sillY, resolved.bounds.minZ],
+          [resolved.bounds.maxX, resolved.sillY + DECK_THICKNESS, resolved.bounds.maxZ]
+        ), others)
+        : [], materials.roof],
     ];
     parts.forEach(([part, triangles, material]) => {
       if (triangles.length) {
@@ -620,6 +631,9 @@ function interruptHostEave(resolved, host, roofMeshes) {
  * walls and roof do not overlap.
  */
 function structureRoofTriangles(resolved, config) {
+  if (resolved.roofType === 'none') {
+    return [];
+  }
   const sides = structureWallSides(resolved.frame);
   const setup = structureEaveSetup(resolved, config);
   const { bounds } = resolved;
@@ -732,7 +746,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
     storyCount, storyHeight, foundationDepth, roofEaveDepth, roofType, roofHeight, roofPitchRise, roofPitchRun,
   } = config;
   const directedVolumes = applyVolumeRidgeDirections(volumes, config.volumeRidgeDirections ?? {});
-  const hasGableVolume = directedVolumes.some((volume) => (config.volumeRoofTypes?.[volume.id] ?? roofType) === 'gable');
+  const hasGableVolume = directedVolumes.some((volume) => ['gable', 'gambrel'].includes(config.volumeRoofTypes?.[volume.id] ?? roofType));
   const roofVolumes = hasGableVolume
     ? resolveGableRidgeDirections(directedVolumes)
     : directedVolumes;
@@ -795,7 +809,19 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
         roofConfig.mergedEnds = gableMerge.mergedEnds;
       }
     }
-    const roofGeometry = roofTypeForVolume === 'gable'
+    if (roofTypeForVolume === 'hip') {
+      Object.assign(roofConfig, withHipDeck(roofConfig, volume.id, config));
+    }
+    if (isTwoSlope(roofTypeForVolume)) {
+      const unsloped = unslopedSidesOf(adjacentSides.get(volume.id), volume);
+      Object.assign(roofConfig, withTwoSlope(roofConfig, volume.id, roofTypeForVolume, config, bounds, unsloped), {
+        roofType: roofTypeForVolume,
+        neighborSolids: neighborSolidsForEnds(volume, unsloped, roofVolumes, config, adjacentSides, (id) => volumePlateHeights[id] ?? 0),
+      });
+    }
+    const roofGeometry = isTwoSlope(roofTypeForVolume)
+      ? createTwoSlopeRoofGeometry(bounds, roofConfig)
+      : roofTypeForVolume === 'gable'
       ? createGableRoofGeometry(bounds, roofConfig)
       : roofTypeForVolume === 'hip'
         ? createHipRoofGeometry(bounds, roofConfig)
@@ -1011,7 +1037,7 @@ function createRoofGeometry(footprint, config) {
   const bounds = getRectangularBounds(footprint);
   const hasSlopedVolumeRoof = config.volumes?.some((volume) => {
     const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
-    return roofType === 'gable' || roofType === 'hip' || roofType === 'shed';
+    return roofType === 'gable' || roofType === 'hip' || roofType === 'shed' || isTwoSlope(roofType);
   });
   const rectangleVolumeId = config.volumes?.[0]?.id ?? 'volume-main';
   const rectangleSetup = bounds
@@ -1029,9 +1055,18 @@ function createRoofGeometry(footprint, config) {
   if (hasVolumeShapeOverride && (config.roofType !== 'flat' || hasSlopedVolumeRoof)) {
     return createVolumeRoofAssembly(config.volumes, config);
   }
-  if (config.roofType === 'gable' || config.roofType === 'hip' || config.roofType === 'shed' || hasSlopedVolumeRoof) {
+  if (config.roofType === 'gable' || config.roofType === 'hip' || config.roofType === 'shed' || isTwoSlope(config.roofType) || hasSlopedVolumeRoof) {
+    if (bounds && isTwoSlope(config.roofType)) {
+      const shapedConfig = withTwoSlope(
+        { ...config, overhang: rectangleSetup.overhang, eaves: rectangleSetup.eaves },
+        rectangleVolumeId, config.roofType, config, bounds, []
+      );
+      return { geometry: flatShaded(createTwoSlopeRoofGeometry(bounds, shapedConfig)), zones: rectangleZone(config.roofType, shapedConfig) };
+    }
     if (bounds) {
-      const shapedConfig = { ...config, overhang: rectangleSetup.overhang, eaves: rectangleSetup.eaves };
+      const shapedConfig = config.roofType === 'hip'
+        ? withHipDeck({ ...config, overhang: rectangleSetup.overhang, eaves: rectangleSetup.eaves }, rectangleVolumeId, config)
+        : { ...config, overhang: rectangleSetup.overhang, eaves: rectangleSetup.eaves };
       const geometry = flatShaded(config.roofType === 'gable'
         ? createGableRoofGeometry(bounds, shapedConfig)
         : config.roofType === 'hip'
@@ -1132,7 +1167,7 @@ function createStraightSkeletonHipGeometry(footprint, config) {
  */
 function createVolumeRoofAssembly(volumes, config) {
   const directedVolumes = applyVolumeRidgeDirections(volumes, config.volumeRidgeDirections ?? {});
-  const hasGableVolume = directedVolumes.some((volume) => (config.volumeRoofTypes?.[volume.id] ?? config.roofType) === 'gable');
+  const hasGableVolume = directedVolumes.some((volume) => ['gable', 'gambrel'].includes(config.volumeRoofTypes?.[volume.id] ?? config.roofType));
   const roofVolumes = hasGableVolume
     ? resolveGableRidgeDirections(directedVolumes)
     : directedVolumes;
@@ -1179,7 +1214,19 @@ function createVolumeRoofAssembly(volumes, config) {
       mergedEnds: gableMerge?.mergedEnds,
       connections: volumeConnections,
     };
-    const chunk = roofType === 'flat'
+    if (roofType === 'hip') {
+      Object.assign(roofConfig, withHipDeck(roofConfig, volume.id, config));
+    }
+    if (isTwoSlope(roofType)) {
+      const unsloped = unslopedSidesOf(adjacentSides.get(volume.id), volume);
+      Object.assign(roofConfig, withTwoSlope(roofConfig, volume.id, roofType, config, bounds, unsloped), {
+        roofType,
+        neighborSolids: neighborSolidsForEnds(volume, unsloped, roofVolumes, config, adjacentSides),
+      });
+    }
+    const chunk = isTwoSlope(roofType)
+      ? createTwoSlopeRoofGeometry(bounds, roofConfig)
+      : roofType === 'flat'
       ? createFlatRoofGeometry(bounds, setup.overhang)
       : roofType === 'gable'
         ? createGableRoofGeometry(bounds, roofConfig)
@@ -1415,22 +1462,12 @@ function gableMergeGeometry(volume, bounds, connections, ridgeHeight) {
  */
 export function resolveRoofConnections(volumes, config) {
   const planesByVolumeId = new Map(volumes.map((volume) => {
-    const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
-    const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
-    const params = volumeRoofParams(volume.id, halfSpanForBounds(bounds, volume.ridgeAxis), config);
-    const roofHeight = roofType === 'flat' ? 0 : params.roofHeight;
-    const planeConfig = {
-      roofDirection: volume.ridgeAxis,
-      roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis),
-      roofHeight,
-      roofPitchRise: params.pitchRise,
-      roofPitchRun: params.pitchRun,
-    };
+    const { bounds, roofType, planeConfig } = volumePlaneConfig(volume, config);
     return [volume.id, {
       bounds,
       roofType,
       ridgeAxis: volume.ridgeAxis,
-      ridgeHeight: roofHeight,
+      ridgeHeight: planeConfig.roofHeight,
       planes: computeVolumeEavePlanes(bounds, roofType, planeConfig),
     }];
   }));
@@ -1459,6 +1496,10 @@ export function resolveRoofConnections(volumes, config) {
       }
       const own = planesByVolumeId.get(ownId);
       const neighbor = planesByVolumeId.get(neighborId);
+      // mansard and gambrel roofs close their shared sides themselves (see createTwoSlopeRoofGeometry)
+      if (isTwoSlope(own.roofType) || isTwoSlope(neighbor.roofType)) {
+        return;
+      }
       if (own.roofType === 'gable') {
         const resolution = resolveGableEndMerge(own, neighbor, side, Math.max(0, plateGap));
         if (resolution) {
@@ -1940,9 +1981,12 @@ function getRectangularBounds(footprint) {
 }
 
 const EAVE_CONFIG_KEYS = ['roofEaveDepth', 'roofRakeDepth', 'eaveSoffit', 'rakeSoffit', 'roofFasciaDepth', 'volumeEaves'];
+/** Building-wide roof shape settings: mansard and gambrel (see twoSlopeConfig), and a hip's flat deck (see hipDeckHeight). */
+const TWO_SLOPE_CONFIG_KEYS = ['roofBreakHeight', 'roofLowerPitchRise', 'roofUpperPitchRise', 'roofDeckHeight'];
 
+/** The eave (and mansard/gambrel) settings of a config, to pass on to the roof builders. */
 function pickEaveConfig(config) {
-  return Object.fromEntries(EAVE_CONFIG_KEYS.filter((key) => config[key] !== undefined).map((key) => [key, config[key]]));
+  return Object.fromEntries([...EAVE_CONFIG_KEYS, ...TWO_SLOPE_CONFIG_KEYS].filter((key) => config[key] !== undefined).map((key) => [key, config[key]]));
 }
 
 /** Sides of each volume that touch another volume (no overhang there). */
@@ -1993,7 +2037,7 @@ function volumeEaveSetup(volumeId, roofType, orientation, config, mergedSides, a
     if (covered.length) {
       backing[side] = [Math.min(...covered.map((link) => link.wall[0])), Math.max(...covered.map((link) => link.wall[1]))];
     }
-    if (roles[side] !== 'eave' || !bounds || (mergedSides ?? []).includes(side) || roofType === 'hip' || eaves.eaveDepth <= 1e-9) {
+    if (roles[side] !== 'eave' || !bounds || (mergedSides ?? []).includes(side) || !['gable', 'shed'].includes(roofType) || eaves.eaveDepth <= 1e-9) {
       return;
     }
     const alongX = side === 'minZ' || side === 'maxZ';
@@ -2281,9 +2325,289 @@ export function createShedRoofGeometry(bounds, config) {
   return createIndexedGeometry(positions, indices);
 }
 
+/** Defaults for the two-slope roofs, per type (pitches are rise per 12 run). */
+const TWO_SLOPE_DEFAULTS = Object.freeze({
+  mansard: Object.freeze({ breakHeight: 2.4, lowerPitchRise: 30, upperPitchRise: 4 }),
+  gambrel: Object.freeze({ breakHeight: 2.4, lowerPitchRise: 20, upperPitchRise: 6 }),
+});
+
+const isTwoSlope = (roofType) => TWO_SLOPE_ROOF_TYPES.includes(roofType);
+
+/**
+ * A mansard's or gambrel's break height and slopes: the volume's own
+ * (`volumeRoofShapes[id]`: `breakHeight`, `lowerPitchRise`, `upperPitchRise`)
+ * over the building defaults (`roofBreakHeight`, `roofLowerPitchRise`,
+ * `roofUpperPitchRise`) over the type's defaults. `unslopedSides` are closed
+ * with end faces instead of sloping (see unslopedSidesOf).
+ */
+function twoSlopeConfig(volumeId, roofType, config, unslopedSides = []) {
+  const defaults = TWO_SLOPE_DEFAULTS[roofType];
+  const own = config.volumeRoofShapes?.[volumeId] ?? {};
+  const run = config.roofPitchRun ?? 12;
+  const pick = (key, buildingKey) => (Number.isFinite(own[key]) ? own[key] : config[buildingKey] ?? defaults[key]);
+  return {
+    breakHeight: pick('breakHeight', 'roofBreakHeight'),
+    lowerSlope: pick('lowerPitchRise', 'roofLowerPitchRise') / run,
+    upperSlope: pick('upperPitchRise', 'roofUpperPitchRise') / run,
+    unslopedSides,
+  };
+}
+
+/**
+ * The sides of a volume that other volumes' walls cover along their whole
+ * length and rise past (at least to this roof's plate): a two-slope roof
+ * leaves them unsloped, closing them with an end face, rather than sloping
+ * down into its neighbor. A side only partly covered keeps sloping (a U's
+ * courtyard side), and the neighbor's own end face closes against it.
+ */
+function unslopedSidesOf(adjacency, bounds) {
+  return [...(adjacency ?? new Map())].filter(([side, links]) => {
+    const [lo, hi] = side === 'minX' || side === 'maxX' ? [bounds.minZ, bounds.maxZ] : [bounds.minX, bounds.maxX];
+    const covered = links.filter((link) => link.backs).map((link) => [link.min, link.max]).sort((a, b) => a[0] - b[0]);
+    let reach = lo;
+    covered.forEach(([min, max]) => {
+      if (min <= reach + 1e-6) {
+        reach = Math.max(reach, max);
+      }
+    });
+    return reach >= hi - 1e-6;
+  }).map(([side]) => side);
+}
+
+/**
+ * The roof config of a mansard or gambrel volume: its two-slope settings and
+ * the peak height they reach (see roofPeak).
+ */
+function withTwoSlope(roofConfig, volumeId, roofType, config, bounds, unslopedSides) {
+  const twoSlope = { ...roofConfig, ...twoSlopeConfig(volumeId, roofType, config, unslopedSides) };
+  const planes = computeVolumeEavePlanes(bounds, roofType, twoSlope);
+  const rectangle = [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]];
+  return { ...twoSlope, roofHeight: planes.length ? roofPeak(planes, rectangle) : 0 };
+}
+
+/**
+ * The solids of the neighbors across a two-slope roof's unsloped sides, in
+ * the roof's own frame (its plate at y = 0), keyed by side: its end face there
+ * keeps only the part standing clear of the neighbor's walls and roof.
+ */
+function neighborSolidsForEnds(volume, unslopedSides, roofVolumes, config, adjacentSides, plateOf = () => 0) {
+  const solids = {};
+  unslopedSides.forEach((side) => {
+    const links = findVolumeAdjacencies(roofVolumes).filter((adjacency) => (
+      (adjacency.volumeAId === volume.id && adjacency.sideA === side) || (adjacency.volumeBId === volume.id && adjacency.sideB === side)
+    ));
+    solids[side] = links.map((adjacency) => {
+      const neighbor = roofVolumes.find((candidate) => candidate.id === (adjacency.volumeAId === volume.id ? adjacency.volumeBId : adjacency.volumeAId));
+      const { bounds, roofType, planeConfig } = volumePlaneConfig(neighbor, config, adjacentSides);
+      return volumeSolid({
+        bounds,
+        baseY: plateOf(neighbor.id) - plateOf(volume.id),
+        planes: computeVolumeEavePlanes(bounds, roofType, planeConfig),
+        slabThickness: roofType === 'flat' ? FLAT_ROOF_THICKNESS : 0,
+      }, { floorY: -1e3 });
+    });
+  });
+  return solids;
+}
+
+/**
+ * The planes-defining config of a volume's own (unmerged) roof: what a
+ * neighbor needs to know its shape (see resolveRoofConnections and
+ * neighborSolidsForEnds).
+ */
+function volumePlaneConfig(volume, config, adjacentSides) {
+  const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
+  const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
+  const params = volumeRoofParams(volume.id, halfSpanForBounds(bounds, volume.ridgeAxis), config);
+  let planeConfig = {
+    roofDirection: volume.ridgeAxis,
+    roofHighEdge: volume.roofHighEdge ?? defaultHighEdgeForAxis(volume.ridgeAxis),
+    roofHeight: roofType === 'flat' ? 0 : params.roofHeight,
+    roofPitchRise: params.pitchRise,
+    roofPitchRun: params.pitchRun,
+  };
+  if (isTwoSlope(roofType)) {
+    planeConfig = withTwoSlope(planeConfig, volume.id, roofType, config, bounds, unslopedSidesOf(adjacentSides?.get(volume.id), bounds));
+  } else if (roofType === 'hip') {
+    planeConfig = withHipDeck(planeConfig, volume.id, config);
+  }
+  return { bounds, roofType, planeConfig };
+}
+
+/** The wall segment of a rectangle side, as two plan points in ascending order. */
+function sideSegment(bounds, side) {
+  return side === 'minX' || side === 'maxX'
+    ? [[bounds[side], bounds.minZ], [bounds[side], bounds.maxZ]]
+    : [[bounds.minX, bounds[side]], [bounds.maxX, bounds[side]]];
+}
+
+/**
+ * The faces of a min-of-planes roof over a rectangle: each plane over the
+ * part of it where that plane is the lowest (exact convex clips).
+ */
+function minOfPlanesFaces(bounds, planes) {
+  const rectangle = [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]];
+  const triangles = [];
+  planes.forEach((plane, i) => {
+    let face = rectangle;
+    planes.forEach((other, k) => {
+      if (k !== i && face.length >= 3) {
+        // identical planes (a flat upper tier) belong to the first of them
+        const bias = k < i ? 1e-9 : 0;
+        face = clipPolygon(face, ([x, z]) => evalPlaneHeight(other, x, z) - evalPlaneHeight(plane, x, z) - bias);
+      }
+    });
+    if (face.length >= 3) {
+      triangles.push(...polygonsToTriangles([face.map(([x, z]) => [x, evalPlaneHeight(plane, x, z), z])]));
+    }
+  });
+  return triangles;
+}
+
+/** A hip's flat deck height, if it has one: the volume's own (`volumeRoofShapes[id].deckHeight`) or the building's (`roofDeckHeight`). */
+function hipDeckHeight(volumeId, config) {
+  const own = config.volumeRoofShapes?.[volumeId]?.deckHeight;
+  const deck = Number.isFinite(own) ? own : config.roofDeckHeight;
+  return deck > 0 ? deck : undefined;
+}
+
+/** A hip roof config with its flat deck, if any: the roof stops at the deck. */
+function withHipDeck(roofConfig, volumeId, config) {
+  const deckHeight = hipDeckHeight(volumeId, config);
+  return deckHeight === undefined
+    ? roofConfig
+    : { ...roofConfig, deckHeight, roofHeight: Math.min(roofConfig.roofHeight, deckHeight) };
+}
+
+/**
+ * A mansard or gambrel roof over a rectangle: the min of its planes (see
+ * computeVolumeEavePlanes), built face by face, each plane over the part of
+ * the rectangle where it is the lowest. Unsloped sides (gambrel ends, sides a
+ * neighbor rises past) get an end face from the plate up to the roof, clipped
+ * outside the neighbor's solid (`neighborSolids[side]`). Eaves are a
+ * horizontal cornice box at the plate (top, fascia, flat soffit), mitred where
+ * two meet; a gambrel's rakes carry the roof past the gable wall, with a
+ * fascia and a soffit one fascia depth below the broken profile.
+ */
+function createTwoSlopeRoofGeometry(bounds, config) {
+  const planes = computeVolumeEavePlanes(bounds, config.roofType, config);
+  const ov = overhangOf(config);
+  if (planes.length === 0) {
+    return createFlatRoofGeometry(bounds, ov);
+  }
+  const ridgeAxis = config.roofDirection === 'x' ? 'x' : 'z';
+  const sloped = twoSlopeSides(config.roofType, ridgeAxis, config.unslopedSides);
+  const SIDES = ['minX', 'maxX', 'minZ', 'maxZ'];
+  const unsloped = SIDES.filter((side) => !sloped.includes(side));
+  const outward = (side) => (side === 'minX' || side === 'minZ' ? -1 : 1);
+  const triangles = [];
+
+  // the roof faces, carried past the walls under a rake
+  const extended = { ...bounds };
+  unsloped.forEach((side) => {
+    extended[side] = bounds[side] + outward(side) * ov[side];
+  });
+  triangles.push(...minOfPlanesFaces(extended, planes));
+
+  // end faces on the unsloped sides
+  unsloped.forEach((side) => {
+    const [a, b] = sideSegment(bounds, side);
+    const top = roofProfile(planes, a, b).reverse().map(([t, height]) => [a[0] + (b[0] - a[0]) * t, height, a[1] + (b[1] - a[1]) * t]);
+    let end = polygonsToTriangles([[[a[0], 0, a[1]], [b[0], 0, b[1]], ...top]]);
+    (config.neighborSolids?.[side] ?? []).forEach((solid) => {
+      end = clipOutsideConvexSolid(end, solid);
+    });
+    triangles.push(...end);
+  });
+
+  if (config.eaves) {
+    triangles.push(...twoSlopeTrim(bounds, planes, sloped, ov, config.eaves));
+  }
+  return trianglesToGeometry(triangles);
+}
+
+/** Cornice boxes along a two-slope roof's eaves and rake boxes along its gable ends (see createTwoSlopeRoofGeometry). */
+function twoSlopeTrim(bounds, planes, sloped, ov, eaves) {
+  const f = eaves.fasciaDepth ?? 0;
+  const SIDES = ['minX', 'maxX', 'minZ', 'maxZ'];
+  const outward = (side) => (side === 'minX' || side === 'minZ' ? -1 : 1);
+  const acrossX = (side) => side === 'minX' || side === 'maxX';
+  const triangles = [];
+  const quad = (a, b, c, d) => triangles.push([a, b, c], [a, c, d]);
+
+  SIDES.filter((side) => sloped.includes(side) && ov[side] > 1e-9).forEach((side) => {
+    const e = ov[side];
+    const wall = bounds[side];
+    const out = wall + outward(side) * e;
+    // (along, cross, y) -> [x, y, z]; along runs the length of this side
+    const P = acrossX(side) ? (t, c, y) => [c, y, t] : (t, c, y) => [t, y, c];
+    const ends = acrossX(side) ? ['minZ', 'maxZ'] : ['minX', 'maxX'];
+    const [inner, outer, capped] = [[], [], []];
+    ends.forEach((end) => {
+      const t = bounds[end];
+      const reach = ov[end];
+      if (sloped.includes(end) && reach > 1e-9) {
+        inner.push(t);
+        outer.push(t + outward(end) * reach); // mitred with the next eave
+      } else if (!sloped.includes(end) && reach > 1e-9) {
+        inner.push(t + outward(end) * reach); // runs on under the rake
+        outer.push(t + outward(end) * reach);
+        capped.push(t + outward(end) * reach);
+      } else {
+        inner.push(t);
+        outer.push(t);
+        const backing = eaves.backing?.[end];
+        const covered = backing && Math.min(...backing) <= Math.min(wall, out) + 1e-9 && Math.max(...backing) >= Math.max(wall, out) - 1e-9;
+        if (!covered) {
+          capped.push(t);
+        }
+      }
+    });
+    quad(P(inner[0], wall, 0), P(inner[1], wall, 0), P(outer[1], out, 0), P(outer[0], out, 0));
+    quad(P(outer[0], out, 0), P(outer[1], out, 0), P(outer[1], out, -f), P(outer[0], out, -f));
+    quad(P(inner[0], wall, -f), P(inner[1], wall, -f), P(outer[1], out, -f), P(outer[0], out, -f));
+    capped.forEach((t) => quad(P(t, wall, 0), P(t, out, 0), P(t, out, -f), P(t, wall, -f)));
+  });
+
+  SIDES.filter((side) => !sloped.includes(side) && ov[side] > 1e-9).forEach((side) => {
+    const aWall = bounds[side];
+    const aOut = aWall + outward(side) * ov[side];
+    const [a, b] = sideSegment(bounds, side);
+    // (across, t, y) -> [x, y, z]; t runs along the gable end
+    const P = acrossX(side) ? (across, t, y) => [across, y, t] : (across, t, y) => [t, y, across];
+    const k = acrossX(side) ? 1 : 0;
+    const profile = roofProfile(planes, a, b).map(([t, height]) => [a[k] + (b[k] - a[k]) * t, height]);
+    profile.slice(0, -1).forEach(([t0, h0], i) => {
+      const [t1, h1] = profile[i + 1];
+      quad(P(aOut, t0, h0), P(aOut, t1, h1), P(aOut, t1, h1 - f), P(aOut, t0, h0 - f));
+      quad(P(aWall, t0, h0 - f), P(aWall, t1, h1 - f), P(aOut, t1, h1 - f), P(aOut, t0, h0 - f));
+    });
+    // a rake end that no eave box runs on under is boxed in
+    const endSides = acrossX(side) ? ['minZ', 'maxZ'] : ['minX', 'maxX'];
+    [[profile[0], endSides[0]], [profile[profile.length - 1], endSides[1]]].forEach(([[t, h], endSide]) => {
+      if (!(sloped.includes(endSide) && ov[endSide] > 1e-9)) {
+        quad(P(aWall, t, h), P(aOut, t, h), P(aOut, t, h - f), P(aWall, t, h - f));
+      }
+    });
+  });
+  return triangles;
+}
+
 function createHipRoofGeometry(bounds, config) {
   const ov = overhangOf(config);
   const e = Math.min(ov.minX, ov.maxX, ov.minZ, ov.maxZ);
+  const planes = computeVolumeEavePlanes(bounds, 'hip', config);
+  if (planes.some((plane) => plane.tier === 'deck')) {
+    // cut flat at a deck: the hip planes (carried past the walls) and the deck, face by face
+    const outer = { minX: bounds.minX - e, maxX: bounds.maxX + e, minZ: bounds.minZ - e, maxZ: bounds.maxZ + e };
+    const triangles = minOfPlanesFaces(outer, planes);
+    if (config.eaves && e > 0) {
+      triangles.push(...buildHipTrim(bounds, {
+        pitchRatio: config.roofPitchRise / config.roofPitchRun, overhang: { minX: e, maxX: e, minZ: e, maxZ: e }, eaves: config.eaves,
+      }));
+    }
+    return trianglesToGeometry(triangles);
+  }
   const { minX, maxX, minZ, maxZ } = bounds;
   const centerX = (minX + maxX) / 2;
   const centerZ = (minZ + maxZ) / 2;

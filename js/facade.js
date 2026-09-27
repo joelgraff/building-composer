@@ -342,10 +342,10 @@ export function classifyEdgeRole(edge, volumes, config = {}) {
   if (roofType === 'flat') {
     role = 'flat';
     pitchRise = 0;
-  } else if (roofType === 'hip') {
+  } else if (roofType === 'hip' || roofType === 'mansard') {
     role = 'eave';
     pitchRise = defaultPitchRise;
-  } else if (roofType === 'gable') {
+  } else if (roofType === 'gable' || roofType === 'gambrel') {
     const isParallelToRidge = (orientation === 'horizontal' && ridgeAxis === 'x')
       || (orientation === 'vertical' && ridgeAxis === 'z');
     role = isParallelToRidge ? 'eave' : 'rake';
@@ -502,6 +502,10 @@ export function serializeBuildingState(layout, modelConfig) {
     rakeSoffit: modelConfig.rakeSoffit,
     volumeEaves: modelConfig.volumeEaves ?? {},
     edgePitchOverrides: modelConfig.edgePitchOverrides ?? {},
+    roofBreakHeight: modelConfig.roofBreakHeight,
+    roofLowerPitchRise: modelConfig.roofLowerPitchRise,
+    roofUpperPitchRise: modelConfig.roofUpperPitchRise,
+    roofDeckHeight: modelConfig.roofDeckHeight,
     roofStructures: modelConfig.roofStructures ?? [],
     roofGraph: layout.roofGraph,
   };
@@ -573,6 +577,12 @@ export function deserializeBuildingState(data) {
       rakeSoffit: data.rakeSoffit ?? 'sloped',
       volumeEaves: data.volumeEaves ?? {},
       edgePitchOverrides: data.edgePitchOverrides ?? {},
+      // mansard and gambrel settings; left unset, each type uses its own defaults
+      roofBreakHeight: Number.isFinite(data.roofBreakHeight) ? data.roofBreakHeight : undefined,
+      roofLowerPitchRise: Number.isFinite(data.roofLowerPitchRise) ? data.roofLowerPitchRise : undefined,
+      roofUpperPitchRise: Number.isFinite(data.roofUpperPitchRise) ? data.roofUpperPitchRise : undefined,
+      // a hip roof's flat deck, if cut flat
+      roofDeckHeight: Number.isFinite(data.roofDeckHeight) ? data.roofDeckHeight : undefined,
       roofStructures,
     },
   };

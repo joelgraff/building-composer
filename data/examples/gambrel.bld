@@ -1,30 +1,30 @@
 {
   "format": "building-composer",
   "version": 1,
-  "note": "Key example: a story-and-a-half cottage. A long shed dormer lights the attic on one side, two gable dormers on the other.",
+  "note": "A story-and-a-half house under a gambrel roof (steep lower slopes to a break at 2.4 m, gable ends), with two small dormers on the front lower slope.",
   "footprint": [
     [
       -6,
-      -4.5
+      -4
     ],
     [
       6,
-      -4.5
+      -4
     ],
     [
       6,
-      4.5
+      4
     ],
     [
       -6,
-      4.5
+      4
     ]
   ],
   "storyCount": 1,
   "storyHeight": 3.2,
-  "roofType": "gable",
+  "roofType": "gambrel",
   "roofDirection": "z-min",
-  "roofPitchRise": 12,
+  "roofPitchRise": 8,
   "roofPitchRun": 12,
   "roofHeightMode": "slope",
   "roofEaveDepth": 0.35,
@@ -33,32 +33,32 @@
   "eaveSoffit": "flat",
   "rakeSoffit": "sloped",
   "wallMaterial": "wood",
-  "roofHeight": 4.5,
+  "roofHeight": 2.6666666666666665,
   "volumeStoryOverrides": {},
   "roofStructures": [
     {
       "id": "structure-1",
-      "kind": "wall-dormer",
+      "kind": "dormer",
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
       "hostSide": "maxZ",
-      "offset": 0,
-      "width": 7,
-      "setback": 0,
+      "offset": -2.5,
+      "width": 1.4,
+      "setback": 0.3,
       "mount": "join",
       "fill": false,
       "fillMargin": 0.3,
       "depth": null,
-      "wallHeight": 1.6,
+      "wallHeight": 1.1,
       "baseHeight": null,
       "support": "auto",
       "openSides": [],
       "inset": 0,
-      "roofType": "shed",
+      "roofType": "gable",
       "ridge": "perpendicular",
       "roofShape": {
         "mode": "slope",
-        "pitchRise": 2
+        "pitchRise": 8
       },
       "join": "auto",
       "eaves": {},
@@ -69,15 +69,15 @@
       "kind": "dormer",
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
-      "hostSide": "minZ",
-      "offset": -3,
-      "width": 2,
-      "setback": 0.9,
+      "hostSide": "maxZ",
+      "offset": 2.5,
+      "width": 1.4,
+      "setback": 0.3,
       "mount": "join",
       "fill": false,
       "fillMargin": 0.3,
       "depth": null,
-      "wallHeight": 1.4,
+      "wallHeight": 1.1,
       "baseHeight": null,
       "support": "auto",
       "openSides": [],
@@ -86,35 +86,7 @@
       "ridge": "perpendicular",
       "roofShape": {
         "mode": "slope",
-        "pitchRise": 12
-      },
-      "join": "auto",
-      "eaves": {},
-      "materials": {}
-    },
-    {
-      "id": "structure-3",
-      "kind": "dormer",
-      "hostVolumeId": "volume-0",
-      "hostStructureId": null,
-      "hostSide": "minZ",
-      "offset": 3,
-      "width": 2,
-      "setback": 0.9,
-      "mount": "join",
-      "fill": false,
-      "fillMargin": 0.3,
-      "depth": null,
-      "wallHeight": 1.4,
-      "baseHeight": null,
-      "support": "auto",
-      "openSides": [],
-      "inset": 0,
-      "roofType": "gable",
-      "ridge": "perpendicular",
-      "roofShape": {
-        "mode": "slope",
-        "pitchRise": 12
+        "pitchRise": 8
       },
       "join": "auto",
       "eaves": {},

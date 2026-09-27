@@ -652,6 +652,10 @@ async function loadFootprint(footprintData, preserveView = true) {
     rakeSoffit: modelConfig.rakeSoffit,
     roofHeightMode: modelConfig.roofHeightMode,
     roofStructures: modelConfig.roofStructures,
+    roofBreakHeight: modelConfig.roofBreakHeight,
+    roofLowerPitchRise: modelConfig.roofLowerPitchRise,
+    roofUpperPitchRise: modelConfig.roofUpperPitchRise,
+    roofDeckHeight: modelConfig.roofDeckHeight,
     foundationDepth: 0.7,
     roofOverhang: 0.35,
   });

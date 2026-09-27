@@ -66,6 +66,30 @@ const examples = {
       { hostVolumeId: 'volume-0', hostSide: 'minZ', kind: 'recessed-porch', width: 5.4, setback: 0.9, inset: 1.2, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 3 } },
     ],
   },
+  'second-empire': {
+    note: 'A Second Empire house: a mansard roof (steep lower slope to a curb at 3 m, low hip above) with three dormers on the front slope, below the curb.',
+    footprint: rect(14, 10),
+    config: { roofType: 'mansard', roofBreakHeight: 3 },
+    structures: [-4, 0, 4].map((offset) => on('volume-0', {
+      kind: 'dormer', offset, width: 1.4, setback: 0.25, wallHeight: 1.3, roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 6 },
+    })),
+  },
+  gambrel: {
+    note: 'A story-and-a-half house under a gambrel roof (steep lower slopes to a break at 2.4 m, gable ends), with two small dormers on the front lower slope.',
+    footprint: rect(12, 8),
+    config: { storyCount: 1, roofType: 'gambrel' },
+    structures: [-2.5, 2.5].map((offset) => on('volume-0', {
+      kind: 'dormer', offset, width: 1.4, setback: 0.3, wallHeight: 1.1, roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 8 },
+    })),
+  },
+  'widows-walk': {
+    note: 'A widow\'s walk: a hip roof cut flat at 1.6 m, with a deck filling the flat top less 0.3 m. Its railing (1 m, the structure\'s wall height) comes with facade elements.',
+    footprint: rect(14, 11),
+    config: { roofType: 'hip', roofPitchRise: 8, roofEaveDepth: 0.6, roofDeckHeight: 1.6 },
+    structures: [
+      on('volume-0', { kind: 'widows-walk' }),
+    ],
+  },
   cupola: {
     note: 'A cupola on the ridge of a two-story gable house: 1.6 m square with a pyramid roof, its walls clearing the ridge by 1.2 m.',
     footprint: rect(16, 9),

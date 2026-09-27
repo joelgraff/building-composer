@@ -424,7 +424,7 @@ The exposed part of a partly shared eave side gets its own eave strip (top, fasc
 
 ## Roof-borne structures (dormers, raised porches) — plan
 
-Status: Phases 0–4 and 4a–4d complete; 5–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+Status: Phases 0–4 and 4a–4f complete; 5–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
 
 ### Core idea
 
@@ -675,6 +675,52 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
      - the refusals, and normalization of `mount` and the centered setback.
    - Mutation checks: posts from the sill instead of the roof fail the open-cupola test; cutting the host roof fails four tests.
    - Examples: `cupola` (gable ridge), `belvedere` (low hip roof), and `rooftop-pavilion` (flat roof, open).
+
+4e. **Mansard and gambrel roofs.** Complete. Two new volume roof types. Decisions (2026-09-26): straight slopes first (curved/bell-cast later if real cases need them); the mansard's upper tier defaults to a low hip (flat with an upper pitch of 0); gambrel included.
+   - Both are two-slope roofs (`TWO_SLOPE_ROOF_TYPES` in `js/roof-planes.js`). On each sloped side a steep lower plane rises to the break, `breakHeight` above the plate, and a shallow upper plane carries on above it. The roof is their min. Lower planes come first, so the plane found for a side (a dormer's host face) is its lower slope.
+     - A mansard slopes on all four sides.
+     - A gambrel slopes on its two eave sides and has gable ends.
+   - Parameters:
+     - `breakHeight` (default 2.4 m) and `lowerPitchRise` (mansard 30:12, gambrel 20:12).
+     - `upperPitchRise` (mansard 4:12, gambrel 6:12).
+     - Set per volume in `volumeRoofShapes`, over the building's `roofBreakHeight`, `roofLowerPitchRise`, and `roofUpperPitchRise` (persisted in `.bld`, passed through from `main.js`), over the type's defaults.
+     - The peak comes from the planes (`roofPeak`, the highest corner of the per-plane pieces).
+   - `createTwoSlopeRoofGeometry` in `js/extrusion.js`:
+     - faces from `minOfPlanesFaces`, the general min-of-planes face builder (identical planes tie-break to the first);
+     - end faces on unsloped sides;
+     - `twoSlopeTrim`: cornice boxes at the plate (top, fascia, flat soffit), mitred between eaves, running on under a rake, and capped where they end against nothing; gambrel rakes carry the roof past the gable wall, with a fascia and a soffit one fascia depth below the broken profile.
+   - Multi-volume footprints: each volume gets its own two-slope roof. A side that other volumes' walls cover along its whole length (and rise past this plate) is left unsloped. Its end face is clipped outside those neighbors' solids (`neighborSolidsForEnds`, from `volumePlaneConfig`, which the merge resolver now also uses). A partly covered side keeps sloping.
+   - Merges skip two-slope roofs. Partial eave strips are for gable and shed eaves only.
+   - Known limit: on an L the blocks are separate mansards, and a block with an unsloped side rises to it (the L's smaller block ends in a tall end face). A continuous mansard around an L or U needs the straight-skeleton approach, with each skeleton face split at the break. That is later work.
+   - Dormers on a mansard's or gambrel's lower slope must stay below the break; the single-face rule refuses one reaching past it (`crosses-face`). A flush wall dormer breaks the cornice with a box cap (`hostEaveProfile`).
+   - Edge roles: mansard sides are eaves, gambrel sides like gable. The roof type menu has Mansard and Gambrel; their parameter controls come with Phase 6.
+   - Tests (`tests/two_slope_roofs.test.js`):
+     - plane heights at eave, break, and ridge;
+     - surface matches planes;
+     - watertight: mansard, flat-topped mansard, gambrel, U mansard, L gambrel, a mansard beside a gable wing;
+     - cornice level with the plate and fascia length;
+     - per-volume overrides;
+     - gambrel rakes following the profile;
+     - a dormer below the break, and one refused past it;
+     - the wall dormer's box cap;
+     - edge roles and `.bld` persistence.
+   - Mutation check: removing the trim fails four tests.
+   - Examples: `second-empire` (with dormers below the curb) and `gambrel`.
+4f. **Widow's walks.** Complete. A widow's walk sits on a flat roof top; its railing, when present, is a facade element (Phase 5).
+   - A hip roof may be cut flat at `deckHeight` (per volume in `volumeRoofShapes`, or the building's `roofDeckHeight`). This adds a level deck plane (`tier: 'deck'`). The decked hip is built face by face with its usual hip trim; a deck above the pitch's natural peak is ignored.
+   - `roofType: 'none'` gives a structure no roof. A through-mounted roofless structure is a platform: a thin deck (`DECK_THICKNESS`) on the roof, no roof, headers, or posts. Its wall height is kept as the railing height for Phase 5.
+   - `fill: true` sizes and places a structure over the host roof's largest level region (a flat roof, a hip's deck, a flat-topped mansard), less `fillMargin`.
+   - The `widows-walk` preset is through-mounted, roofless, open on all sides, filling with a 0.3 m margin, and a 1 m railing height.
+   - Validation: `not-level` for a roofless platform that is not wholly on a level part of the roof, or a `fill` with nothing level to fill.
+   - Tests:
+     - a decked hip's height, flat-top area, surface, and closure;
+     - per-volume deck, and a deck above the peak ignored;
+     - the preset;
+     - fill on a decked hip, a flat-topped mansard, and a flat roof;
+     - a hand-sized walk, one running onto the slopes, and plain hip and gable refused;
+     - the roof left whole.
+   - Mutation check: disabling the level rule fails the test.
+   - Example: `widows-walk`.
 
    New examples as each lands:
    - a ground porch with posts;

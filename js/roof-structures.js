@@ -12,7 +12,9 @@
  * when `normal · p <= offset` for every one of them.
  */
 
-import { computeVolumeEavePlanes, evalPlaneHeight, evalZoneHeight } from './roof-planes.js';
+import {
+  computeVolumeEavePlanes, evalPlaneHeight, evalZoneHeight, TWO_SLOPE_ROOF_TYPES,
+} from './roof-planes.js';
 
 /** Default tolerance: faces within this distance of a solid's boundary count as inside. */
 export const SOLID_EPSILON = 1e-4;
@@ -187,7 +189,7 @@ export function volumeSolid(zone, { floorY = zone.floorY ?? 0 } = {}) {
 // Structure records: data model, placement, validation
 // ---------------------------------------------------------------------------
 
-export const STRUCTURE_KINDS = ['dormer', 'wall-dormer', 'recessed-porch', 'porch', 'cupola'];
+export const STRUCTURE_KINDS = ['dormer', 'wall-dormer', 'recessed-porch', 'porch', 'cupola', 'widows-walk'];
 /** How a structure meets the roof: joining one face (a dormer), or rising through it (a cupola). */
 export const STRUCTURE_MOUNTS = ['join', 'through'];
 export const STRUCTURE_WALLS = ['front', 'left', 'right', 'back'];
@@ -196,7 +198,9 @@ export const STRUCTURE_SUPPORTS = ['auto', 'none', 'deck', 'posts', 'porch', 'br
 /** Brackets carry only a shallow projection. */
 export const MAX_BRACKET_PROJECTION = 1.5;
 const SIDES = ['minX', 'maxX', 'minZ', 'maxZ'];
-const ROOF_TYPES = ['flat', 'gable', 'hip', 'shed'];
+const ROOF_TYPES = ['flat', 'gable', 'hip', 'shed', 'none'];
+/** A roofless platform's deck thickness (a widow's walk). */
+export const DECK_THICKNESS = 0.08;
 const GEOMETRY_EPSILON = 1e-6;
 
 /**
@@ -220,6 +224,12 @@ export const STRUCTURE_PRESETS = Object.freeze({
   // a small square lookout rising through the roof at its center, with a pyramid roof
   cupola: Object.freeze({
     width: 1.6, setback: 'center', depth: 1.6, wallHeight: 1.2, baseHeight: null, openSides: [], roofType: 'hip', mount: 'through',
+  }),
+  // a deck on a flat roof top, filling it less a margin; its railing is a facade
+  // element, and its wall height is the railing's height
+  'widows-walk': Object.freeze({
+    width: 3, setback: 'center', depth: 3, wallHeight: 1, baseHeight: null, openSides: ['front', 'back', 'left', 'right'],
+    roofType: 'none', mount: 'through', fill: true, fillMargin: 0.3,
   }),
   // a raised porch standing on its host's plate (e.g. over a one-story wing)
   porch: Object.freeze({
@@ -268,6 +278,11 @@ function normalizeRoofShape(shape) {
  *   the highest point of the roof under it, and the host roof left whole.
  * - `setback: 'center'` centers the structure across its host (on the ridge);
  *   it needs an explicit depth.
+ * - `fill`: size and place the structure to cover the host roof's flat top,
+ *   less `fillMargin` on every side (a widow's walk); its width, offset,
+ *   setback, and depth are then ignored.
+ * - `roofType: 'none'`: no roof at all (a widow's walk's deck; its wall height
+ *   is then its railing's height).
  * - `inset`: how far the front wall is set back inside the structure,
  *   leaving an open porch (floor, side walls, and the structure's roof) in
  *   front of it; 0 for none. A recessed porch is a dormer with an inset,
@@ -295,6 +310,8 @@ export function normalizeRoofStructure(raw) {
     width: finite(raw.width, preset.width),
     setback: raw.setback === 'center' ? 'center' : finite(raw.setback, preset.setback),
     mount: STRUCTURE_MOUNTS.includes(raw.mount) ? raw.mount : (preset.mount ?? 'join'),
+    fill: typeof raw.fill === 'boolean' ? raw.fill : Boolean(preset.fill),
+    fillMargin: Math.max(0, finite(raw.fillMargin, preset.fillMargin ?? 0.3)),
     depth: raw.depth === null ? null : finite(raw.depth, preset.depth),
     wallHeight: finite(raw.wallHeight, preset.wallHeight),
     baseHeight: raw.baseHeight === null || raw.baseHeight === 'ground' ? raw.baseHeight : finite(raw.baseHeight, preset.baseHeight),
@@ -364,20 +381,77 @@ const error = (code, message) => ({ code, message });
  * pieces (on the ridge, or where a hip meets it).
  */
 function highestHostRoof(host, bounds) {
-  const faces = hostRoofFaces(host);
+  return host.baseY + roofPeak(hostRoofFaces(host), clipToHostWalls(bounds, host));
+}
+
+/**
+ * The highest point of a min-of-planes roof over a convex plan polygon
+ * (height above its plate). The roof is linear on each plane's region, so the
+ * highest point is a corner of one of those regions (on a ridge, or where a
+ * hip meets it).
+ */
+export function roofPeak(planes, polygon) {
   let highest = -Infinity;
-  faces.forEach((hostFace, index) => {
-    let piece = clipToHostWalls(bounds, host);
-    faces.forEach((other, k) => {
-      if (k !== index) {
-        piece = clipPolygon(piece, ([x, z]) => evalPlaneHeight(other, x, z) - evalPlaneHeight(hostFace, x, z));
+  planes.forEach((plane, index) => {
+    let piece = polygon;
+    planes.forEach((other, k) => {
+      if (k !== index && piece.length) {
+        piece = clipPolygon(piece, ([x, z]) => evalPlaneHeight(other, x, z) - evalPlaneHeight(plane, x, z));
       }
     });
     piece.forEach(([x, z]) => {
-      highest = Math.max(highest, evalPlaneHeight(hostFace, x, z));
+      highest = Math.max(highest, evalPlaneHeight(plane, x, z));
     });
   });
-  return host.baseY + highest;
+  return highest;
+}
+
+/**
+ * Where a `fill` structure goes, in its host side's frame: over the largest
+ * level part of the host roof (a flat roof, a hip's deck, a flat-topped
+ * mansard), less the structure's `fillMargin` on every side. Null when the
+ * roof has no level part.
+ */
+function fillPlacement(structure, host, frame) {
+  const faces = hostRoofFaces(host);
+  const level = (plane) => 'constantHeight' in plane || Math.abs(plane.slope) < GEOMETRY_EPSILON;
+  const whole = clipToHostWalls(host.bounds, host);
+  let best = null;
+  let bestArea = 0;
+  faces.forEach((plane, index) => {
+    if (!level(plane)) {
+      return;
+    }
+    let region = whole;
+    faces.forEach((other, k) => {
+      if (k !== index && region.length) {
+        region = clipPolygon(region, ([x, z]) => evalPlaneHeight(other, x, z) - evalPlaneHeight(plane, x, z));
+      }
+    });
+    const area = region.length < 3 ? 0 : Math.abs(region.reduce((sum, [x, z], i) => {
+      const [nx, nz] = region[(i + 1) % region.length];
+      return sum + x * nz - nx * z;
+    }, 0)) / 2;
+    if (area > bestArea + GEOMETRY_EPSILON) {
+      [best, bestArea] = [region, area];
+    }
+  });
+  if (!best) {
+    return null;
+  }
+  const m = structure.fillMargin ?? 0;
+  const coord = (axis) => best.map(([x, z]) => (axis === 'x' ? x : z));
+  const [a0, a1] = [Math.min(...coord(frame.along)) + m, Math.max(...coord(frame.along)) - m];
+  const [i0, i1] = [Math.min(...coord(frame.inward)) + m, Math.max(...coord(frame.inward)) - m];
+  const [alongMinKey, alongMaxKey] = axisKeys(frame.along);
+  const hostCenter = (host.bounds[alongMinKey] + host.bounds[alongMaxKey]) / 2;
+  const wall = host.bounds[structure.hostSide];
+  return {
+    width: a1 - a0,
+    offset: (a0 + a1) / 2 - hostCenter,
+    setback: frame.sign > 0 ? i0 - wall : wall - i1,
+    depth: i1 - i0,
+  };
 }
 
 /** Every face of a host roof as a plane (a flat roof: its slab top). */
@@ -467,22 +541,29 @@ export function resolveRoofStructure(structure, host, config = {}) {
   const [alongMinKey, alongMaxKey] = axisKeys(frame.along);
   const [inwardMinKey, inwardMaxKey] = axisKeys(frame.inward);
   const hostAlong = [host.bounds[alongMinKey], host.bounds[alongMaxKey]];
-  const alongCenter = (hostAlong[0] + hostAlong[1]) / 2 + structure.offset;
-  const along = [alongCenter - structure.width / 2, alongCenter + structure.width / 2];
+  const place = structure.fill ? fillPlacement(structure, host, frame) : structure;
+  if (!place) {
+    return fail('not-level', `${host.volumeId}'s roof has no flat top to fill.`);
+  }
+  const alongCenter = (hostAlong[0] + hostAlong[1]) / 2 + place.offset;
+  const along = [alongCenter - place.width / 2, alongCenter + place.width / 2];
+  if (structure.fill && (!(place.width > GEOMETRY_EPSILON) || !(place.depth > GEOMETRY_EPSILON))) {
+    return fail('invalid-dimensions', 'The flat top is too small for the margin.');
+  }
   if (along[0] < hostAlong[0] - GEOMETRY_EPSILON || along[1] > hostAlong[1] + GEOMETRY_EPSILON) {
     return fail('outside-host', `The structure runs past the ends of ${host.volumeId}'s ${structure.hostSide} wall.`);
   }
 
   const wall = host.bounds[structure.hostSide];
-  const setback = structure.setback === 'center'
-    ? (host.bounds[inwardMaxKey] - host.bounds[inwardMinKey] - structure.depth) / 2
-    : structure.setback;
+  const setback = place.setback === 'center'
+    ? (host.bounds[inwardMaxKey] - host.bounds[inwardMinKey] - place.depth) / 2
+    : place.setback;
   const front = wall + frame.sign * setback;
   let back;
-  if (through && structure.depth === null) {
+  if (through && place.depth === null) {
     return fail('depth-required', 'A structure rising through the roof needs an explicit depth.');
-  } else if (structure.depth !== null) {
-    back = front + frame.sign * structure.depth;
+  } else if (place.depth !== null) {
+    back = front + frame.sign * place.depth;
   } else if (!sloped) {
     return fail('depth-required', 'A structure needs an explicit depth on a flat roof or a gable end.');
   } else if (host.roofType === 'shed') {
@@ -542,7 +623,7 @@ export function resolveRoofStructure(structure, host, config = {}) {
   let roofHeight = 0;
   let roofPitchRise = 0;
   let roofPitchRun = pitchRun;
-  if (roofType !== 'flat') {
+  if (roofType !== 'flat' && roofType !== 'none') {
     if (shape.mode === 'height') {
       roofHeight = shape.height;
       [roofPitchRise, roofPitchRun] = [shape.height, span];
@@ -568,6 +649,15 @@ export function resolveRoofStructure(structure, host, config = {}) {
       roofHeight = hostTopY - plateY;
       // keep the faces planar through the new peak
       [roofPitchRise, roofPitchRun] = [roofHeight, span];
+    }
+  }
+
+  // a roofless platform (a widow's walk) stands on a flat part of the roof
+  if (through && roofType === 'none') {
+    const footprint = clipToHostWalls(bounds, host);
+    const lowest = Math.min(...footprint.map(([x, z]) => evalZoneHeight(hostRoofFaces(host), x, z)));
+    if (host.baseY + lowest < sillY - 1e-6) {
+      return fail('not-level', 'A widow\'s walk must stand on a flat part of the roof.');
     }
   }
 
@@ -979,7 +1069,8 @@ export function structureRecess(resolved) {
  * roof surface, out to the fascia, down it, and back to the wall along the
  * soffit.
  * - An eave (the slope meets the wall) drops along its slope, then down the
- *   fascia, with a flat or roof-parallel soffit.
+ *   fascia, with a flat or roof-parallel soffit; a mansard's or gambrel's is a
+ *   cornice box at the plate.
  * - A rake (a gable end or a shed's side) is level across at the roof's
  *   height there, one fascia deep with a sloped rake soffit, or down to the
  *   flat soffit level with a flat one.
@@ -1006,10 +1097,15 @@ export function hostEaveProfile(host, side, along = 0) {
   }
   const fascia = host.eaves?.fasciaDepth ?? 0;
   const face = host.planes?.find((plane) => plane.side === side);
+  const twoSlope = TWO_SLOPE_ROOF_TYPES.includes(host.roofType);
+  if (face && twoSlope) {
+    // a mansard's or gambrel's eave is a cornice box at the plate
+    return { depth, outline: [[wall, 0], [out, 0], [out, -fascia], [wall, -fascia]] };
+  }
   if (!face) {
     const [x, z] = side === 'minX' || side === 'maxX' ? [wall, along] : [along, wall];
     const height = evalZoneHeight(host.planes, x, z);
-    const bottom = host.eaves?.rakeSoffit === 'flat'
+    const bottom = host.eaves?.rakeSoffit === 'flat' && !twoSlope
       ? Math.min(...host.planes.map((plane) => (host.overhang?.[plane.side] > GEOMETRY_EPSILON
         ? -plane.slope * host.overhang[plane.side] - fascia
         : -fascia)))
