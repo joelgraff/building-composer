@@ -4,7 +4,6 @@
     "note": "A two-story brick Italianate of the 1850s-60s, like the Van Epps and Brookner houses: a near-square block with tall 12 ft stories, a low hip roof on deep bracketed eaves, a belvedere, a flat-roofed entry porch, a side bay, and a one-story rear kitchen wing.",
     "front": "maxZ",
     "gaps": [
-      "The side bay is canted (octagonal) on the real houses; structures are rectangles, so it is a square box bay.",
       "The entry porch's flat roof usually carries a balustrade: a railing on a roof edge, not yet a facade element.",
       "Paired brackets, tall arched windows, and hood molds are facade modifiers (not built yet)."
     ],
@@ -28,7 +27,6 @@
     "note": "A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner.",
     "front": "maxZ",
     "gaps": [
-      "Towers and turrets (round or polygonal, often with a conical roof) cannot be modeled: structures are rectangles.",
       "Gable-end detailing (fish-scale shingles, spindlework, bargeboards) is facade work."
     ],
     "issues": [],

@@ -1499,6 +1499,16 @@ function structureEditorHtml(structure) {
     // an integral porch is cut into the house under its roof
     parts.push(checkField('Recessed into the house, under its roof', 'recess', recess));
   }
+  if (standing || through) {
+    // a bay or tower can be canted or polygonal in plan
+    parts.push(selectField('Plan', 'planShape', [['', 'Rectangle'], ['canted', 'Canted bay (angled sides)'], ['polygon', 'Polygon (octagonal, or many sides for round)']], structure.plan?.shape ?? ''));
+    if (structure.plan?.shape === 'canted') {
+      parts.push(numberField('Angle of the sides (degrees)', 'planAngle', structure.plan.angle, { length: false, step: 5 }));
+    }
+    if (structure.plan?.shape === 'polygon') {
+      parts.push(numberField('Sides', 'planSides', structure.plan.sides, { length: false, step: 1 }));
+    }
+  }
   parts.push(numberField('Offset along the side', 'offset', structure.offset));
   parts.push(numberField('Width', 'width', structure.width));
   if (!recess) {
@@ -1570,6 +1580,7 @@ structureAddBtn.addEventListener('click', () => {
     hostSide: structureSideSelect.value,
     storyHeight: modelConfig.storyHeight,
     wallLength: ['minX', 'maxX'].includes(structureSideSelect.value) ? hostVolume.maxZ - hostVolume.minZ : hostVolume.maxX - hostVolume.minX,
+    wallTop: volumeWallHeight(hostVolume.id, modelConfig),
     hostStructure: selectedStructureId ? structureRecord(selectedStructureId) : undefined,
   }, modelConfig.roofStructures);
   if (!record) {
@@ -1659,6 +1670,9 @@ structureEditor.addEventListener('change', (event) => {
       case 'pitch': edited.roofShape = input.value === '' ? null : { mode: 'slope', pitchRise: Math.max(0, Number(input.value) || 0) }; break;
       case 'join': edited.join = input.value; break;
       case 'support': edited.support = input.value; break;
+      case 'planShape': edited.plan = input.value ? { shape: input.value } : null; break;
+      case 'planAngle': edited.plan = { ...edited.plan, angle: Number(input.value) || 45 }; break;
+      case 'planSides': edited.plan = { ...edited.plan, sides: Math.round(Number(input.value) || 8) }; break;
       case 'wrapEnd': edited.wrap = input.value ? { end: input.value, length: edited.wrap?.length ?? 3 } : null; break;
       case 'wrapLength': edited.wrap = edited.wrap ? { ...edited.wrap, length: Math.max(0.5, length()) } : null; break;
       case 'wallMaterial': edited.materials.wall = input.value || undefined; break;

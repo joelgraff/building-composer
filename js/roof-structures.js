@@ -13,7 +13,7 @@
  */
 
 import {
-  computeVolumeEavePlanes, evalPlaneHeight, evalZoneHeight, makeEavePlane, TWO_SLOPE_ROOF_TYPES,
+  computeVolumeEavePlanes, evalPlaneHeight, evalZoneHeight, makeEavePlane, makeEdgePlane, TWO_SLOPE_ROOF_TYPES,
 } from './roof-planes.js';
 
 /** Default tolerance: faces within this distance of a solid's boundary count as inside. */
@@ -157,6 +157,11 @@ function roofPlaneHalfSpace(plane, baseY) {
   if ('constantHeight' in plane) {
     return normalizedHalfSpace([0, 1, 0], baseY + plane.constantHeight);
   }
+  if (plane.dir) {
+    // y <= baseY + offset + slope * (dir . p - constant)
+    const normal = [-plane.slope * plane.dir[0], 1, -plane.slope * plane.dir[1]];
+    return normalizedHalfSpace(normal, baseY + (plane.offset ?? 0) - plane.slope * plane.constant);
+  }
   const k = plane.slope * plane.sign;
   const normal = plane.axis === 'x' ? [-k, 1, 0] : [0, 1, -k];
   return normalizedHalfSpace(normal, baseY + (plane.offset ?? 0) - k * plane.constant);
@@ -176,7 +181,8 @@ function roofPlaneHalfSpace(plane, baseY) {
  */
 export function volumeSolid(zone, { floorY = zone.floorY ?? 0 } = {}) {
   const { bounds, baseY } = zone;
-  const walls = [
+  // a structure with a polygonal plan (see `plan`) is bounded by its outline
+  const walls = zone.outline ? [...planPrism(zone.outline), normalizedHalfSpace([0, -1, 0], -floorY)] : [
     normalizedHalfSpace([-1, 0, 0], -bounds.minX),
     normalizedHalfSpace([1, 0, 0], bounds.maxX),
     normalizedHalfSpace([0, 0, -1], -bounds.minZ),
@@ -280,6 +286,18 @@ export const STRUCTURE_PRESETS = Object.freeze({
 });
 
 const finite = (value, fallback) => (Number.isFinite(value) ? value : fallback);
+
+/** A structure's plan shape: null for a rectangle, a canted bay, or a regular polygon (an octagonal or round tower). */
+function normalizePlan(plan) {
+  if (plan?.shape === 'canted') {
+    const angle = finite(plan.angle, 45);
+    return { shape: 'canted', angle: Math.min(80, Math.max(15, angle)) };
+  }
+  if (plan?.shape === 'polygon') {
+    return { shape: 'polygon', sides: Math.min(32, Math.max(5, Math.round(finite(plan.sides, 8)))) };
+  }
+  return null;
+}
 const plainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {});
 
 function normalizeRoofShape(shape) {
@@ -320,6 +338,12 @@ function normalizeRoofShape(shape) {
  *   the highest point of the roof under it, and the host roof left whole.
  * - `setback: 'center'` centers the structure across its host (on the ridge);
  *   it needs an explicit depth.
+ * - `plan`: null for a rectangle; `{ shape: 'canted', angle }` for a bay
+ *   whose sides run back to the wall at `angle` degrees (a canted bay
+ *   window); `{ shape: 'polygon', sides }` for a regular polygon inscribed in
+ *   the rectangle (an octagonal, or with many sides a round, tower). Only a
+ *   structure standing on a base or rising through the roof can have one,
+ *   with a hip (a polygonal hip, or a cone) or flat roof.
  * - `wrap`: `{ end: 'left'|'right', length }` turns a projecting porch around
  *   the host's corner at that end (a wraparound): it runs on past the corner
  *   and back along the adjacent wall for `length`, under one hip roof that
@@ -367,6 +391,7 @@ export function normalizeRoofStructure(raw) {
     ridge: raw.ridge === 'parallel' ? 'parallel' : 'perpendicular',
     roofShape: normalizeRoofShape(raw.roofShape),
     join: raw.join === 'snap-ridge' ? 'snap-ridge' : 'auto',
+    plan: normalizePlan(raw.plan),
     wrap: raw.wrap && ['left', 'right'].includes(raw.wrap.end) && raw.wrap.length > GEOMETRY_EPSILON
       ? { end: raw.wrap.end, length: raw.wrap.length }
       : null,
@@ -582,7 +607,10 @@ export function resolveRoofStructure(structure, host, config = {}) {
   const hostAlong = [host.bounds[alongMinKey], host.bounds[alongMaxKey]];
   const alongCenter = (hostAlong[0] + hostAlong[1]) / 2 + structure.offset;
   const along = [alongCenter - structure.width / 2, alongCenter + structure.width / 2];
-  if (along[0] < hostAlong[0] - GEOMETRY_EPSILON || along[1] > hostAlong[1] + GEOMETRY_EPSILON) {
+  // a tower may stand on the corner, past the end of its wall
+  const planned = Boolean(structure.plan);
+  if (!(planned && structure.baseHeight !== null)
+    && (along[0] < hostAlong[0] - GEOMETRY_EPSILON || along[1] > hostAlong[1] + GEOMETRY_EPSILON)) {
     return fail('outside-host', `The structure runs past the ends of ${host.volumeId}'s ${structure.hostSide} wall.`);
   }
   // a wraparound's front segment runs on past the corner by its projection
@@ -668,6 +696,12 @@ export function resolveRoofStructure(structure, host, config = {}) {
   }
   if (support !== 'none' && !Number.isFinite(host.foundationTopY)) {
     return fail('host-missing', `Host ${host.volumeId} has no ground level for a ${support} support.`);
+  }
+
+  if (planned) {
+    return resolvePlanned(structure, host, {
+      frame, bounds, along, front, back, wall, setback, sillY, plateY, projecting, groundLevel, through, errors, warnings, fail, config,
+    });
   }
 
   // The structure's own roof.
@@ -912,6 +946,122 @@ export function resolveRoofStructure(structure, host, config = {}) {
       wrapSegment: structure.wrapSegment ?? null,
       inset,
       innerLine: inner,
+      eaves: structure.eaves,
+      materials: structure.materials,
+    },
+    errors,
+    warnings,
+  };
+}
+
+/**
+ * A structure with a polygonal plan (see `plan`: a canted bay window, an
+ * octagonal or round tower): its outline in plan, and a hip roof rising
+ * from its outer edges (for a bay against a wall; every edge for a tower,
+ * giving a pyramid, or with many sides a cone) or a flat one. It is built by
+ * its own path (see buildPlanned in js/extrusion.js): walls on each edge,
+ * the roof face by face with its eave trim, and a foundation under one at
+ * ground level.
+ */
+function resolvePlanned(structure, host, {
+  frame, bounds, along, front, back, wall, setback, sillY, plateY, projecting, groundLevel, through, errors, warnings, fail, config,
+}) {
+  if (structure.baseHeight === null && !through) {
+    return fail('plan-needs-base', 'A canted or polygonal structure stands on a base or rises through the roof; a dormer is rectangular.');
+  }
+  if (!['hip', 'flat'].includes(structure.roofType)) {
+    return fail('plan-roof', 'A canted or polygonal structure takes a hip (or cone) or a flat roof.');
+  }
+  const at = (a, i) => pointOn(frame, a, i);
+  const [a0, a1] = along;
+  let outline;
+  if (structure.plan.shape === 'canted') {
+    // the sides run from the wall line out to the front at the angle
+    const projection = Math.abs(front - wall);
+    const inset = projection / Math.tan((structure.plan.angle * Math.PI) / 180);
+    if (!projecting || 2 * inset >= a1 - a0 - GEOMETRY_EPSILON) {
+      return fail('plan-canted', 'A canted bay projects past its wall, and is wider than its two angled sides.');
+    }
+    const points = [[a0, back], [a0, wall], [a0 + inset, front], [a1 - inset, front], [a1, wall], [a1, back]];
+    outline = points.filter((point, i) => i === 0 || Math.hypot(point[0] - points[i - 1][0], point[1] - points[i - 1][1]) > GEOMETRY_EPSILON)
+      .filter((point, i, list) => i < list.length - 1 || Math.hypot(point[0] - list[0][0], point[1] - list[0][1]) > GEOMETRY_EPSILON)
+      .map(([a, i]) => at(a, i));
+  } else {
+    // a regular polygon inscribed in the rectangle, a side square to the front
+    const { sides } = structure.plan;
+    const center = [(a0 + a1) / 2, (front + back) / 2];
+    const radii = [(a1 - a0) / 2, Math.abs(back - front) / 2];
+    outline = Array.from({ length: sides }, (_, k) => {
+      const theta = (2 * Math.PI * k) / sides + Math.PI / sides;
+      return at(center[0] + radii[0] * Math.cos(theta), center[1] + radii[1] * Math.sin(theta));
+    });
+  }
+  // counterclockwise in plan
+  const signedArea = outline.reduce((sum, [x, z], i) => {
+    const [nx, nz] = outline[(i + 1) % outline.length];
+    return sum + x * nz - nx * z;
+  }, 0);
+  if (signedArea < 0) {
+    outline.reverse();
+  }
+  const center = [outline.reduce((sum, [x]) => sum + x, 0) / outline.length, outline.reduce((sum, [, z]) => sum + z, 0) / outline.length];
+  const outside = ([x, z]) => frame.sign * ((frame.inward === 'x' ? x : z) - wall) < -GEOMETRY_EPSILON;
+  // a bay's roof slopes from its outer edges only; a tower's (standing clear of the wall line) from every edge
+  const edges = outline.map((point, i) => [point, outline[(i + 1) % outline.length]]);
+  const eaveEdges = structure.plan.shape === 'canted'
+    ? edges.filter(([p, q]) => outside([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]))
+    : edges;
+  const shape = structure.roofShape ?? { mode: 'slope', pitchRise: config.roofPitchRise ?? 6 };
+  const pitchRun = config.roofPitchRun ?? 12;
+  const slope = shape.mode === 'height'
+    ? shape.height / Math.max(GEOMETRY_EPSILON, Math.min(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) / 2)
+    : shape.pitchRise / pitchRun;
+  const planes = structure.roofType === 'hip' ? eaveEdges.map(([p, q]) => makeEdgePlane(p, q, slope, center)) : [];
+  const slabThickness = structure.roofType === 'flat' ? FLAT_ROOF_THICKNESS : 0;
+  const roofHeight = planes.length ? roofPeak(planes, outline) : 0;
+  const xs = outline.map(([x]) => x);
+  const zs = outline.map(([, z]) => z);
+  const outlineBounds = { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
+  return {
+    resolved: {
+      id: structure.id,
+      recordId: structure.id,
+      kind: structure.kind,
+      hostVolumeId: host.volumeId,
+      hostSide: structure.hostSide,
+      frame,
+      bounds: outlineBounds,
+      outline,
+      eaveEdges: eaveEdges.map(([p]) => outline.indexOf(p)),
+      planned: structure.plan.shape,
+      along,
+      front,
+      back,
+      sillY,
+      plateY,
+      baseY: plateY,
+      roofType: structure.roofType,
+      roofHeight,
+      roofPitchRise: slope * pitchRun,
+      roofPitchRun: pitchRun,
+      planes,
+      slabThickness,
+      topY: plateY + (planes.length ? roofHeight : slabThickness),
+      hostContact: [],
+      removedRoof: [],
+      flush: false,
+      through,
+      setback,
+      projecting,
+      // at ground level a foundation carries it; above, it is cantilevered (an oriel)
+      support: projecting && groundLevel ? 'deck' : 'none',
+      wallLine: wall,
+      foundationTopY: host.foundationTopY,
+      hostStructureId: structure.hostStructureId,
+      standing: structure.baseHeight !== null,
+      openSides: [],
+      seamSides: [],
+      inset: 0,
       eaves: structure.eaves,
       materials: structure.materials,
     },
@@ -1492,6 +1642,19 @@ const OUTWARD = { minX: [-1, 0], maxX: [1, 0], minZ: [0, -1], maxZ: [0, 1] };
  * as seen from outside, facing the wall, left to right; `right` the unit
  * direction from start to end; `normal` outward.
  */
+/** A wall frame for the plan edge a -> b, facing away from `inside`. */
+export function edgeFrame(a, b, inside) {
+  const length = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+  let normal = [(b[1] - a[1]) / length, -(b[0] - a[0]) / length];
+  if (normal[0] * (inside[0] - a[0]) + normal[1] * (inside[1] - a[1]) > 0) {
+    normal = [-normal[0], -normal[1]];
+  }
+  const right = [normal[1], -normal[0]];
+  const along = (point) => point[0] * right[0] + point[1] * right[1];
+  const [start, end] = along(a) <= along(b) ? [a, b] : [b, a];
+  return { start, end, right, normal, length };
+}
+
 function wallFrame(bounds, side, at = bounds[side]) {
   const normal = OUTWARD[side];
   const right = [normal[1], -normal[0]];
@@ -1511,7 +1674,7 @@ function wallFrame(bounds, side, at = bounds[side]) {
  * left as seen from outside and v up from `baseY`. The pieces are the visible
  * surface (their union), which windows and trim are placed within.
  */
-function facadeWallRun(id, fields, frame, triangles, baseY) {
+export function facadeWallRun(id, fields, frame, triangles, baseY) {
   const toUV = ([x, y, z]) => [
     (x - frame.start[0]) * frame.right[0] + (z - frame.start[1]) * frame.right[1],
     y - baseY,

@@ -243,6 +243,10 @@ come out of the clip for every roof type). The rules that follow:
   piece per host face); its walls run down to the host wall top there, and
   knee walls close the attic around it.
 - A structure can stand on another; hosts are resolved first.
+- A structure on a base or rising through the roof can be canted (a bay
+  window or oriel) or polygonal (an octagonal or round tower) in plan: its
+  roof is a polygonal hip or cone (planes may rise in any direction), and its
+  walls are one facade surface per facet.
 - A recessed structure (`mount: 'recess'`: an integral porch, recessed
   entry, or loggia) lives inside its host, under the host roof: the host's
   walls are cut away across it, and it adds its own back and side walls,

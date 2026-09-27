@@ -86,6 +86,7 @@
         "pitchRise": 3
       },
       "join": "auto",
+      "plan": null,
       "wrap": null,
       "eaves": {},
       "materials": {}
@@ -110,6 +111,7 @@
       "ridge": "perpendicular",
       "roofShape": null,
       "join": "auto",
+      "plan": null,
       "wrap": null,
       "eaves": {},
       "materials": {}

@@ -8,7 +8,9 @@
  * wall at coordinate `constant`) with slope `slope`, and `sign` points
  * inward: its height above the plate is
  * `offset + slope * sign * (coord - constant)`. A `{ constantHeight }` plane
- * is level.
+ * is level. A plane rising from an edge in any direction (a canted bay's side,
+ * an octagonal tower's facet) has a unit `dir` (inward, in plan) instead of
+ * `axis` and `sign`: its height is `offset + slope * (dir . [x, z] - constant)`.
  */
 
 export function defaultHighEdgeForAxis(axis) {
@@ -25,8 +27,24 @@ export function evalPlaneHeight(plane, x, z) {
   if ('constantHeight' in plane) {
     return plane.constantHeight;
   }
+  if (plane.dir) {
+    return (plane.offset ?? 0) + plane.slope * (plane.dir[0] * x + plane.dir[1] * z - plane.constant);
+  }
   const coord = plane.axis === 'x' ? x : z;
   return (plane.offset ?? 0) + plane.slope * plane.sign * (coord - plane.constant);
+}
+
+/**
+ * The plane rising at `slope` from the edge a -> b of a plan polygon, toward
+ * the side `inside` (a point of the polygon) is on.
+ */
+export function makeEdgePlane(a, b, slope, inside) {
+  const length = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+  let dir = [-(b[1] - a[1]) / length, (b[0] - a[0]) / length];
+  if (dir[0] * (inside[0] - a[0]) + dir[1] * (inside[1] - a[1]) < 0) {
+    dir = [-dir[0], -dir[1]];
+  }
+  return { dir, constant: dir[0] * a[0] + dir[1] * a[1], slope };
 }
 
 export function evalZoneHeight(planes, x, z) {

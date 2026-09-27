@@ -83,6 +83,7 @@
         "pitchRise": 4
       },
       "join": "auto",
+      "plan": null,
       "wrap": null,
       "eaves": {},
       "materials": {}
@@ -111,6 +112,7 @@
       "ridge": "perpendicular",
       "roofShape": null,
       "join": "auto",
+      "plan": null,
       "wrap": null,
       "eaves": {},
       "materials": {}
@@ -123,12 +125,12 @@
       "hostSide": "maxX",
       "offset": 1.5,
       "width": 2.8,
-      "setback": -1,
+      "setback": -0.9,
       "mount": "join",
-      "depth": 1,
+      "depth": 0.9,
       "wallHeight": 3.4,
       "baseHeight": "ground",
-      "support": "enclosed",
+      "support": "auto",
       "openSides": [],
       "inset": 0,
       "roofType": "hip",
@@ -138,6 +140,10 @@
         "pitchRise": 4
       },
       "join": "auto",
+      "plan": {
+        "shape": "canted",
+        "angle": 45
+      },
       "wrap": null,
       "eaves": {},
       "materials": {}

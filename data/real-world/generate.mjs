@@ -51,12 +51,12 @@ const houses = {
         roofType: 'flat', openSides: ['front', 'left', 'right'],
       },
       {
-        at: [0, 0], kind: 'porch', hostSide: 'maxX', offset: 1.5, width: 2.8, setback: -1, depth: 1, baseHeight: 'ground', wallHeight: 3.4,
-        roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: [], support: 'enclosed',
+        // the canted (octagonal) side bay
+        at: [0, 0], kind: 'porch', hostSide: 'maxX', offset: 1.5, width: 2.8, setback: -0.9, depth: 0.9, baseHeight: 'ground', wallHeight: 3.4,
+        roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: [], plan: { shape: 'canted', angle: 45 },
       },
     ],
     gaps: [
-      'The side bay is canted (octagonal) on the real houses; structures are rectangles, so it is a square box bay.',
       'The entry porch\'s flat roof usually carries a balustrade: a railing on a roof edge, not yet a facade element.',
       'Paired brackets, tall arched windows, and hood molds are facade modifiers (not built yet).',
     ],
@@ -90,14 +90,18 @@ const houses = {
     ],
     structures: [
       {
-        at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 7.3, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8,
+        // from the tower to the right-hand corner, and around it back along the side to the projection
+        at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 5.6, offset: 0.85, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8,
         roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: ['front', 'left', 'right'],
-        // around the right-hand corner and back along the side to the projection
         wrap: { end: 'right', length: 3.1 },
+      },
+      {
+        // an octagonal tower on the front left corner, rising a story past the eave to a steep pyramid
+        at: [0, 0], kind: 'porch', hostSide: 'maxZ', offset: -3.65, width: 3.4, setback: -1.7, depth: 3.4, baseHeight: 'ground', wallHeight: 7.6,
+        roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 20 }, openSides: [], plan: { shape: 'polygon', sides: 8 },
       },
     ],
     gaps: [
-      'Towers and turrets (round or polygonal, often with a conical roof) cannot be modeled: structures are rectangles.',
       'Gable-end detailing (fish-scale shingles, spindlework, bargeboards) is facade work.',
     ],
   },

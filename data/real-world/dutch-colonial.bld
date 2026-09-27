@@ -70,6 +70,7 @@
         "pitchRise": 2
       },
       "join": "auto",
+      "plan": null,
       "wrap": null,
       "eaves": {},
       "materials": {}
@@ -101,6 +102,7 @@
         "pitchRise": 5
       },
       "join": "auto",
+      "plan": null,
       "wrap": null,
       "eaves": {},
       "materials": {}

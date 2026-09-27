@@ -11,7 +11,7 @@ import {
 import {
   clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, clipInsideConvexSolid, planPrism, volumeSolid, isInsideSolid,
   validateRoofStructures, structureWallPolygons, structureWallSides, structureFloorPolygon, structureRecess, hostEaveProfile, hostEaveCovers,
-  roofProfile, roofPeak, structureFacade, roofWalkFacade, zoneSolids, zoneRoofHeight,
+  roofProfile, roofPeak, structureFacade, roofWalkFacade, zoneSolids, zoneRoofHeight, facadeWallRun, edgeFrame,
 } from './roof-structures.js';
 import {
   computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, makeEavePlane, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
@@ -303,6 +303,37 @@ function withRoofStructures(result, config) {
   result.structureFacades = [];
   const clipOutside = (triangles, solids) => solids.reduce((kept, solid) => clipOutsideConvexSolid(kept, solid), triangles);
 
+  // add a structure's parts, cut every roof it runs into, and keep its solid
+  const finish = (resolved, host, parts) => {
+    parts.forEach(([part, triangles, material]) => {
+      if (triangles.length) {
+        const mesh = new THREE.Mesh(trianglesToGeometry(triangles), material);
+        mesh.userData = {
+          structureId: resolved.id, recordId: resolved.recordId, structurePart: part, hostVolumeId: host.volumeId,
+        };
+        result.building.add(mesh);
+        if (part === 'roof') {
+          roofMeshes.push(mesh); // a structure standing on this one cuts it too
+        }
+      }
+    });
+
+    // Cut every roof: the host's, and any neighbor's the structure runs into.
+    // A standing structure's solid starts at its floor, so a flat host's slab
+    // below the deck goes too; a dormer's reaches down through the host roof.
+    const cut = volumeSolid(resolved, { floorY: resolved.standing ? resolved.sillY : 0 });
+    // A structure rising through the roof leaves it whole: an enclosed one
+    // hides the roof inside it, and an open one stands on it.
+    roofMeshes.filter((mesh) => !resolved.through && mesh.userData?.structureId !== resolved.id).forEach((mesh) => {
+      const y = mesh.position.y;
+      const absolute = geometryTriangles(mesh.geometry).map((tri) => tri.map(([px, py, pz]) => [px, py + y, pz]));
+      const kept = clipOutsideConvexSolid(absolute, cut).map((tri) => tri.map(([px, py, pz]) => [px, py - y, pz]));
+      mesh.geometry.dispose();
+      mesh.geometry = trianglesToGeometry(kept);
+    });
+    builtSolids.push({ id: resolved.id, solid: volumeSolid(resolved, { floorY: resolved.sillY }) });
+  };
+
   built.forEach(({ resolved, host }) => {
     if (resolved.recess) {
       buildRecess(resolved, host, result, materials);
@@ -325,6 +356,15 @@ function withRoofStructures(result, config) {
     // roof) is that lower space's ceiling, so it stays: only floor sunk below
     // the wall top, inside the host, is cut away.
     const floorSolids = [volumeSolid({ ...host, planes: [], slabThickness: 0, baseY: host.wallTopY - 1e-3 }), ...others];
+    if (resolved.planned) {
+      const planned = plannedParts(resolved, host, config, materials, {
+        hostSolids, hostBody, others, floorSolids, clipOutside,
+      });
+      result.structureFacades.push(planned.facade);
+      // no notch in the host eave: the structure's own solid cuts it along its outline, onto its walls
+      finish(resolved, host, planned.parts);
+      return;
+    }
 
     // walls start low enough to meet the host: its roof for a dormer, its
     // wall top (below the roof lift) for a structure standing on a base
@@ -377,35 +417,137 @@ function withRoofStructures(result, config) {
       ['foundation', clipOutside(supports.foundation, [...hostSolids, ...others]), materials.foundation],
       ['eave-caps', interruptsHostEave(resolved, host) ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
     ];
-    parts.forEach(([part, triangles, material]) => {
-      if (triangles.length) {
-        const mesh = new THREE.Mesh(trianglesToGeometry(triangles), material);
-        mesh.userData = {
-          structureId: resolved.id, recordId: resolved.recordId, structurePart: part, hostVolumeId: host.volumeId,
-        };
-        result.building.add(mesh);
-        if (part === 'roof') {
-          roofMeshes.push(mesh); // a structure standing on this one cuts it too
-        }
-      }
-    });
-
-    // Cut every roof: the host's, and any neighbor's the structure runs into.
-    // A standing structure's solid starts at its floor, so a flat host's slab
-    // below the deck goes too; a dormer's reaches down through the host roof.
-    const cut = volumeSolid(resolved, { floorY: resolved.standing ? resolved.sillY : 0 });
-    // A structure rising through the roof leaves it whole: an enclosed one
-    // hides the roof inside it, and an open one stands on it.
-    roofMeshes.filter((mesh) => !resolved.through && mesh.userData?.structureId !== resolved.id).forEach((mesh) => {
-      const y = mesh.position.y;
-      const absolute = geometryTriangles(mesh.geometry).map((tri) => tri.map(([px, py, pz]) => [px, py + y, pz]));
-      const kept = clipOutsideConvexSolid(absolute, cut).map((tri) => tri.map(([px, py, pz]) => [px, py - y, pz]));
-      mesh.geometry.dispose();
-      mesh.geometry = trianglesToGeometry(kept);
-    });
-    builtSolids.push({ id: resolved.id, solid: volumeSolid(resolved, { floorY: resolved.sillY }) });
+    finish(resolved, host, parts);
   });
   return { ...result, roofStructures: results, structureSolids: builtSolids.map((entry) => entry.solid) };
+}
+
+/**
+ * A structure with a polygonal plan (see resolvePlanned in
+ * js/roof-structures.js: a canted bay, an octagonal or round tower), as parts
+ * like any structure's, and its facade surfaces:
+ * - walls on each edge of its outline, up to its roof, clipped as a
+ *   standing structure's are (a tower on the corner of the house shows
+ *   only outside it);
+ * - its roof face by face over its outline carried out over the eave on its
+ *   eave edges (a flat roof is a slab), with a fascia and soffit along each
+ *   eave, capped where an eave ends against an edge with none;
+ * - a floor at its sill, and a foundation under one at ground level.
+ */
+function plannedParts(resolved, host, config, materials, {
+  hostSolids, hostBody, others, floorSolids, clipOutside,
+}) {
+  const {
+    outline, planes, plateY, sillY, id,
+  } = resolved;
+  const count = outline.length;
+  const center = [outline.reduce((sum, [x]) => sum + x, 0) / count, outline.reduce((sum, [, z]) => sum + z, 0) / count];
+  const edges = outline.map((point, i) => [point, outline[(i + 1) % count]]);
+  const structureMaterials = materialsFor(resolved, materials);
+  const top = resolved.roofType === 'flat' ? plateY + resolved.slabThickness : null;
+
+  // walls on each edge, from low enough to meet the host up to the roof
+  const bottomY = Math.min(sillY, resolved.standing ? host.wallTopY : host.baseY);
+  const wallFaces = edges.map(([a, b]) => {
+    const tops = top !== null
+      ? [[b[0], top, b[1]], [a[0], top, a[1]]]
+      : roofProfile(planes, a, b).reverse().map(([t, height]) => [a[0] + (b[0] - a[0]) * t, plateY + height, a[1] + (b[1] - a[1]) * t]);
+    const polygon = [[a[0], bottomY, a[1]], [b[0], bottomY, b[1]], ...tops];
+    return standingWalls(polygonsToTriangles([polygon]), resolved, {
+      hostSolids, hostBody, others, clipOutside,
+    });
+  });
+
+  // the roof, carried out over the eaves
+  const eaves = resolveVolumeEaves(id, { ...pickEaveConfig(config), volumeEaves: { [id]: resolved.eaves ?? {} } });
+  const depth = eaves.eaveDepth > 1e-9 ? eaves.eaveDepth : 0;
+  const isEave = edges.map((_, i) => (resolved.eaveEdges ?? []).includes(i) || resolved.roofType === 'flat');
+  const outward = ([a, b]) => {
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    let normal = [(b[1] - a[1]) / length, -(b[0] - a[0]) / length];
+    if (normal[0] * (center[0] - a[0]) + normal[1] * (center[1] - a[1]) > 0) {
+      normal = [-normal[0], -normal[1]];
+    }
+    return normal;
+  };
+  // each outline corner moved out to where its two edges' eave lines meet
+  const outer = outline.map((point, i) => {
+    const previous = (i + count - 1) % count;
+    const [n1, n2] = [outward(edges[previous]), outward(edges[i])];
+    const [d1, d2] = [isEave[previous] ? depth : 0, isEave[i] ? depth : 0];
+    // solve p + u: n1 . u = d1, n2 . u = d2
+    const det = n1[0] * n2[1] - n1[1] * n2[0];
+    if (Math.abs(det) < 1e-9) {
+      return [point[0] + n2[0] * d2, point[1] + n2[1] * d2];
+    }
+    return [point[0] + (d1 * n2[1] - d2 * n1[1]) / det, point[1] + (n1[0] * d2 - n2[0] * d1) / det];
+  });
+  const fascia = eaves.fasciaDepth ?? 0;
+  let roof;
+  if (top !== null) {
+    // a flat slab over the outline carried out
+    const sides = outer.map((point, i) => {
+      const next = outer[(i + 1) % count];
+      return [[point[0], plateY, point[1]], [next[0], plateY, next[1]], [next[0], top, next[1]], [point[0], top, point[1]]];
+    });
+    roof = polygonsToTriangles([outer.map(([x, z]) => [x, top, z]), outer.map(([x, z]) => [x, plateY, z]).reverse(), ...sides]);
+  } else {
+    const heightAt = (point) => evalZoneHeight(planes, point[0], point[1]);
+    const faces = planes.map((plane, k) => {
+      let face = outer.map(([x, z]) => [x, z]);
+      planes.forEach((other, j) => {
+        if (j !== k && face.length >= 3) {
+          const bias = j < k ? 1e-9 : 0;
+          face = clipPolygon(face, ([x, z]) => evalPlaneHeight(other, x, z) - evalPlaneHeight(plane, x, z) - bias);
+        }
+      });
+      return face.length >= 3 ? face.map(([x, z]) => [x, plateY + evalPlaneHeight(plane, x, z), z]) : null;
+    }).filter(Boolean);
+    const trim = [];
+    edges.forEach(([a, b], i) => {
+      if (!isEave[i] || depth <= 0) {
+        return;
+      }
+      const [oa, ob] = [outer[i], outer[(i + 1) % count]];
+      const [ya, yb] = [plateY + heightAt(oa), plateY + heightAt(ob)];
+      trim.push([[oa[0], ya, oa[1]], [ob[0], yb, ob[1]], [ob[0], yb - fascia, ob[1]], [oa[0], ya - fascia, oa[1]]]);
+      const inner = (y) => (eaves.eaveSoffit === 'sloped' ? plateY - fascia : y - fascia);
+      trim.push([[a[0], inner(ya), a[1]], [oa[0], ya - fascia, oa[1]], [ob[0], yb - fascia, ob[1]], [b[0], inner(yb), b[1]]]);
+      // an eave ending against an edge without one is capped with its section
+      [[i, a, oa, ya, (i + count - 1) % count], [i, b, ob, yb, (i + 1) % count]].forEach(([, wallPoint, outerPoint, y, neighbor]) => {
+        if (!isEave[neighbor]) {
+          trim.push([[wallPoint[0], plateY, wallPoint[1]], [outerPoint[0], y, outerPoint[1]], [outerPoint[0], y - fascia, outerPoint[1]], [wallPoint[0], inner(y), wallPoint[1]]]);
+        }
+      });
+    });
+    roof = polygonsToTriangles([...faces, ...trim]);
+  }
+
+  // the floor, and a foundation under one at ground level
+  const floor = resolved.standing ? clipOutside(polygonsToTriangles([outline.map(([x, z]) => [x, sillY, z])]), floorSolids) : [];
+  const foundation = resolved.support === 'deck' && sillY > 1e-9
+    ? clipOutside(polygonsToTriangles([
+      outline.map(([x, z]) => [x, 0, z]).reverse(),
+      ...edges.map(([a, b]) => [[a[0], 0, a[1]], [b[0], 0, b[1]], [b[0], sillY, b[1]], [a[0], sillY, a[1]]]),
+    ]), [...hostSolids, ...others])
+    : [];
+
+  const storyId = `story-${id}-1`;
+  const common = { structureId: id, hostVolumeId: resolved.hostVolumeId, storyId };
+  const wallRuns = wallFaces.map((triangles, i) => (triangles.length
+    ? facadeWallRun(`wall-run-${id}-facet-${i + 1}`, { ...common, wall: `facet-${i + 1}`, side: null }, edgeFrame(edges[i][0], edges[i][1], center), triangles, sillY)
+    : null)).filter(Boolean);
+  return {
+    parts: [
+      ['walls', wallFaces.flat(), structureMaterials.wall],
+      ['roof', clipOutside(roof, [...hostSolids, ...others]), structureMaterials.roof],
+      ['floor', floor, materials.roof],
+      ['foundation', foundation, materials.foundation],
+    ],
+    facade: {
+      structureId: id, wallRuns, stories: [{ id: storyId, structureId: id, minY: sillY, maxY: plateY }], railRuns: [],
+    },
+  };
 }
 
 /**

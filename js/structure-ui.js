@@ -60,6 +60,32 @@ export const STRUCTURE_UI_PRESETS = Object.freeze([
       roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 1.5 }, openSides: [],
     },
   },
+  {
+    key: 'canted-bay',
+    label: 'Canted bay window',
+    fields: {
+      kind: 'porch', setback: -0.9, depth: 0.9, width: 2.8, baseHeight: 'ground', wallHeight: 2.8,
+      roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: [], plan: { shape: 'canted', angle: 45 },
+    },
+  },
+  {
+    key: 'corner-tower',
+    label: 'Octagonal corner tower',
+    corner: true,
+    fields: {
+      kind: 'porch', setback: -1.7, depth: 3.4, width: 3.4, baseHeight: 'ground',
+      roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 18 }, openSides: [], plan: { shape: 'polygon', sides: 8 },
+    },
+  },
+  {
+    key: 'round-turret',
+    label: 'Round corner turret',
+    corner: true,
+    fields: {
+      kind: 'porch', setback: -1.4, depth: 2.8, width: 2.8, baseHeight: 'ground',
+      roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 24 }, openSides: [], plan: { shape: 'polygon', sides: 16 },
+    },
+  },
   { key: 'cupola', label: 'Cupola', fields: { kind: 'cupola' } },
 ]);
 
@@ -67,7 +93,8 @@ export const STRUCTURE_UI_PRESETS = Object.freeze([
  * A new structure from a UI preset, with an id unused by `existing`.
  *
  * @param {string} presetKey - a STRUCTURE_UI_PRESETS key
- * @param {{ hostVolumeId?: string, hostStructure?: object, hostSide: string, storyHeight?: number, wallLength?: number }} placement
+ * @param {{ hostVolumeId?: string, hostStructure?: object, hostSide: string, storyHeight?: number, wallLength?: number, wallTop?: number }} placement
+ *   (`wallTop`: the host's wall height, which a corner tower rises past)
  *   The volume (or, for an `onStructure` preset, the structure record) to
  *   stand on, and the side it faces. An upper porch's floor goes one story
  *   below the host plate.
@@ -83,6 +110,11 @@ export function newRoofStructure(presetKey, placement, existing = []) {
   const fields = { ...preset.fields };
   if (presetKey === 'upper-porch') {
     fields.baseHeight = -(placement.storyHeight ?? 3.2);
+  }
+  if (preset.corner) {
+    // centered on the right-hand corner, rising a story above the plate
+    fields.offset = Number.isFinite(placement.wallLength) ? placement.wallLength / 2 : 0;
+    fields.wallHeight = (placement.wallTop ?? 2 * (placement.storyHeight ?? 3.2)) + (placement.storyHeight ?? 3.2) * 0.6;
   }
   if (presetKey === 'wraparound-porch' && Number.isFinite(placement.wallLength)) {
     // along the whole wall, so its right end is at the corner
@@ -121,9 +153,10 @@ const SIDE_LABELS = {
 
 /** A short label for a structure record: what it is, and where. */
 export function structureLabel(structure) {
-  const roof = ['dormer', 'wall-dormer'].includes(structure.kind) && structure.roofType !== 'gable'
+  const plan = { canted: 'Canted bay', polygon: 'Tower' }[structure.plan?.shape];
+  const roof = plan ?? (['dormer', 'wall-dormer'].includes(structure.kind) && structure.roofType !== 'gable'
     ? `${structure.roofType[0].toUpperCase()}${structure.roofType.slice(1)} ${KIND_LABELS[structure.kind].toLowerCase()}`
-    : KIND_LABELS[structure.kind] ?? structure.kind;
+    : KIND_LABELS[structure.kind] ?? structure.kind);
   const host = structure.hostStructureId
     ? `on ${structure.hostStructureId}`
     : `${(structure.hostVolumeId ?? '').replace('-', ' ')}, ${SIDE_LABELS[structure.hostSide] ?? structure.hostSide}`;

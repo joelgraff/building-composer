@@ -71,8 +71,8 @@
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
       "hostSide": "maxZ",
-      "offset": 0,
-      "width": 7.3,
+      "offset": 0.85,
+      "width": 5.6,
       "setback": -2.4,
       "mount": "join",
       "depth": 2.4,
@@ -92,10 +92,42 @@
         "pitchRise": 4
       },
       "join": "auto",
+      "plan": null,
       "wrap": {
         "end": "right",
         "length": 3.1
       },
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": -3.65,
+      "width": 3.4,
+      "setback": -1.7,
+      "mount": "join",
+      "depth": 3.4,
+      "wallHeight": 7.6,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "hip",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 20
+      },
+      "join": "auto",
+      "plan": {
+        "shape": "polygon",
+        "sides": 8
+      },
+      "wrap": null,
       "eaves": {},
       "materials": {}
     }

@@ -78,6 +78,7 @@
       "ridge": "perpendicular",
       "roofShape": null,
       "join": "auto",
+      "plan": null,
       "wrap": null,
       "eaves": {},
       "materials": {}
