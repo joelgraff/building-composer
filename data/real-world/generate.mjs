@@ -151,7 +151,8 @@ const houses = {
     },
     structures: [
       {
-        at: [0, 0], kind: 'dormer', hostSide: 'maxZ', width: 7, wallHeight: 1.4, setback: 0.4, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 1 },
+        // the full shed dormer: up the lower slope and on to meet the upper slope near the ridge
+        at: [0, 0], kind: 'dormer', hostSide: 'maxZ', width: 7, wallHeight: 1.7, setback: 0.4, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 2 },
       },
       {
         // kept below the eave, as builders do
@@ -159,11 +160,7 @@ const houses = {
         roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 5 }, openSides: ['front', 'left', 'right'],
       },
     ],
-    refused: [
-      { label: 'full shed dormer rising from the lower slope to meet the upper slope near the ridge', structure: { at: [0, 0], kind: 'dormer', width: 7, wallHeight: 1.7, setback: 0.4, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 2 } } },
-    ],
     gaps: [
-      'The characteristic full-width shed dormer runs from the lower slope up past the break to meet the upper slope. A dormer must stay on one roof face, so the built one is a low band under the break.',
       'An entry hood is a roof on brackets over the door with no floor or posts; the model has only porches, so it stands on a small stoop with posts.',
     ],
   },

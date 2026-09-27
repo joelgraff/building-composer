@@ -220,6 +220,8 @@ same lines as one closed shell (valleys, ridge ends, and wall-on-roof seams
 come out of the clip for every roof type). The rules that follow:
 
 - A dormer stands on one roof face and its roof never passes the host ridge.
+  On a mansard or gambrel it may run from the lower slope on into the upper
+  slope of the same side (a full shed dormer), but not round a hip.
   It faces down its slope, square to the host ridge (its own ridge always
   runs into the roof): if the host ridge turns, a dormer on what becomes a
   gable end faces the slope at that end instead.

@@ -776,8 +776,44 @@ export function resolveRoofStructure(structure, host, config = {}) {
       ? piece
       : clipPolygon(piece, ([x, z]) => evalPlaneHeight(other, x, z) - evalPlaneHeight(plane, x, z))), clipToHostWalls(host.bounds, host)),
   }));
+  // The host roof under the structure's roof, piece by host face: the face's
+  // region within the structure's rectangle, where the structure's roof is
+  // above that face.
+  const piecesUnder = () => hostPieces.map(({ plane: hostFace, polygon }) => {
+    let piece = [
+      ([x]) => x - bounds.minX, ([x]) => bounds.maxX - x, ([, z]) => z - bounds.minZ, ([, z]) => bounds.maxZ - z,
+    ].reduce((clipped, distance) => (clipped.length ? clipPolygon(clipped, distance) : clipped), polygon);
+    const faceY = ([x, z]) => host.baseY + evalPlaneHeight(hostFace, x, z);
+    (planes.length
+      ? planes.map((plane) => ([x, z]) => plateY + evalPlaneHeight(plane, x, z) - faceY([x, z]))
+      : [(point) => plateY + slabThickness - faceY(point)]
+    ).forEach((distance) => {
+      piece = clipPolygon(piece, distance);
+    });
+    return { plane: hostFace, piece };
+  }).filter(({ piece }) => piece.length >= 3 && Math.abs(piece.reduce((sum, [x, z], i) => {
+    const [nx, nz] = piece[(i + 1) % piece.length];
+    return sum + x * nz - nx * z;
+  }, 0)) > 1e-9);
+  // A dormer on a mansard or gambrel may run up its side's lower slope and
+  // on past the break into the upper slope (the full shed dormer of a Dutch
+  // Colonial); it still may not cross a hip, ridge, or valley.
+  let breakPieces = null;
+  if (sloped && !standing && !through && TWO_SLOPE_ROOF_TYPES.includes(host.roofType)) {
+    const under = piecesUnder();
+    if (under.some(({ plane }) => plane.side !== structure.hostSide)) {
+      return fail('crosses-face', 'The structure crosses a hip, ridge, or valley of the host roof; it must stand on one side of it.');
+    }
+    breakPieces = under.map(({ piece }) => piece);
+    const lower = under.find(({ plane }) => plane.tier !== 'upper');
+    if (lower) {
+      hostContact = lower.piece;
+    }
+  }
   const removedRoof = through
     ? []
+    : breakPieces
+    ? breakPieces
     : standing
     ? hostPieces.map(({ plane: hostFace, polygon }) => {
       let piece = [
@@ -823,7 +859,7 @@ export function resolveRoofStructure(structure, host, config = {}) {
   if (hostContact.length < 3 && structure.baseHeight === null && !through) {
     return fail('no-contact', 'The structure does not meet the host roof.');
   }
-  if (sloped && !standing && !through && hostContact.some(([x, z]) => evalPlaneHeight(face, x, z) > evalZoneHeight(host.planes, x, z) + GEOMETRY_EPSILON)) {
+  if (sloped && !standing && !through && !breakPieces && hostContact.some(([x, z]) => evalPlaneHeight(face, x, z) > evalZoneHeight(host.planes, x, z) + GEOMETRY_EPSILON)) {
     return fail('crosses-face', 'The structure crosses a hip, ridge, or valley of the host roof; it must stand on one roof face.');
   }
 

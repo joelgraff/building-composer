@@ -183,7 +183,7 @@ describe('gambrel roofs', () => {
 });
 
 describe('two-slope roofs with structures, roles, and persistence', () => {
-  it('a dormer on a mansard\'s lower slope stays below the break', () => {
+  it('a dormer on a mansard\'s lower slope, below the break or running on into the upper slope', () => {
     const fits = build(RECT, {
       roofType: 'mansard',
       roofStructures: [{ hostVolumeId: 'volume-0', hostSide: 'minZ', setback: 0.25, width: 1.4, wallHeight: 0.9, roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 6 } }],
@@ -194,7 +194,27 @@ describe('two-slope roofs with structures, roles, and persistence', () => {
       roofType: 'mansard',
       roofStructures: [{ hostVolumeId: 'volume-0', hostSide: 'minZ', setback: 0.3, wallHeight: 1.2, roofType: 'gable' }],
     });
-    assert.deepEqual(tooTall.roofStructures[0].errors.map((e) => e.code), ['crosses-face'], 'past the break it would span two faces');
+    // past the break it meets the upper slope too: two pieces of roof replaced, one shell
+    assert.deepEqual(tooTall.roofStructures[0].errors, []);
+    assert.equal(tooTall.roofStructures[0].resolved.removedRoof.length, 2);
+    assertWatertight(tooTall, 'mansard dormer past the break');
+    // but not round a hip corner onto the next side
+    const corner = build(RECT, {
+      roofType: 'mansard',
+      roofStructures: [{ hostVolumeId: 'volume-0', hostSide: 'minZ', offset: 8.4, setback: 0.3, width: 2.4, wallHeight: 1.2, roofType: 'gable' }],
+    });
+    assert.deepEqual(corner.roofStructures[0].errors.map((e) => e.code), ['crosses-face']);
+  });
+
+  it('a gambrel\'s full shed dormer runs up the lower slope and meets the upper slope near the ridge', () => {
+    const result = build(RECT, {
+      storyCount: 1, roofType: 'gambrel', roofBreakHeight: 2.6, roofLowerPitchRise: 24, roofUpperPitchRise: 6,
+      roofStructures: [{ hostVolumeId: 'volume-0', hostSide: 'minZ', width: 16, setback: 0.4, wallHeight: 1.7, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 2 } }],
+    });
+    const [{ resolved, errors }] = result.roofStructures;
+    assert.deepEqual(errors, []);
+    assert.equal(resolved.removedRoof.length, 2, 'the lower slope and the upper');
+    assertWatertight(result, 'gambrel shed dormer');
   });
 
   it('a flush wall dormer breaks the cornice with a box-shaped cap', () => {

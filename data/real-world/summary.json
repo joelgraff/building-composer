@@ -75,19 +75,10 @@
     "note": "A 1910s-30s Dutch Colonial: a side-gabled gambrel whose steep lower slopes hold the second floor, a long shed dormer across the front, and a gabled entry hood.",
     "front": "maxZ",
     "gaps": [
-      "The characteristic full-width shed dormer runs from the lower slope up past the break to meet the upper slope. A dormer must stay on one roof face, so the built one is a low band under the break.",
       "An entry hood is a roof on brackets over the door with no floor or posts; the model has only porches, so it stands on a small stoop with posts."
     ],
     "issues": [],
-    "refused": [
-      {
-        "label": "full shed dormer rising from the lower slope to meet the upper slope near the ridge",
-        "errors": [
-          "The structure crosses a hip, ridge, or valley of the host roof; it must stand on one roof face."
-        ],
-        "warnings": []
-      }
-    ],
+    "refused": [],
     "zones": 1,
     "volumes": 1
   },
