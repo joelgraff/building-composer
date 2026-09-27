@@ -465,6 +465,7 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
   ridge: 'perpendicular' | 'parallel',  // a porch's or cupola's; a dormer's ridge always runs into the roof
   roofShape: null,    // { mode: 'slope', pitchRise } | { mode: 'height', height }; null = the building's pitch
   join: 'auto' | 'snap-ridge',  // a dormer's roof: lowered to the ridge only if it would pass it, or always meet it
+  wrap: null,         // { end: 'left' | 'right', length }: a porch turning the corner (a wraparound)
   eaves: {},          // volumeEaves fields, over the building's
   materials: {},      // { wall, roof }: palette keys, over the building's
 }
@@ -843,7 +844,7 @@ A review after phase 7 found and fixed:
 Nine house types common in Dixon, Illinois (`data/real-world/`, report with renders published separately) were modeled to test the system before facade modifiers. Three bugs were fixed on the spot: wall material and widow's walk surfaces lost on buildings whose volumes differ in story count, and a ground porch's deck z-fighting its floor. The gaps, worked through in this order:
 
 1. **Volumes follow the massing.** Done. `decomposeIntoVolumes(footprint, { split })` cuts in Z bands (`'z'`, the old behavior and the default for files without the setting), X bands (`'x'`), or automatically (`'auto'`: the fewest volumes, then the largest smallest dimension, a tie keeping Z). New projects use `'auto'`; `volumeSplit` is saved. The app's **Volumes** control switches it and clears per-volume settings, since ids are renumbered. The upright-and-wing and Queen Anne now model facing +Z.
-2. Porches that turn a corner (a wraparound): past the wall end, with one roof around the corner.
+2. **Porches that turn a corner.** Done. A projecting porch whose end is at its wall's end can `wrap: { end: 'left'|'right', length }`. `expandWraps` makes it two rectangular segments: the porch, running on past the corner by its projection, and `<id>-wrap` along the adjacent wall. Where they meet, and along the front segment's back, are `seamSides`: no wall, post, header, or railing. `joinWrapRoofs` gives both one hip roof: the planes rising from every outer eave and none from the walls, so it is hipped at the corner and the far ends and runs level into the walls; each segment builds it face by face (`wrapRoofTriangles`) with fascia and soffit on its outer eaves. Both halves build or neither (`wrap-incomplete`). Errors: `wrap-not-at-corner`, `wrap-depth` (the depth must equal the projection), `wrap-roof` (hip only), `wrap-not-porch`. The editor has "Wraps around the corner" and a length; the "Wraparound porch" preset runs the whole wall. Picking either segment selects the porch. Tests: `tests/wraparound_porches.test.js`.
 3. Porches recessed into the footprint under the main roof (an integral porch).
 4. Story-and-a-half (knee walls).
 5. Per-volume story height and floor level.

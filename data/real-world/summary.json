@@ -31,21 +31,11 @@
     "note": "A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner.",
     "front": "maxZ",
     "gaps": [
-      "A porch cannot run past the end of its wall, so a wraparound porch leaves its corner square empty.",
-      "A wraparound porch is two porches meeting at the corner; their hip roofs meet as two roofs, not one continuous roof turning the corner.",
       "Towers and turrets (round or polygonal, often with a conical roof) cannot be modeled: structures are rectangles.",
       "Gable-end detailing (fish-scale shingles, spindlework, bargeboards) is facade work."
     ],
     "issues": [],
-    "refused": [
-      {
-        "label": "front porch running on past the corner (the wraparound's corner)",
-        "errors": [
-          "The structure runs past the ends of volume-0's maxZ wall."
-        ],
-        "warnings": []
-      }
-    ],
+    "refused": [],
     "zones": 2,
     "volumes": 2
   },

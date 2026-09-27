@@ -24,7 +24,7 @@ function buildWith(structures, config = {}) {
 }
 
 describe('roof structure UI presets', () => {
-  const placement = { hostVolumeId: 'volume-0', hostSide: 'minZ', storyHeight: 3.2 };
+  const placement = { hostVolumeId: 'volume-0', hostSide: 'minZ', storyHeight: 3.2, wallLength: 20 };
 
   it('each builds without errors on a two-story house (on the roof it suits)', () => {
     const suits = {};
@@ -34,6 +34,15 @@ describe('roof structure UI presets', () => {
       const [entry] = buildWith([record], suits[preset.key] ?? {}).roofStructures;
       assert.deepEqual(entry.errors, [], `${preset.key}: ${entry.errors.map((e) => e.message)}`);
     });
+  });
+
+  it('a wraparound porch runs the whole wall and turns the corner at its right end', () => {
+    const record = newRoofStructure('wraparound-porch', placement);
+    assert.equal(record.width, 20);
+    assert.deepEqual(record.wrap, { end: 'right', length: 4 });
+    const entries = buildWith([record]).roofStructures;
+    assert.deepEqual(entries.map((entry) => entry.id), [record.id, `${record.id}-wrap`]);
+    assert.deepEqual(entries.map((entry) => entry.errors), [[], []]);
   });
 
   it('an upper porch stands one story down, on posts', () => {

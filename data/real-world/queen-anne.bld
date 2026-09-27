@@ -88,36 +88,10 @@
         "pitchRise": 4
       },
       "join": "auto",
-      "eaves": {},
-      "materials": {}
-    },
-    {
-      "id": "structure-2",
-      "kind": "porch",
-      "hostVolumeId": "volume-0",
-      "hostStructureId": null,
-      "hostSide": "maxX",
-      "offset": 4.55,
-      "width": 3.1,
-      "setback": -2.4,
-      "mount": "join",
-      "depth": 2.4,
-      "wallHeight": 2.8,
-      "baseHeight": "ground",
-      "support": "auto",
-      "openSides": [
-        "front",
-        "left",
-        "right"
-      ],
-      "inset": 0,
-      "roofType": "hip",
-      "ridge": "perpendicular",
-      "roofShape": {
-        "mode": "slope",
-        "pitchRise": 4
+      "wrap": {
+        "end": "right",
+        "length": 3.1
       },
-      "join": "auto",
       "eaves": {},
       "materials": {}
     }

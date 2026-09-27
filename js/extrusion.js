@@ -319,7 +319,9 @@ function withRoofStructures(result, config) {
     parts.forEach(([part, triangles, material]) => {
       if (triangles.length) {
         const mesh = new THREE.Mesh(trianglesToGeometry(triangles), material);
-        mesh.userData = { structureId: resolved.id, structurePart: part, hostVolumeId: host.volumeId };
+        mesh.userData = {
+          structureId: resolved.id, recordId: resolved.recordId, structurePart: part, hostVolumeId: host.volumeId,
+        };
         result.building.add(mesh);
         if (part === 'roof') {
           roofMeshes.push(mesh); // a structure standing on this one cuts it too
@@ -440,7 +442,7 @@ function openSidePosts(resolved, solids, bottomY = resolved.sillY) {
   const midY = (sillY + plateY) / 2;
   const againstSolid = ([x, z]) => solids.some((solid) => isInsideSolid([x, midY, z], solid, 1e-3));
   const points = new Map();
-  resolved.openSides.forEach((wallName) => {
+  resolved.openSides.filter((wallName) => !resolved.seamSides?.includes(wallName)).forEach((wallName) => {
     const side = sides[wallName];
     const [a, b] = side === 'minX' || side === 'maxX'
       ? [[bounds[side], bounds.minZ], [bounds[side], bounds.maxZ]]
@@ -721,6 +723,12 @@ function structureRoofTriangles(resolved, config) {
     overhang: setup.overhang,
     eaves: setup.eaves,
   };
+  if (resolved.wrapRoof) {
+    return [
+      ...wrapRoofTriangles(resolved, setup).map((tri) => tri.map(([x, y, z]) => [x, y + resolved.plateY, z])),
+      ...openEaveHeaders(resolved, setup),
+    ];
+  }
   const geometry = resolved.roofType === 'gable'
     ? createGableRoofGeometry(bounds, roofConfig)
     : resolved.roofType === 'hip'
@@ -759,7 +767,7 @@ function structureEaveSetup(resolved, config) {
     ...pickEaveConfig(config),
     volumeEaves: { ...(config.volumeEaves ?? {}), [resolved.id]: resolved.eaves ?? {} },
   };
-  return volumeEaveSetup(
+  const setup = volumeEaveSetup(
     resolved.id,
     resolved.roofType,
     { ridgeAxis: resolved.ridgeAxis, roofHighEdge: resolved.roofHighEdge },
@@ -768,6 +776,50 @@ function structureEaveSetup(resolved, config) {
     undefined,
     resolved.bounds
   );
+  if (resolved.wrapRoof) {
+    // a wraparound overhangs only its outer eaves: not at its walls or where its segments meet
+    const depth = Math.max(0, ...resolved.wrapRoof.eaveSides.map((side) => setup.overhang?.[side] ?? 0));
+    setup.overhang = Object.fromEntries(['minX', 'maxX', 'minZ', 'maxZ']
+      .map((side) => [side, resolved.wrapRoof.eaveSides.includes(side) ? depth : 0]));
+  }
+  return setup;
+}
+
+/**
+ * A wraparound segment's roof (see joinWrapRoofs): its shared planes over its
+ * rectangle carried out over its eaves, face by face, with a fascia and
+ * soffit along each eave. Heights are above the plate.
+ */
+function wrapRoofTriangles(resolved, setup) {
+  const { bounds } = resolved;
+  const overhang = setup.overhang;
+  const outer = {
+    minX: bounds.minX - overhang.minX, maxX: bounds.maxX + overhang.maxX, minZ: bounds.minZ - overhang.minZ, maxZ: bounds.maxZ + overhang.maxZ,
+  };
+  const slope = resolved.planes[0]?.slope ?? 0;
+  const fascia = setup.eaves.fasciaDepth ?? 0;
+  const corners = (box) => [[box.minX, box.minZ], [box.maxX, box.minZ], [box.maxX, box.maxZ], [box.minX, box.maxZ]];
+  const [outerCorners, innerCorners] = [corners(outer), corners(bounds)];
+  const trim = [];
+  ['minZ', 'maxX', 'maxZ', 'minX'].forEach((side, i) => {
+    const depth = overhang[side];
+    if (depth <= 1e-9) {
+      return;
+    }
+    const j = (i + 1) % 4;
+    const y = -slope * depth;
+    const [o0, o1, w0, w1] = [outerCorners[i], outerCorners[j], innerCorners[i], innerCorners[j]];
+    trim.push(
+      [[o0[0], y, o0[1]], [o1[0], y, o1[1]], [o1[0], y - fascia, o1[1]]],
+      [[o0[0], y, o0[1]], [o1[0], y - fascia, o1[1]], [o0[0], y - fascia, o0[1]]],
+    );
+    const inner = setup.eaves.eaveSoffit === 'sloped' ? -fascia : y - fascia;
+    trim.push(
+      [[w0[0], inner, w0[1]], [w1[0], inner, w1[1]], [o1[0], y - fascia, o1[1]]],
+      [[w0[0], inner, w0[1]], [o1[0], y - fascia, o1[1]], [o0[0], y - fascia, o0[1]]],
+    );
+  });
+  return [...minOfPlanesFaces(outer, resolved.planes), ...trim];
 }
 
 /**
@@ -789,7 +841,7 @@ function openEaveHeaders(resolved, setup) {
   };
   // under a rake, the deepest eave box it meets at the corners
   const rakeDepth = Math.max(fascia, ...resolved.planes.map(soffitDepth));
-  return resolved.openSides.flatMap((wallName) => {
+  return resolved.openSides.filter((wallName) => !resolved.seamSides?.includes(wallName)).flatMap((wallName) => {
     const side = sides[wallName];
     if ((setup.overhang?.[side] ?? 0) <= 1e-9) {
       return [];

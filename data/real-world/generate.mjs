@@ -91,22 +91,15 @@ const houses = {
       { at: [0, 0], ridge: 'x-min' },
       { at: [5, 1], ridge: 'z-min', connection: 'merge-plane' },
     ],
-    refused: [
-      { label: 'front porch running on past the corner (the wraparound\'s corner)', structure: { at: [0, 0], kind: 'porch', width: 9.7, offset: 1.2, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8, roofType: 'hip', openSides: ['front', 'left', 'right'] } },
-    ],
     structures: [
       {
         at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 7.3, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8,
         roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: ['front', 'left', 'right'],
-      },
-      {
-        at: [0, 0], kind: 'porch', hostSide: 'maxX', width: 3.1, offset: 4.55, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8,
-        roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: ['front', 'left', 'right'],
+        // around the right-hand corner and back along the side to the projection
+        wrap: { end: 'right', length: 3.1 },
       },
     ],
     gaps: [
-      'A porch cannot run past the end of its wall, so a wraparound porch leaves its corner square empty.',
-      'A wraparound porch is two porches meeting at the corner; their hip roofs meet as two roofs, not one continuous roof turning the corner.',
       'Towers and turrets (round or polygonal, often with a conical roof) cannot be modeled: structures are rectangles.',
       'Gable-end detailing (fish-scale shingles, spindlework, bargeboards) is facade work.',
     ],

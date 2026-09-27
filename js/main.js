@@ -885,7 +885,8 @@ function updateHoveredVolume(event) {
   raycaster.setFromCamera(pointer, camera);
   // the nearest of the volumes and the roof structures under the pointer
   const hit = raycaster.intersectObjects([...pickTargets, ...structureMeshes], false)[0];
-  const structureId = hit?.object.userData.structureId ?? null;
+  // a wraparound's side segment picks its porch
+  const structureId = hit?.object.userData.recordId ?? hit?.object.userData.structureId ?? null;
   const volumeId = structureId ? null : hit?.object.userData.volumeId ?? null;
   if (volumeId === hoveredVolumeId && structureId === hoveredStructureId) {
     return;
@@ -908,7 +909,7 @@ function renderStructureCue(structureId, color, parent) {
   const box = new THREE.Box3();
   let found = false;
   structureMeshes.forEach((mesh) => {
-    if (mesh.userData.structureId === structureId) {
+    if ((mesh.userData.recordId ?? mesh.userData.structureId) === structureId) {
       box.expandByObject(mesh);
       found = true;
     }
@@ -1457,6 +1458,13 @@ function structureEditorHtml(structure) {
   if (!through && !standing) {
     parts.push(selectField('At the ridge', 'join', [['auto', 'Lower the roof only if it would pass the ridge'], ['snap-ridge', 'Always meet the ridge']], structure.join));
   }
+  if (standing && Number.isFinite(structure.setback) && structure.setback < 0) {
+    // a porch past its wall can turn the corner at either end
+    parts.push(selectField('Wraps around the corner', 'wrapEnd', [['', 'No'], ['left', 'At the left end'], ['right', 'At the right end']], structure.wrap?.end ?? ''));
+    if (structure.wrap) {
+      parts.push(numberField('Length along the side wall', 'wrapLength', structure.wrap.length));
+    }
+  }
   if (Number.isFinite(structure.setback) && structure.setback < 0) {
     parts.push(selectField('Held up by', 'support', STRUCTURE_SUPPORTS.map((key) => [key, key === 'auto' ? 'Automatic' : `${key[0].toUpperCase()}${key.slice(1)}`]), structure.support));
   }
@@ -1487,6 +1495,7 @@ structureAddBtn.addEventListener('click', () => {
     hostVolumeId: hostVolume.id,
     hostSide: structureSideSelect.value,
     storyHeight: modelConfig.storyHeight,
+    wallLength: ['minX', 'maxX'].includes(structureSideSelect.value) ? hostVolume.maxZ - hostVolume.minZ : hostVolume.maxX - hostVolume.minX,
     hostStructure: selectedStructureId ? structureRecord(selectedStructureId) : undefined,
   }, modelConfig.roofStructures);
   if (!record) {
@@ -1564,6 +1573,8 @@ structureEditor.addEventListener('change', (event) => {
       case 'pitch': edited.roofShape = input.value === '' ? null : { mode: 'slope', pitchRise: Math.max(0, Number(input.value) || 0) }; break;
       case 'join': edited.join = input.value; break;
       case 'support': edited.support = input.value; break;
+      case 'wrapEnd': edited.wrap = input.value ? { end: input.value, length: edited.wrap?.length ?? 3 } : null; break;
+      case 'wrapLength': edited.wrap = edited.wrap ? { ...edited.wrap, length: Math.max(0.5, length()) } : null; break;
       case 'wallMaterial': edited.materials.wall = input.value || undefined; break;
       case 'roofMaterial': edited.materials.roof = input.value || undefined; break;
       default: return;

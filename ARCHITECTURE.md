@@ -226,6 +226,10 @@ come out of the clip for every roof type). The rules that follow:
   piece per host face); its walls run down to the host wall top there, and
   knee walls close the attic around it.
 - A structure can stand on another; hosts are resolved first.
+- A projecting porch reaching the end of its wall can wrap around the corner:
+  it is built as two segments (past the corner, and back along the adjacent
+  wall) under one hip roof that turns the corner, with no walls, posts, or
+  railings where the segments meet.
 - On a straight-skeleton hip (one hip over several volumes) a volume's roof is
   not one convex solid, so its descriptor lists the roof as convex pieces, each
   under one face's plane, and its solid is the union of a prism per piece.

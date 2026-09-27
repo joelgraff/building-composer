@@ -33,6 +33,15 @@ export const STRUCTURE_UI_PRESETS = Object.freeze([
       roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 2 }, openSides: ['front', 'left', 'right'], support: 'posts',
     },
   },
+  {
+    key: 'wraparound-porch',
+    label: 'Wraparound porch',
+    fields: {
+      kind: 'porch', setback: -2.4, depth: 2.4, width: 6, baseHeight: 'ground', wallHeight: 2.8,
+      roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: ['front', 'left', 'right'],
+      wrap: { end: 'right', length: 4 },
+    },
+  },
   { key: 'porch-on-roof', label: 'Porch on this roof', fields: { kind: 'porch' } },
   {
     key: 'sleeping-porch',
@@ -50,7 +59,7 @@ export const STRUCTURE_UI_PRESETS = Object.freeze([
  * A new structure from a UI preset, with an id unused by `existing`.
  *
  * @param {string} presetKey - a STRUCTURE_UI_PRESETS key
- * @param {{ hostVolumeId?: string, hostStructure?: object, hostSide: string, storyHeight?: number }} placement
+ * @param {{ hostVolumeId?: string, hostStructure?: object, hostSide: string, storyHeight?: number, wallLength?: number }} placement
  *   The volume (or, for an `onStructure` preset, the structure record) to
  *   stand on, and the side it faces. An upper porch's floor goes one story
  *   below the host plate.
@@ -66,6 +75,10 @@ export function newRoofStructure(presetKey, placement, existing = []) {
   const fields = { ...preset.fields };
   if (presetKey === 'upper-porch') {
     fields.baseHeight = -(placement.storyHeight ?? 3.2);
+  }
+  if (presetKey === 'wraparound-porch' && Number.isFinite(placement.wallLength)) {
+    // along the whole wall, so its right end is at the corner
+    fields.width = placement.wallLength;
   }
   if (preset.onStructure) {
     const host = placement.hostStructure;

@@ -74,6 +74,7 @@
         "pitchRise": 2
       },
       "join": "auto",
+      "wrap": null,
       "eaves": {},
       "materials": {}
     }

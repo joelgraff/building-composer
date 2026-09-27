@@ -62,6 +62,7 @@ npm test
   - **Wall dormers** (zero setback) carry the main wall up through the eave, which stops and is capped on either side.
   - **Recessed porches**: a dormer, usually set up the roof above an intact strip of roof and eave, whose front wall is set back (`inset`), leaving an open porch with a floor, side walls, and the dormer roof over it.
   - **Cupolas, belvederes, and rooftop pavilions** (`mount: 'through'`): rise through the roof without joining it, centered on the ridge or on a flat roof, walls clearing the highest point of the roof under them; open ones stand on posts on the roof.
+  - **Wraparound porches**: a porch at the end of its wall turns the corner and runs back along the side, under one hip roof.
   - **Porches** standing on a base: projecting past the wall (at ground level or above), or standing on a lower wing. Open sides get posts and headers, and knee walls close the attic where they replace part of the roof.
   - **Supports** for projecting porches: a solid deck, posts, a ground-level porch, brackets, or an enclosed base (a two-story bay).
   - **Stacking**: a structure can stand on another, e.g. a sleeping porch on a ground porch's roof.

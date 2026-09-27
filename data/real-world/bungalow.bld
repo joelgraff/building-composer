@@ -63,6 +63,7 @@
         "pitchRise": 2
       },
       "join": "auto",
+      "wrap": null,
       "eaves": {},
       "materials": {}
     },
@@ -93,6 +94,7 @@
         "pitchRise": 6
       },
       "join": "auto",
+      "wrap": null,
       "eaves": {},
       "materials": {}
     }

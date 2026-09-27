@@ -8,7 +8,7 @@ Regenerate with `node data/real-world/generate.mjs`. It writes a `.bld` per hous
 |---|---|
 | `italianate.bld` | Italianate (courthouse-square type, like the Van Epps and Brookner houses): hip roof on deep eaves, belvedere, flat-roofed entry porch, box bay, one-story rear wing |
 | `upright-and-wing.bld` | Upright-and-wing: two-story gable-front upright, one-story side wing, porch in the ell |
-| `queen-anne.bld` | Gable-front Queen Anne (Reagan Boyhood Home type): cross-gabled projection merged into the main roof, front and side porches |
+| `queen-anne.bld` | Gable-front Queen Anne (Reagan Boyhood Home type): cross-gabled projection merged into the main roof, a wraparound porch |
 | `foursquare.bld` | American Foursquare: hip roof with hipped dormers, full-width porch |
 | `bungalow.bld` | Craftsman bungalow: side gable on deep eaves, shed dormer, front-gabled porch |
 | `dutch-colonial.bld` | Dutch Colonial Revival: gambrel, shed dormer under the break, gabled entry |
