@@ -8,6 +8,7 @@ import {
 import { createBuildingFromFootprint, computeVolumeEavePlanes, evalZoneHeight } from '../js/extrusion.js';
 import { normalizeRoofStructures, normalizeRoofStructure } from '../js/roof-structures.js';
 import { meshTriangles, totalArea, uncoveredEdges } from './helpers/mesh.js';
+import { MATERIAL_PALETTE } from '../js/materials.js';
 
 const RECT = [[-10, -5], [10, -5], [10, 5], [-10, 5]];
 const read = (name) => normalizeFootprint(JSON.parse(readFileSync(`./data/${name}`, 'utf8')));
@@ -293,6 +294,23 @@ describe('widow\'s walk surfaces', () => {
     assert.deepEqual(build(RECT, { roofType: 'hip' }).roofWalks, []);
     assert.deepEqual(build(RECT, { roofType: 'hip', roofHeight: 2.5, roofWalkHeight: 9 }).roofWalks, []);
     assert.deepEqual(build(RECT, { roofType: 'gable', roofWalkHeight: 1.5 }).roofWalks, []);
+  });
+
+  it('a building whose volumes differ in story count has its walks, and its wall material', () => {
+    const L = [[0, 0], [12, 0], [12, 8], [6, 8], [6, 14], [0, 14]];
+    const volumes = computeFacadeLayout(L, {}).volumes;
+    const result = build(L, {
+      roofType: 'hip', roofWalkHeight: 1, wallMaterial: 'brick', volumes, volumeStoryOverrides: { [volumes[1].id]: 1 },
+    });
+    assert.ok(result.roofWalks.length >= 1, 'walks on the per-volume hips');
+    const colors = new Set();
+    result.building.traverse((child) => {
+      if (child.isMesh && child.material === child.material && !child.userData?.roofType && !child.userData?.structureId && child.material.color) {
+        colors.add(child.material.color.getHex());
+      }
+    });
+    assert.ok(colors.has(MATERIAL_PALETTE.brick.color), 'brick walls');
+    assert.ok(!colors.has(MATERIAL_PALETTE.wood.color), 'no wood walls');
   });
 
   it('a widow\'s walk is no longer a roof structure; older files load as the hip\'s flat top', () => {

@@ -1,0 +1,102 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A 1910s-30s Dutch Colonial: a side-gabled gambrel whose steep lower slopes hold the second floor, a long shed dormer across the front, and a gabled entry hood.",
+  "footprint": [
+    [
+      -4.55,
+      -3.95
+    ],
+    [
+      4.55,
+      -3.95
+    ],
+    [
+      4.55,
+      3.95
+    ],
+    [
+      -4.55,
+      3.95
+    ]
+  ],
+  "storyCount": 1,
+  "storyHeight": 2.9,
+  "roofType": "gambrel",
+  "roofDirection": "z-min",
+  "roofPitchRise": 8,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofBreakHeight": 2.6,
+  "roofLowerPitchRise": 24,
+  "roofUpperPitchRise": 6,
+  "roofHeight": 2.6333333333333333,
+  "volumeStoryOverrides": {},
+  "volumeRidgeDirections": {},
+  "volumeRoofTypes": {},
+  "volumeRoofConnections": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 7,
+      "setback": 0.4,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.4,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 1
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 2.2,
+      "setback": -1.2,
+      "mount": "join",
+      "depth": 1.2,
+      "wallHeight": 2.5,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 8
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

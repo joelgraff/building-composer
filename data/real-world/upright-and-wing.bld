@@ -1,0 +1,109 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front \"upright\" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing. Faces +X (see the gaps).",
+  "footprint": [
+    [
+      -4.047295968534907,
+      -6.834267453294003
+    ],
+    [
+      2.9527040314650934,
+      -6.834267453294003
+    ],
+    [
+      2.9527040314650934,
+      0.4657325467059979
+    ],
+    [
+      5.152704031465093,
+      0.4657325467059979
+    ],
+    [
+      5.152704031465093,
+      5.965732546705998
+    ],
+    [
+      -4.047295968534907,
+      5.965732546705998
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 2.9,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 10,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofHeight": 2.916666666666667,
+  "volumeStoryOverrides": {
+    "volume-0": 1
+  },
+  "volumeRidgeDirections": {
+    "volume-1": "z-min",
+    "volume-0": "x-min"
+  },
+  "volumeRoofTypes": {},
+  "volumeRoofConnections": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxX",
+      "offset": 0,
+      "width": 7.3,
+      "setback": -2.2,
+      "mount": "join",
+      "depth": 2.2,
+      "wallHeight": 2.6,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 3
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxX",
+      "offset": -1.5,
+      "width": 1.4,
+      "setback": 0.4,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.1,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

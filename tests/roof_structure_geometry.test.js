@@ -514,6 +514,7 @@ describe('supports', () => {
     const deck = partOf(ground, 'foundation');
     const [xs, ys, zs] = boundsOf(deck);
     assert.deepEqual([xs, ys, zs].map(([lo, hi]) => +(hi - lo).toFixed(6)), [6, FOUNDATION, 2.4]);
+    assert.equal(deck.filter((tri) => tri.every((v) => Math.abs(v[1] - resolved.sillY) < 1e-6)).length, 0, 'no top under the floor (it would z-fight)');
     assertWatertight(ground, 'deck');
   });
 

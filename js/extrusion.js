@@ -65,7 +65,8 @@ export function createBuildingFromFootprint(footprint, config = {}) {
     && volumes.some((volume) => overrides[volume.id] !== undefined && overrides[volume.id] !== storyCount);
 
   if (hasVolumeOverrides) {
-    return withRoofStructures(createMultiVolumeBuilding(volumes, overrides, {
+    return withStructuresAndWalks(createMultiVolumeBuilding(volumes, overrides, {
+      wallMaterial: config.wallMaterial,
       storyCount, storyHeight, foundationDepth, roofEaveDepth, roofType, roofHeight, roofPitchRise, roofPitchRun, roofHeightMode: config.roofHeightMode, volumeRidgeDirections: config.volumeRidgeDirections, volumeRoofTypes: config.volumeRoofTypes, volumeRoofConnections: config.volumeRoofConnections, volumeRoofShapes: config.volumeRoofShapes,
       ...pickEaveConfig({ ...config, roofEaveDepth }),
     }), config);
@@ -159,13 +160,19 @@ export function createBuildingFromFootprint(footprint, config = {}) {
     facadePanelsRendered: Boolean(config.facadeLayout && getRectangularBounds(footprint)),
   };
 
-  const walks = [
-    ...skeletonWalks.map((walk) => ({ ...walk, y: roof.position.y + walk.height })),
-    ...roofZones.filter((zone) => !zone.skeleton).flatMap(zoneWalk),
-  ];
-  const result = withRoofStructures({
+  return withStructuresAndWalks({
     building: group, foundationHeight, totalHeight, roofZones,
-  }, config);
+  }, config, skeletonWalks.map((walk) => ({ ...walk, y: roof.position.y + walk.height })));
+}
+
+/**
+ * A built building with its roof structures (withRoofStructures) and its
+ * widow's walks' facade surfaces (`roofWalks`): a continuous hip's
+ * (`skeletonWalks`, already at their elevation) and each volume's own.
+ */
+function withStructuresAndWalks(built, config, skeletonWalks = []) {
+  const walks = [...skeletonWalks, ...built.roofZones.filter((zone) => !zone.skeleton).flatMap(zoneWalk)];
+  const result = withRoofStructures(built, config);
   // railings stop at anything standing on the walk
   const standing = result.structureSolids ?? [];
   delete result.structureSolids;
@@ -474,9 +481,12 @@ function structureSupports(resolved, host) {
   const [a0, a1] = resolved.along;
   // the projecting part's rectangle, in plan
   const [i0, i1] = [Math.min(front, wall), Math.max(front, wall)];
+  // a base reaching the floor leaves its top off: the floor is there (two
+  // coplanar faces would z-fight)
   const box = (y0, y1) => (frame.along === 'x'
     ? boxTriangles([a0, y0, i0], [a1, y1, i1])
-    : boxTriangles([i0, y0, a0], [i1, y1, a1]));
+    : boxTriangles([i0, y0, a0], [i1, y1, a1])
+  ).filter((triangle) => !(y1 >= sillY - 1e-9 && triangle.every((point) => Math.abs(point[1] - y1) < 1e-9)));
   const frontPoint = (along) => (frame.along === 'x' ? [along, front] : [front, along]);
   const frontPosts = (y0) => spacedPositions(a0, a1, MAX_POST_SPAN).flatMap((along) => postBox(bounds, frontPoint(along), y0, sillY));
   switch (resolved.support) {

@@ -1,0 +1,125 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A 1940s story-and-a-half Cape Cod: a steep side-gabled roof with two gabled dormers and a small gabled entry.",
+  "footprint": [
+    [
+      -4.9,
+      -3.65
+    ],
+    [
+      4.9,
+      -3.65
+    ],
+    [
+      4.9,
+      3.65
+    ],
+    [
+      -4.9,
+      3.65
+    ]
+  ],
+  "storyCount": 1,
+  "storyHeight": 2.6,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 12,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.2,
+  "roofRakeDepth": 0.1,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofHeight": 3.65,
+  "volumeStoryOverrides": {},
+  "volumeRidgeDirections": {},
+  "volumeRoofTypes": {},
+  "volumeRoofConnections": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": -2.4,
+      "width": 1.5,
+      "setback": 1,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.3,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 12
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 2.4,
+      "width": 1.5,
+      "setback": 1,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.3,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 12
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-3",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 2,
+      "setback": -1.2,
+      "mount": "join",
+      "depth": 1.2,
+      "wallHeight": 2.3,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 12
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

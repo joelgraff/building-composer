@@ -1,0 +1,147 @@
+{
+  "italianate": {
+    "title": "Italianate (courthouse-square type)",
+    "note": "A two-story brick Italianate of the 1850s-60s, like the Van Epps and Brookner houses: a near-square block with tall 12 ft stories, a low hip roof on deep bracketed eaves, a belvedere, a flat-roofed entry porch, a side bay, and a one-story rear kitchen wing.",
+    "front": "maxZ",
+    "gaps": [
+      "The side bay is canted (octagonal) on the real houses; structures are rectangles, so it is a square box bay.",
+      "The rear wing's own lower story height (8-9 ft against the main block's 12 ft) cannot be set: story height is building-wide.",
+      "The entry porch's flat roof usually carries a balustrade: a railing on a roof edge, not yet a facade element.",
+      "Paired brackets, tall arched windows, and hood molds are facade modifiers (not built yet)."
+    ],
+    "issues": [],
+    "refused": [],
+    "zones": 2,
+    "volumes": 2
+  },
+  "upright-and-wing": {
+    "title": "Upright-and-wing (gable-front-and-wing)",
+    "note": "The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front \"upright\" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing. Faces +X (see the gaps).",
+    "front": "maxX",
+    "gaps": [
+      "Volumes come from splitting the footprint into bands along Z. Facing +Z, the upright's rear half and the wing became one volume (one roof), so the house is modeled facing +X, where the bands match the massing. Volumes should follow the massing (or be chosen) whatever the orientation.",
+      "The wing is a story and a half: a knee wall under a steep roof. Stories are whole, so it is one story with a tall roof."
+    ],
+    "issues": [],
+    "refused": [],
+    "zones": 2,
+    "volumes": 2
+  },
+  "queen-anne": {
+    "title": "Gable-front Queen Anne (Reagan Boyhood Home type)",
+    "note": "A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner. Faces +X (see the gaps).",
+    "front": "maxX",
+    "gaps": [
+      "As with the upright-and-wing, facing +Z the side projection and the middle of the main block became one volume and the main block split in three; facing +X the volumes match the massing.",
+      "A porch cannot run past the end of its wall, so a wraparound porch leaves its corner square empty.",
+      "A wraparound porch is two porches meeting at the corner; their hip roofs meet as two roofs, not one continuous roof turning the corner.",
+      "Towers and turrets (round or polygonal, often with a conical roof) cannot be modeled: structures are rectangles.",
+      "Gable-end detailing (fish-scale shingles, spindlework, bargeboards) is facade work."
+    ],
+    "issues": [],
+    "refused": [
+      {
+        "label": "front porch running on past the corner (the wraparound's corner)",
+        "errors": [
+          "The structure runs past the ends of volume-0's maxX wall."
+        ],
+        "warnings": []
+      }
+    ],
+    "zones": 2,
+    "volumes": 2
+  },
+  "foursquare": {
+    "title": "American Foursquare",
+    "note": "The standard Midwestern house of 1900-1930: a two-and-a-half-story square box, a hip roof with hipped dormers, and a full-width front porch on columns.",
+    "front": "maxZ",
+    "gaps": [
+      "Porch columns on brick piers with a solid half wall between are facade/railing work; posts are plain boxes."
+    ],
+    "issues": [],
+    "refused": [
+      {
+        "label": "hip dormer 2.4 m wide, 1.1 m walls, under a 6:12 roof",
+        "errors": [
+          "The structure crosses a hip, ridge, or valley of the host roof; it must stand on one roof face."
+        ],
+        "warnings": [
+          "The structure's roof was lowered to meet the host ridge."
+        ]
+      }
+    ],
+    "zones": 1,
+    "volumes": 1
+  },
+  "bungalow": {
+    "title": "Craftsman bungalow",
+    "note": "A story-and-a-half side-gabled bungalow of the 1910s-20s: a broad low roof on deep eaves, a wide shed dormer, and a front-gabled porch on tapered piers.",
+    "front": "maxZ",
+    "gaps": [
+      "Many bungalows have an integral porch: the main roof carries on over a porch recessed into the footprint. A recess at ground level would need a notch in the footprint with the roof running on over it; only dormers can be recessed.",
+      "Exposed rafter tails, knee braces, and tapered piers are facade work."
+    ],
+    "issues": [],
+    "refused": [],
+    "zones": 1,
+    "volumes": 1
+  },
+  "dutch-colonial": {
+    "title": "Dutch Colonial Revival",
+    "note": "A 1910s-30s Dutch Colonial: a side-gabled gambrel whose steep lower slopes hold the second floor, a long shed dormer across the front, and a gabled entry hood.",
+    "front": "maxZ",
+    "gaps": [
+      "The characteristic full-width shed dormer runs from the lower slope up past the break to meet the upper slope. A dormer must stay on one roof face, so the built one is a low band under the break.",
+      "An entry hood is a roof on brackets over the door with no floor or posts; the model has only porches, so it stands on a small stoop with posts."
+    ],
+    "issues": [],
+    "refused": [
+      {
+        "label": "full shed dormer rising from the lower slope to meet the upper slope near the ridge",
+        "errors": [
+          "The structure crosses a hip, ridge, or valley of the host roof; it must stand on one roof face."
+        ],
+        "warnings": []
+      }
+    ],
+    "zones": 1,
+    "volumes": 1
+  },
+  "farmhouse": {
+    "title": "I-house farmhouse with rear ell",
+    "note": "A two-story, one-room-deep I-house (common across northern Illinois from the 1850s) with a two-story rear ell, a full-width front porch, and a side porch along the ell.",
+    "front": "maxZ",
+    "gaps": [],
+    "issues": [],
+    "refused": [],
+    "zones": 2,
+    "volumes": 2
+  },
+  "cape-cod": {
+    "title": "Cape Cod (1940s)",
+    "note": "A 1940s story-and-a-half Cape Cod: a steep side-gabled roof with two gabled dormers and a small gabled entry.",
+    "front": "maxZ",
+    "gaps": [
+      "The entry is often an enclosed vestibule or just a hood; here it is an open stoop.",
+      "Dormer spacing is set by window bays; placing dormers by the facade layout is not linked yet."
+    ],
+    "issues": [],
+    "refused": [],
+    "zones": 1,
+    "volumes": 1
+  },
+  "ranch": {
+    "title": "L-shaped ranch (1950s)",
+    "note": "A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and a recessed entry porch in the ell.",
+    "front": "maxZ",
+    "gaps": [
+      "On a real ranch the main roof usually carries on over the entry porch; here the porch has its own shed roof tucked under the eave.",
+      "The continuous (straight-skeleton) hip has no eave overhang or fascia, so the low, deep eaves that define a ranch are missing.",
+      "A garage has a lower floor (at grade) than the house; floor levels are building-wide."
+    ],
+    "issues": [],
+    "refused": [],
+    "zones": 2,
+    "volumes": 2
+  }
+}
