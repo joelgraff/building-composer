@@ -226,7 +226,6 @@ const houses = {
       },
     ],
     gaps: [
-      'The continuous (straight-skeleton) hip has no eave overhang or fascia, so the low, deep eaves that define a ranch are missing.',
     ],
   },
 };

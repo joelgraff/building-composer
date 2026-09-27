@@ -793,7 +793,8 @@ function interruptsHostEave(resolved, host) {
  */
 function interruptHostEave(resolved, host, roofMeshes) {
   const side = resolved.hostSide;
-  if (!hostEaveProfile(host, side)) {
+  // nothing to break where no eave runs (an inside stretch of a continuous roof)
+  if (!hostEaveProfile(host, side) || !hostEaveCovers(host, side, (resolved.along[0] + resolved.along[1]) / 2)) {
     return [];
   }
   const { frame } = resolved;
@@ -1422,15 +1423,24 @@ function createRoofGeometry(footprint, config) {
 }
 
 function createStraightSkeletonHipGeometry(footprint, config) {
-  const ring = footprint.map(([x, z]) => [x, z]);
+  // The skeleton of the footprint pushed out to the eave line: its faces are
+  // the roof's, carried on past the walls at the pitch, so the roof meets the
+  // walls at the plate (height 0) and ends at the eave below it.
+  const eaves = resolveVolumeEaves(null, { ...config, roofEaveDepth: config.roofEaveDepth ?? config.roofOverhang });
+  const overhang = eaves.eaveDepth > 1e-9 ? eaves.eaveDepth : 0;
+  const outline = overhang ? offsetRectilinear(footprint, overhang) : footprint.map(([x, z]) => [x, z]);
+  const ring = outline.map(([x, z]) => [x, z]);
   ring.push([...ring[0]]);
-  const skeleton = straightSkeletonBuilder.buildFromPolygon([ring]);
-  if (!skeleton) {
+  const raw = straightSkeletonBuilder.buildFromPolygon([ring]);
+  if (!raw) {
     return null;
   }
+  const skeleton = snapSkeleton(raw, outline);
 
   const pitchRatio = (config.roofPitchRise ?? 6) / (config.roofPitchRun ?? 12);
-  const peak = Math.max(0, ...skeleton.vertices.map(([, , time]) => time * pitchRatio));
+  const eaveY = -pitchRatio * overhang;
+  const heightOf = (time) => time * pitchRatio + eaveY;
+  const peak = Math.max(0, ...skeleton.vertices.map(([, , time]) => heightOf(time)));
   // a widow's walk cuts the whole roof flat at one height
   const walkHeight = skeletonWalkHeight(config);
   const cut = walkHeight !== undefined && walkHeight < peak - 1e-9 ? walkHeight : undefined;
@@ -1451,9 +1461,9 @@ function createStraightSkeletonHipGeometry(footprint, config) {
   skeleton.polygons.forEach((indices) => {
     const polygon = indices.map((index) => {
       const [x, z, time] = skeleton.vertices[index];
-      return [x, time * pitchRatio, z];
+      return [x, heightOf(time), z];
     });
-    const base = polygon.filter((point) => point[1] < 1e-9);
+    const base = polygon.filter((point) => point[1] < eaveY + 1e-9);
     let below = polygon;
     if (cut !== undefined) {
       below = clipPolygon(polygon, (v) => cut - v[1]);
@@ -1476,6 +1486,9 @@ function createStraightSkeletonHipGeometry(footprint, config) {
     addPolygon(below);
   });
   walkPieces.forEach(addPolygon);
+  if (overhang) {
+    skeletonEaveTrim(footprint, outline, eaveY, eaves).forEach((triangle) => triangle.forEach((vertex) => positions.push(...vertex)));
+  }
 
   if (positions.length === 0) {
     return null;
@@ -1486,16 +1499,115 @@ function createStraightSkeletonHipGeometry(footprint, config) {
   const walk = cut === undefined ? null : {
     height: cut, pieces: walkPieces.map((piece) => piece.map(([x, , z]) => [x, z])), edges: walkEdges,
   };
-  return { geometry, faces, pitchRatio, walk, walkFaces: walkPieces };
+  return {
+    geometry, faces, pitchRatio, walk, walkFaces: walkPieces, overhang, eaves,
+  };
 }
 
-/** The plane of a skeleton face rising from its (axis-aligned) footprint edge, as an eave plane. */
-function skeletonFacePlane(edge, polygon, pitchRatio) {
+/**
+ * The skeleton library works in single precision, so its nodes are off by
+ * about 1e-6 (20.2 comes back as 20.2000008). On a rectilinear outline every
+ * node lies at an outline coordinate plus or minus half the gap between two
+ * outline coordinates, so each is snapped to the nearest such value, and its
+ * time (height over the pitch) recomputed as its distance from the base edge
+ * of a face it belongs to. Faces from different skeleton polygons then meet
+ * exactly, as the plain footprint's did.
+ */
+function snapSkeleton(skeleton, outline) {
+  const xs = [...new Set(outline.map(([x]) => x))];
+  const zs = [...new Set(outline.map(([, z]) => z))];
+  const all = [...xs, ...zs];
+  const halves = [...new Set(all.flatMap((a) => all.map((b) => Math.abs(a - b) / 2)))];
+  const candidates = (values) => values.flatMap((value) => halves.flatMap((half) => [value - half, value + half]));
+  const [cx, cz] = [candidates(xs), candidates(zs)];
+  const snap = (value, options) => {
+    let best = value;
+    let distance = 1e-4;
+    options.forEach((option) => {
+      if (Math.abs(option - value) < distance) {
+        [best, distance] = [option, Math.abs(option - value)];
+      }
+    });
+    return best;
+  };
+  const vertices = skeleton.vertices.map(([x, z, time]) => [snap(x, cx), snap(z, cz), time]);
+  // a node's time: its distance from the base line of any face through it
+  const baseLines = skeleton.polygons.map((indices) => {
+    const base = indices.filter((index) => skeleton.vertices[index][2] < 1e-5).map((index) => vertices[index]);
+    if (base.length !== 2) {
+      return null;
+    }
+    return Math.abs(base[0][1] - base[1][1]) < 1e-9 ? { axis: 1, value: base[0][1] } : { axis: 0, value: base[0][0] };
+  });
+  skeleton.polygons.forEach((indices, k) => {
+    const line = baseLines[k];
+    if (!line) {
+      return;
+    }
+    indices.forEach((index) => {
+      if (skeleton.vertices[index][2] >= 1e-5) {
+        vertices[index][2] = Math.abs(vertices[index][line.axis] - line.value);
+      } else {
+        vertices[index][2] = 0;
+      }
+    });
+  });
+  return { ...skeleton, vertices };
+}
+
+/** A rectilinear footprint pushed out by `distance` on every side. */
+function offsetRectilinear(footprint, distance) {
+  const area = footprint.reduce((sum, [x, z], i) => {
+    const [nx, nz] = footprint[(i + 1) % footprint.length];
+    return sum + x * nz - nx * z;
+  }, 0);
+  const turn = Math.sign(area) || 1;
+  // outward normal of the edge from a to b
+  const normal = ([ax, az], [bx, bz]) => {
+    const length = Math.hypot(bx - ax, bz - az) || 1;
+    return [turn * (bz - az) / length, -turn * (bx - ax) / length];
+  };
+  return footprint.map((point, i) => {
+    const previous = footprint[(i + footprint.length - 1) % footprint.length];
+    const next = footprint[(i + 1) % footprint.length];
+    const [n1, n2] = [normal(previous, point), normal(point, next)];
+    // at a right angle each normal moves one coordinate
+    return [point[0] + distance * (n1[0] + n2[0]), point[1] + distance * (n1[1] + n2[1])];
+  });
+}
+
+/**
+ * The eave trim of a continuous hip: a fascia down the eave line all round,
+ * and a soffit from it back to the walls, flat at the fascia's foot or
+ * sloped up to the walls (`eaves.eaveSoffit`).
+ */
+function skeletonEaveTrim(footprint, outline, eaveY, eaves) {
+  const fascia = eaves.fasciaDepth ?? 0;
+  const triangles = [];
+  outline.forEach((point, i) => {
+    const next = outline[(i + 1) % outline.length];
+    const [a, b] = [[point[0], eaveY, point[1]], [next[0], eaveY, next[1]]];
+    const [c, d] = [[next[0], eaveY - fascia, next[1]], [point[0], eaveY - fascia, point[1]]];
+    triangles.push([a, b, c], [a, c, d]);
+  });
+  const innerY = eaves.eaveSoffit === 'sloped' ? -fascia : eaveY - fascia;
+  const outer = outline.map(([x, z]) => [x, eaveY - fascia, z]);
+  const inner = footprint.map(([x, z]) => [x, innerY, z]);
+  const vertices = [...outer, ...inner];
+  THREE.ShapeUtils.triangulateShape(outline.map(([x, z]) => new THREE.Vector2(x, z)), [footprint.map(([x, z]) => new THREE.Vector2(x, z))])
+    .forEach((triangle) => triangles.push(triangle.map((index) => vertices[index])));
+  return triangles;
+}
+
+/** The plane of a skeleton face rising from its (axis-aligned) base edge, at height `baseHeight` there, as an eave plane. */
+function skeletonFacePlane(edge, polygon, pitchRatio, baseHeight = 0) {
   const alongX = Math.abs(edge[0][1] - edge[1][1]) < 1e-9;
   const [axis, k] = alongX ? ['z', 2] : ['x', 0];
   const constant = alongX ? edge[0][1] : edge[0][0];
   const inward = polygon.reduce((sum, v) => sum + v[k], 0) / polygon.length - constant;
-  return { axis, sign: Math.sign(inward) || 1, constant, slope: pitchRatio, side: `${inward > 0 ? 'min' : 'max'}${axis.toUpperCase()}` };
+  return {
+    axis, sign: Math.sign(inward) || 1, constant, slope: pitchRatio, offset: baseHeight, side: `${inward > 0 ? 'min' : 'max'}${axis.toUpperCase()}`,
+  };
 }
 
 /** A plan polygon clipped to a rectangle. */
@@ -1506,7 +1618,12 @@ function clipToBounds(polygon, bounds) {
 }
 
 /** A simple plan polygon as convex pieces: itself if convex, otherwise its triangles. */
-function convexPieces(polygon) {
+function convexPieces(input) {
+  // clipping can leave a point repeated (a zero-length edge, which has no side to bound a prism)
+  const polygon = input.filter((point, i) => {
+    const next = input[(i + 1) % input.length];
+    return Math.hypot(next[0] - point[0], next[1] - point[1]) > 1e-9;
+  });
   const area = (points) => points.reduce((sum, [x, z], i) => {
     const [nx, nz] = points[(i + 1) % points.length];
     return sum + x * nz - nx * z;
@@ -1552,19 +1669,38 @@ function skeletonWalkHeight(config) {
  * volume's sides on the footprint's outline (the faces a dormer can stand
  * on), and `faceRegions[side]` where each one is the roof, in plan.
  */
-function skeletonHipZones(volumes, { faces, pitchRatio, walk, walkFaces }) {
+function skeletonHipZones(volumes, {
+  faces, pitchRatio, walk, walkFaces, overhang = 0, eaves = {},
+}) {
   return (volumes ?? []).map((volume) => {
     const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
     const planes = [];
     const faceRegions = {};
+    // the eave runs along the stretches of each side that are outside walls
+    const overhangs = {};
+    const partial = {};
     ['minX', 'maxX', 'minZ', 'maxZ'].forEach((side) => {
       const k = side === 'minX' || side === 'maxX' ? 0 : 1;
       const [lo, hi] = k === 0 ? [bounds.minZ, bounds.maxZ] : [bounds.minX, bounds.maxX];
-      const onSide = faces.filter(({ edge }) => edge.every((point) => Math.abs(point[k] - bounds[side]) < 1e-6)
+      // an outside wall's face rises from the eave line, out past it
+      const eaveLine = bounds[side] + (side.startsWith('min') ? -overhang : overhang);
+      const onSide = faces.filter(({ edge }) => edge.every((point) => Math.abs(point[k] - eaveLine) < 1e-6)
         && Math.min(Math.max(edge[0][1 - k], edge[1][1 - k]), hi) - Math.max(Math.min(edge[0][1 - k], edge[1][1 - k]), lo) > 1e-6);
       if (onSide.length) {
         planes.push({ ...makeEavePlane(bounds, side, pitchRatio) });
         faceRegions[side] = onSide.map(({ polygon }) => polygon.map(([x, , z]) => [x, z]));
+        if (overhang) {
+          // the stretch of wall under each eave edge (which runs on to where eave lines cross, `overhang` further)
+          const spans = onSide.map(({ edge }) => [
+            Math.max(lo, Math.min(edge[0][1 - k], edge[1][1 - k]) - overhang), Math.min(hi, Math.max(edge[0][1 - k], edge[1][1 - k]) + overhang),
+          ]).sort((a, b) => a[0] - b[0]);
+          const covered = spans.reduce((reach, [a0, a1]) => (a0 <= reach + 1e-6 ? Math.max(reach, a1) : reach), lo);
+          if (covered >= hi - 1e-6) {
+            overhangs[side] = overhang;
+          } else {
+            partial[side] = spans.map(([a0, a1]) => ({ a0, a1, cap0: false, cap1: false }));
+          }
+        }
       }
     });
     if (walk) {
@@ -1572,7 +1708,7 @@ function skeletonHipZones(volumes, { faces, pitchRatio, walk, walkFaces }) {
     }
     // the exact roof over this volume: each skeleton face (and the walk) within it, in convex pieces
     const roofPieces = [
-      ...faces.map(({ edge, polygon }) => ({ polygon, plane: skeletonFacePlane(edge, polygon, pitchRatio) })),
+      ...faces.map(({ edge, polygon }) => ({ polygon, plane: skeletonFacePlane(edge, polygon, pitchRatio, -pitchRatio * overhang) })),
       ...walkFaces.map((polygon) => ({ polygon, plane: { constantHeight: walk.height, tier: 'walk' } })),
     ].flatMap(({ polygon, plane }) => convexPieces(clipToBounds(polygon.map(([x, , z]) => [x, z]), bounds))
       .map((piece) => ({ polygon: piece, plane })));
@@ -1594,9 +1730,10 @@ function skeletonHipZones(volumes, { faces, pitchRatio, walk, walkFaces }) {
       skeletonFaces: allFaces,
       roofPieces,
       slabThickness: 0,
-      // the skeleton roof is built without eave trim
-      overhang: {},
-      eaves: {},
+      // its eaves run all round the outside walls: a side partly inside the
+      // footprint has them along its outside stretches only
+      overhang: overhangs,
+      eaves: { ...eaves, partial },
       exact: false,
       skeleton: true,
       baseY: 0,

@@ -173,4 +173,39 @@ describe('roof structures on a continuous (straight-skeleton) hip', () => {
     const [cupola] = build([{ id: 'c', kind: 'cupola', hostVolumeId: 'volume-1', hostSide: 'maxZ', setback: 3.2, depth: 1.6, width: 1.6 }], { roofWalkHeight: 1 }).roofStructures;
     assert.ok(Math.abs(cupola.resolved.sillY - (PLATE + 1)) < 1e-6);
   });
+
+  it('has eaves all round: the roof carried out past the walls, a fascia, and a soffit back to the walls', () => {
+    const eave = 0.5;
+    const result = build([], { roofEaveDepth: eave });
+    const tris = [];
+    result.building.traverse((child) => {
+      if (child.isMesh && child.userData?.roofType) {
+        meshTriangles(child).forEach((tri) => tris.push(tri.map(([x, y, z]) => [x, y + child.position.y, z])));
+      }
+    });
+    const xs = tris.flat().map(([x]) => x);
+    const zs = tris.flat().map(([, , z]) => z);
+    assert.ok(Math.abs(Math.min(...xs) + eave) < 1e-6 && Math.abs(Math.max(...xs) - (20 + eave)) < 1e-6, 'out past the walls in x');
+    assert.ok(Math.abs(Math.min(...zs) + eave) < 1e-6 && Math.abs(Math.max(...zs) - (20 + eave)) < 1e-6, 'and in z');
+    // the eave line is below the plate by the pitch over the overhang, the fascia below that
+    const ys = tris.flat().map(([, y]) => y);
+    const eaveY = PLATE - 0.5 * eave;
+    assert.ok(Math.abs(Math.min(...ys) - (eaveY - 0.1524)) < 1e-6, `down to the fascia's foot: ${Math.min(...ys)}`);
+    // the zones know the eave, along the outside stretches of each side
+    const [main, arm] = result.roofZones;
+    assert.equal(main.overhang.minZ, eave);
+    assert.deepEqual(main.eaves.partial.maxZ.map(({ a0, a1 }) => [a0, a1]), [[8, 20]], 'only past the arm');
+    assert.equal(arm.overhang.maxZ, eave);
+    // one closed shell
+    const all = [];
+    result.building.traverse((child) => {
+      if (child.isMesh) meshTriangles(child).forEach((tri) => all.push(tri.map(([x, y, z]) => [x, y + child.position.y, z])));
+    });
+    const lift = (edge) => result.roofZones.some((zone) => edge.every((p) => Math.abs(p[1] - zone.baseY) < 1e-3));
+    assert.deepEqual(uncoveredEdges(all).filter((edge) => !lift(edge)), []);
+    // and the walk and structures still work on it
+    const walked = build([], { roofEaveDepth: eave, roofWalkHeight: 1 });
+    assert.equal(walked.roofWalks.length, 1);
+  });
 });
+

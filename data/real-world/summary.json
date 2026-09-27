@@ -118,9 +118,7 @@
     "title": "L-shaped ranch (1950s)",
     "note": "A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and an entry recessed under the roof in the ell.",
     "front": "maxZ",
-    "gaps": [
-      "The continuous (straight-skeleton) hip has no eave overhang or fascia, so the low, deep eaves that define a ranch are missing."
-    ],
+    "gaps": [],
     "issues": [],
     "refused": [],
     "zones": 2,

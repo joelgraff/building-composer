@@ -131,11 +131,15 @@ export function planPrism(polygon) {
     return sum + x * nz - nx * z;
   }, 0);
   const turn = Math.sign(signedArea) || 1;
-  return polygon.map(([x, z], i) => {
+  // (a repeated point is a zero-length edge, which bounds nothing)
+  return polygon.flatMap(([x, z], i) => {
     const [nx, nz] = polygon[(i + 1) % polygon.length];
+    if (Math.hypot(nx - x, nz - z) < 1e-12) {
+      return [];
+    }
     // outward normal of edge (x, z) -> (nx, nz)
     const normal = [turn * (nz - z), 0, -turn * (nx - x)];
-    return normalizedHalfSpace(normal, normal[0] * x + normal[2] * z);
+    return [normalizedHalfSpace(normal, normal[0] * x + normal[2] * z)];
   });
 }
 
