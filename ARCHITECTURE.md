@@ -263,6 +263,20 @@ This hierarchy (Volume → Roof zones → Wall runs → Facade panels → Storie
 supports addressing such as *"the second story on the east wall run of the
 main volume."*
 
+**Roof structure surfaces.** A roof structure (dormer, porch, cupola) adds a
+level: Volume → Roof structure → Wall runs → Stories. Its wall runs
+(`wall-run-<structure>-<wall>`: `front`, `left`, `right`, `back`, `inner` for a
+recess's set-back wall, `base-<wall>` for an enclosed base) carry their visible
+shape, as clipped against the roof, as convex pieces in wall-local
+coordinates: *u* across the wall from the left as seen from outside, *v* up
+from the structure's floor. Windows and trim are placed within those pieces.
+Each structure has a story (`story-<structure>-1`, plus `-base` under an
+enclosed base) and railing runs (`rail-run-<structure>-<wall>`) along its open
+sides at floor level, where they stand clear of the building, with a railing
+height; a widow's walk is railing runs around its deck. These come from the
+build and sit beside the footprint's own wall runs in the layout
+(`structureWallRuns`, `structureStories`, `railRuns`).
+
 **MVP addressing** is `story + wallRun`, with optional `facadePanel` detail.
 Volumes and roof zones are explicit metadata rather than inferred from
 perimeter order.
@@ -325,9 +339,12 @@ surface. The facade subdivision is what makes per-region material assignment
 possible without breaking the envelope geometry.
 
 **Material precedence.** A facade-panel assignment overrides a wall-run,
-volume, or story assignment when both target the same surface region. If no
-panel assignment exists, the most specific applicable structural assignment is
-used, followed by the story assignment and facade-wide default.
+roof structure, volume, or story assignment when both target the same surface
+region. If no panel assignment exists, the most specific applicable structural
+assignment is used (wall run, then roof structure, then volume), followed by
+the story assignment and facade-wide default. A roof structure's own wall and
+roof materials (`materials.wall`, `materials.roof`) are applied today; the
+finer levels come with facade modifiers.
 
 **PBR forward note.** The output targets GLB/GLTF, which uses PBR (albedo,
 normal, roughness, metallic). The v1 material model should map to these

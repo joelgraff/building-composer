@@ -424,7 +424,7 @@ The exposed part of a partly shared eave side gets its own eave strip (top, fasc
 
 ## Roof-borne structures (dormers, raised porches) — plan
 
-Status: Phases 0–4 and 4a–4f complete; 5–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+Status: Phases 0–5 (with 4a–4f) complete; 6–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
 
 ### Core idea
 
@@ -729,11 +729,32 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
    - a cupola on a gable roof, a belvedere on a flat or hip roof;
    - supports: posts, brackets, an enclosed base.
 
-5. **Facade surfaces.**
-   - Each structure adds wall runs to `computeFacadeLayout`: `wall-run-<structureId>-front|left|right|back`, with `structureId`, `hostVolumeId`, and an **outline polygon** in wall-local (u, v) coordinates. The outline carries the sloped bottom and the gable top that clipping produced.
-   - Each structure gets one story band (or its own count for a porch), with ids like `story-<structureId>-1`.
-   - Addressing extends to *Volume → Roof structure → Wall run → Facade panel → Story*, so windows and trim (Tasks 6–7) can target dormer and porch faces with the same API as footprint walls, placed inside the outline.
-   - Material precedence gains a structure level.
+5. **Facade surfaces.** Complete.
+   - Structure walls are clipped to what shows, so their facade surfaces come from the build. `structureFacade` in `js/roof-structures.js` runs for each built structure; `createBuildingFromFootprint` returns the results as `structureFacades`. `withStructureFacades` in `js/facade.js` adds them to the layout beside the footprint's own runs: `structureWallRuns`, `structureStories`, and `railRuns`. The footprint's `wallRuns` are untouched, since they define the footprint a `.bld` saves. `main.js` merges them into the active layout, and the facade summary counts them.
+   - Wall runs: `wall-run-<id>-<wall>` for each wall with a visible surface:
+     - `front`, `left`, `right`, `back` (left and right as seen from outside);
+     - `inner`, a recess's set-back wall;
+     - `base-<wall>`, an enclosed base's walls.
+
+     Each has `structureId`, `hostVolumeId`, `side`, `start`/`end` (plan, left to right as seen from outside), `normal`, `length`, `storyId`, and `baseY`. Its visible shape is `pieces`: the clipped triangles in wall-local (u, v), u across from the left and v up from the floor, with their `extent` and `area`. Windows go within the pieces.
+
+     A buried back wall has no run. Knee walls are interior and get none. The builder now keeps each wall's pieces by name, and the recess and enclosed-base helpers return theirs by name too.
+   - Stories: `story-<id>-1` from the floor to the plate (deck plus railing for a roofless platform), and `story-<id>-base` under an enclosed base.
+   - Railing runs: `rail-run-<id>-<wall>` along each open side at floor level (`start`/`end` in 3D, `height`). They are clipped to the stretches clear of the host's body and other volumes (`segmentOutside`), so a porch's side railing stops at the house wall. The height is the structure's wall height for a roofless platform (a widow's walk: four runs around its deck), otherwise `RAILING_HEIGHT` (1 m) or less.
+   - Materials: a structure's `materials.wall` and `materials.roof` (palette keys) now apply over the building's. Precedence documented in ARCHITECTURE.md: facade panel, wall run, roof structure, volume, story, building.
+   - Tests (`tests/structure_facades.test.js`), with hand-computed values:
+     - a dormer's front and cheek areas and extents;
+     - left-to-right orientation;
+     - a wall dormer's front reaching the wall top;
+     - a recess's inner run and front railing;
+     - an open ground porch's railings stopping at the wall, including one whose rectangle runs into the house;
+     - an enclosed base's runs and story;
+     - a widow's walk's four railings;
+     - a cupola's walls following the ridge;
+     - the layout keeping footprint runs;
+     - structure materials.
+   - Mutation checks: flipping u, or unclipping railings, fails the tests.
+   - Windows, doors, trim, and railing geometry themselves are Tasks 6–7; these are the surfaces they target.
 6. **UI and picking.**
    - Selected-element picker entries for structures.
    - An "Add roof structure" action on a selected volume, with presets: gable dormer, shed dormer, hip dormer, flat dormer, wall dormer, sleeping porch.

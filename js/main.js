@@ -2,7 +2,9 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import { validateFootprint, normalizeFootprint, computeFootprintMetrics } from './footprint.js';
 import { createBuildingFromFootprint, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder } from './extrusion.js';
-import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection } from './facade.js';
+import {
+  computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades,
+} from './facade.js';
 import { exportGlb } from './export.js';
 
 const statusValue = document.getElementById('status-value');
@@ -306,7 +308,12 @@ function updateFacadeSummary(layout) {
   const panelList = layout.facadePanels
     .map((panel) => `Panel ${panel.index + 1}: ${formatLength(panel.length)}`)
     .join('<br>');
-  facadeSummaryBox.innerHTML = `Story height: ${formatLength(layout.storyHeight)}<br>Stories: ${layout.stories.length}<br>Facade panels: ${layout.facadePanels.length}<br>${panelList}`;
+  const structureRuns = layout.structureWallRuns?.length ?? 0;
+  const railRuns = layout.railRuns?.length ?? 0;
+  const structureSummary = structureRuns || railRuns
+    ? `<br>Roof structure wall runs: ${structureRuns}<br>Railing runs: ${railRuns}`
+    : '';
+  facadeSummaryBox.innerHTML = `Story height: ${formatLength(layout.storyHeight)}<br>Stories: ${layout.stories.length}<br>Facade panels: ${layout.facadePanels.length}${structureSummary}<br>${panelList}`;
   renderMaterialControls(layout);
   renderElementSelector(layout);
   renderVolumeControls(layout);
@@ -624,7 +631,7 @@ async function loadFootprint(footprintData, preserveView = true) {
   updateFacadeSummary(layout);
   setStatus(`Valid footprint loaded (${windingPreference})`, 'default');
 
-  const { building, foundationHeight, roofStructures } = createBuildingFromFootprint(normalized, {
+  const { building, foundationHeight, roofStructures, structureFacades } = createBuildingFromFootprint(normalized, {
     storyCount: modelConfig.storyCount,
     storyHeight: modelConfig.storyHeight,
     panelsPerRun: modelConfig.panelsPerRun,
@@ -668,7 +675,11 @@ async function loadFootprint(footprintData, preserveView = true) {
   }
 
   group.add(building);
-  activeLayout = layout;
+  // the roof structures' walls and railings join the footprint's facade surfaces
+  activeLayout = withStructureFacades(layout, structureFacades);
+  if (activeLayout.structureWallRuns.length || activeLayout.railRuns.length) {
+    updateFacadeSummary(activeLayout);
+  }
   activeFoundationHeight = foundationHeight;
   addVolumePickTargets(layout, foundationHeight);
   renderSelectedVolumeHighlight(layout, foundationHeight);

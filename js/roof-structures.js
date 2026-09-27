@@ -1124,3 +1124,153 @@ export function hostEaveCovers(host, side, along) {
   }
   return (host.eaves?.partial?.[side] ?? []).some(({ a0, a1 }) => along > a0 + GEOMETRY_EPSILON && along < a1 - GEOMETRY_EPSILON);
 }
+
+// ---------------------------------------------------------------------------
+// Facade surfaces
+// ---------------------------------------------------------------------------
+
+/** A railing's default height where the structure's own wall height is not its railing height. */
+export const RAILING_HEIGHT = 1;
+
+const OUTWARD = { minX: [-1, 0], maxX: [1, 0], minZ: [0, -1], maxZ: [0, 1] };
+
+/**
+ * The frame of a wall of a structure on one side of a rectangle (`side`, at
+ * inward coordinate `at` if not the rectangle's own side): `start` and `end`
+ * as seen from outside, facing the wall, left to right; `right` the unit
+ * direction from start to end; `normal` outward.
+ */
+function wallFrame(bounds, side, at = bounds[side]) {
+  const normal = OUTWARD[side];
+  const right = [normal[1], -normal[0]];
+  const ends = side === 'minX' || side === 'maxX'
+    ? [[at, bounds.minZ], [at, bounds.maxZ]]
+    : [[bounds.minX, at], [bounds.maxX, at]];
+  const along = (point) => point[0] * right[0] + point[1] * right[1];
+  const [start, end] = along(ends[0]) <= along(ends[1]) ? ends : [ends[1], ends[0]];
+  return {
+    start, end, right, normal, length: Math.hypot(end[0] - start[0], end[1] - start[1]),
+  };
+}
+
+/**
+ * One facade wall run from a wall's visible triangles: the triangles
+ * projected into the wall's own (u, v) coordinates, u across it from the
+ * left as seen from outside and v up from `baseY`. The pieces are the visible
+ * surface (their union), which windows and trim are placed within.
+ */
+function facadeWallRun(id, fields, frame, triangles, baseY) {
+  const toUV = ([x, y, z]) => [
+    (x - frame.start[0]) * frame.right[0] + (z - frame.start[1]) * frame.right[1],
+    y - baseY,
+  ];
+  const pieces = triangles.map((triangle) => triangle.map(toUV));
+  const us = pieces.flat().map(([u]) => u);
+  const vs = pieces.flat().map(([, v]) => v);
+  const area = pieces.reduce((sum, [a, b, c]) => sum + Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2, 0);
+  return {
+    id,
+    ...fields,
+    start: frame.start,
+    end: frame.end,
+    normal: frame.normal,
+    length: frame.length,
+    baseY,
+    pieces,
+    extent: { minU: Math.min(...us), maxU: Math.max(...us), minV: Math.min(...vs), maxV: Math.max(...vs) },
+    area,
+  };
+}
+
+/** The parts of the segment a -> b ([x, y, z]) outside every solid, as [a, b] pieces. */
+function segmentOutside(a, b, solids) {
+  let pieces = [[0, 1]];
+  solids.forEach((solid) => {
+    // the parameter interval where the segment is inside this convex solid
+    let [t0, t1] = [0, 1];
+    solid.forEach(({ normal, offset }) => {
+      const start = dot(normal, a) - offset;
+      const delta = dot(normal, b) - dot(normal, a);
+      if (Math.abs(delta) < 1e-12) {
+        if (start > SOLID_EPSILON) {
+          [t0, t1] = [1, 0];
+        }
+      } else {
+        const t = -start / delta;
+        if (delta > 0) {
+          t1 = Math.min(t1, t);
+        } else {
+          t0 = Math.max(t0, t);
+        }
+      }
+    });
+    if (t1 - t0 > 1e-9) {
+      pieces = pieces.flatMap(([p0, p1]) => [[p0, Math.min(p1, t0)], [Math.max(p0, t1), p1]].filter(([q0, q1]) => q1 - q0 > 1e-9));
+    }
+  });
+  const at = (t) => a.map((value, k) => value + (b[k] - value) * t);
+  return pieces.map(([t0, t1]) => [at(t0), at(t1)]);
+}
+
+/**
+ * A built structure's facade surfaces, for windows, doors, trim, and
+ * railings (Tasks 6-7) to address the same way as footprint walls:
+ * - `wallRuns`: `wall-run-<id>-<wall>` for each wall with a visible surface
+ *   (`front`, `left`, `right`, `back`; `inner` for a recess's set-back wall;
+ *   `base-<wall>` for an enclosed base), each with its visible `pieces` in
+ *   wall-local (u, v) and its story.
+ * - `stories`: `story-<id>-1` from the floor to the plate (the railing height
+ *   for a roofless platform), and `story-<id>-base` under an enclosed base.
+ * - `railRuns`: `rail-run-<id>-<wall>` along each open side at floor level,
+ *   where it stands clear of the host and other volumes (`solids`), with the
+ *   railing's height.
+ *
+ * @param {object} resolved - the resolved structure
+ * @param {Map<string, Array>} wallFaces - visible wall triangles by wall name
+ * @param {Array<[string, Array]>} skirts - an enclosed base's walls, by wall name
+ * @param {Array} solids - what a railing may not run through
+ */
+export function structureFacade(resolved, wallFaces, skirts, solids) {
+  const sides = structureWallSides(resolved.frame);
+  const { id, bounds } = resolved;
+  const storyId = `story-${id}-1`;
+  const baseStoryId = `story-${id}-base`;
+  const common = { structureId: id, hostVolumeId: resolved.hostVolumeId };
+  const wallRuns = [];
+  wallFaces.forEach((triangles, name) => {
+    const side = name === 'inner' ? sides.front : sides[name];
+    const frame = wallFrame(bounds, side, name === 'inner' ? resolved.innerLine : bounds[side]);
+    wallRuns.push(facadeWallRun(`wall-run-${id}-${name}`, { ...common, wall: name, side, storyId }, frame, triangles, resolved.sillY));
+  });
+  skirts.filter(([, triangles]) => triangles.length).forEach(([name, triangles]) => {
+    const frame = wallFrame(bounds, sides[name]);
+    wallRuns.push(facadeWallRun(`wall-run-${id}-base-${name}`, {
+      ...common, wall: `base-${name}`, side: sides[name], storyId: baseStoryId,
+    }, frame, triangles, resolved.foundationTopY ?? 0));
+  });
+
+  const roofless = resolved.roofType === 'none';
+  const floorY = resolved.sillY + (roofless ? DECK_THICKNESS : 0);
+  const railHeight = roofless ? resolved.plateY - resolved.sillY : Math.min(RAILING_HEIGHT, resolved.plateY - resolved.sillY);
+  const railRuns = resolved.openSides.flatMap((name) => {
+    const side = sides[name];
+    const frame = wallFrame(bounds, side);
+    const a = [frame.start[0], floorY, frame.start[1]];
+    const b = [frame.end[0], floorY, frame.end[1]];
+    return segmentOutside(a, b, solids).map(([start, end], index, all) => ({
+      id: all.length > 1 ? `rail-run-${id}-${name}-${index + 1}` : `rail-run-${id}-${name}`,
+      ...common,
+      wall: name,
+      side,
+      start,
+      end,
+      height: railHeight,
+    }));
+  });
+
+  const stories = [{ id: storyId, structureId: id, minY: resolved.sillY, maxY: roofless ? floorY + railHeight : resolved.plateY }];
+  if (skirts.some(([, triangles]) => triangles.length)) {
+    stories.push({ id: baseStoryId, structureId: id, minY: resolved.foundationTopY ?? 0, maxY: resolved.sillY });
+  }
+  return { structureId: id, wallRuns, stories, railRuns };
+}

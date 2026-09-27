@@ -11,7 +11,7 @@ import {
 import {
   clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, clipInsideConvexSolid, planPrism, volumeSolid, isInsideSolid,
   validateRoofStructures, structureWallPolygons, structureWallSides, structureFloorPolygon, structureRecess, hostEaveProfile, hostEaveCovers,
-  roofProfile, roofPeak, DECK_THICKNESS,
+  roofProfile, roofPeak, DECK_THICKNESS, structureFacade,
 } from './roof-structures.js';
 import {
   computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
@@ -176,7 +176,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
 function withRoofStructures(result, config) {
   const structures = config.roofStructures ?? [];
   if (structures.length === 0) {
-    return { ...result, roofStructures: [] };
+    return { ...result, roofStructures: [], structureFacades: [] };
   }
   const results = validateRoofStructures(structures, result.roofZones, config, {
     describeStructure: (resolved) => {
@@ -187,7 +187,7 @@ function withRoofStructures(result, config) {
   // lowest first: a structure standing on another is built after it
   const built = results.filter((entry) => entry.resolved).sort((a, b) => a.resolved.level - b.resolved.level);
   if (built.length === 0) {
-    return { ...result, roofStructures: results };
+    return { ...result, roofStructures: results, structureFacades: [] };
   }
   const materials = createMaterials(config);
   const roofMeshes = [];
@@ -197,6 +197,7 @@ function withRoofStructures(result, config) {
     }
   });
   const builtSolids = [];
+  result.structureFacades = [];
   const clipOutside = (triangles, solids) => solids.reduce((kept, solid) => clipOutsideConvexSolid(kept, solid), triangles);
 
   built.forEach(({ resolved, host }) => {
@@ -227,19 +228,29 @@ function withRoofStructures(result, config) {
     const flushFront = resolved.flush
       ? structureWallPolygons(resolved, host.wallTopY).find((wall) => wall.wall === 'front')
       : null;
-    const wallTriangles = [
-      ...standingWalls(
-        polygonsToTriangles(walls.filter((wall) => !(flushFront && wall.wall === 'front')).map((wall) => wall.polygon)),
-        resolved,
-        { hostSolid, hostBody, others, clipOutside }
-      ),
-      ...(flushFront ? clipOutside(polygonsToTriangles([flushFront.polygon]), others) : []),
-    ];
+    // each wall's visible pieces, by name (front, left, right, back, inner): the
+    // mesh, and the structure's facade surfaces (see structureFacade)
+    const wallFaces = new Map();
+    const addFaces = (name, triangles) => {
+      if (triangles.length) {
+        wallFaces.set(name, [...(wallFaces.get(name) ?? []), ...triangles]);
+      }
+    };
+    walls.forEach((wall) => {
+      addFaces(wall.wall, flushFront && wall.wall === 'front'
+        ? clipOutside(polygonsToTriangles([flushFront.polygon]), others)
+        : standingWalls(polygonsToTriangles([wall.polygon]), resolved, { hostSolid, hostBody, others, clipOutside }));
+    });
     const supports = structureSupports(resolved, host);
-    const recess = recessParts(resolved, host, polygonsToTriangles(walls.map((wall) => wall.polygon)), { hostSolid, others, clipOutside });
+    const recess = recessParts(resolved, host, walls, { hostSolid, others, clipOutside });
+    recess.sides.forEach(([name, triangles]) => addFaces(name, triangles));
+    addFaces('inner', recess.inner);
+    const skirts = supports.skirts.map(([name, triangles]) => [name, clipOutside(triangles, [hostSolid, ...others])]);
+    result.structureFacades.push(structureFacade(resolved, wallFaces, skirts, [hostBody, ...others]));
+    const structureMaterials = materialsFor(resolved, materials);
     const parts = [
-      ['walls', [...wallTriangles, ...clipOutside(kneeWalls(resolved, host), others), ...recess.walls], materials.wall],
-      ['roof', clipOutside(structureRoofTriangles(resolved, config), [hostSolid, ...others]), materials.roof],
+      ['walls', [...[...wallFaces.values()].flat(), ...clipOutside(kneeWalls(resolved, host), others), ...recess.liftStrip], structureMaterials.wall],
+      ['roof', clipOutside(structureRoofTriangles(resolved, config), [hostSolid, ...others]), structureMaterials.roof],
       ['floor', [
         ...(resolved.standing ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved)]), floorSolids) : []),
         ...recess.floor,
@@ -255,7 +266,7 @@ function withRoofStructures(result, config) {
           ? clipOutside(openSidePosts(resolved, others, host.baseY), [hostSolid, ...others])
           : []),
       ], materials.wall],
-      ['support', clipOutside(supports.walls, [hostSolid, ...others]), materials.wall],
+      ['support', skirts.flatMap(([, triangles]) => triangles), structureMaterials.wall],
       ['foundation', clipOutside(supports.foundation, [hostSolid, ...others]), materials.foundation],
       ['eave-caps', interruptsHostEave(resolved, host) ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
       // a roofless platform on a flat roof top (a widow's walk) is a deck
@@ -296,6 +307,24 @@ function withRoofStructures(result, config) {
 }
 
 /**
+ * A structure's wall and roof materials: its own palette choices
+ * (`materials.wall`, `materials.roof`, keys of MATERIAL_PALETTE) over the
+ * building's. Material precedence runs facade panel, wall run, structure,
+ * volume, story, building.
+ */
+function materialsFor(resolved, materials) {
+  const pick = (key, fallback) => {
+    const preset = MATERIAL_PALETTE[resolved.materials?.[key]];
+    return preset
+      ? new THREE.MeshStandardMaterial({
+        color: preset.color, roughness: preset.roughness, metalness: preset.metalness, side: THREE.DoubleSide,
+      })
+      : fallback;
+  };
+  return { wall: pick('wall', materials.wall), roof: pick('roof', materials.roof) };
+}
+
+/**
  * The open porch an inset leaves at the front of a structure (see
  * structureRecess): its floor, the inner wall across its back, and, for a
  * dormer, the side walls run on down to the floor inside it (the host roof
@@ -303,21 +332,28 @@ function withRoofStructures(result, config) {
  * also closes the roof-lift gap under its front edge, which a flush front
  * wall would otherwise have covered.
  */
-function recessParts(resolved, host, wallTriangles, { hostSolid, others, clipOutside }) {
+function recessParts(resolved, host, walls, { hostSolid, others, clipOutside }) {
   const recess = structureRecess(resolved);
   if (!recess) {
-    return { walls: [], floor: [] };
+    return {
+      sides: [], inner: [], liftStrip: [], floor: [],
+    };
   }
   const belowFloor = [{ normal: [0, 1, 0], offset: resolved.sillY }];
-  const sideWalls = resolved.standing
+  const sides = resolved.standing
     ? []
-    : clipOutside(clipInsideConvexSolid(clipInsideConvexSolid(wallTriangles, planPrism(recess.plan)), hostSolid), [belowFloor, ...others]);
+    : walls.map((wall) => [wall.wall, clipOutside(
+      clipInsideConvexSolid(clipInsideConvexSolid(polygonsToTriangles([wall.polygon]), planPrism(recess.plan)), hostSolid),
+      [belowFloor, ...others]
+    )]);
   const [p0, p1] = recess.plan; // the front edge
   const liftStrip = resolved.flush && host.wallTopY < resolved.sillY - 1e-9
     ? [[[p0[0], host.wallTopY, p0[1]], [p1[0], host.wallTopY, p1[1]], [p1[0], resolved.sillY, p1[1]], [p0[0], resolved.sillY, p0[1]]]]
     : [];
   return {
-    walls: [...sideWalls, ...clipOutside(polygonsToTriangles([recess.innerWall, ...liftStrip]), others)],
+    sides,
+    inner: clipOutside(polygonsToTriangles([recess.innerWall]), others),
+    liftStrip: clipOutside(polygonsToTriangles(liftStrip), others),
     floor: resolved.standing ? [] : clipOutside(polygonsToTriangles([recess.floor]), others),
   };
 }
@@ -391,10 +427,10 @@ function openSidePosts(resolved, solids, bottomY = resolved.sillY) {
  * - `porch`: the same posts standing on a ground-level deck;
  * - `brackets`: triangular braces under the floor, back to the wall;
  * - `enclosed`: walls from the foundation to the floor on the projecting
- *   sides, over a foundation.
+ *   sides (`skirts`, by wall name), over a foundation.
  */
 function structureSupports(resolved, host) {
-  const empty = { posts: [], walls: [], foundation: [] };
+  const empty = { posts: [], skirts: [], foundation: [] };
   if (!resolved.projecting || resolved.support === 'none') {
     return empty;
   }
@@ -419,8 +455,8 @@ function structureSupports(resolved, host) {
     case 'porch':
       return { ...empty, posts: frontPosts(foundationY), foundation: box(groundY, foundationY) };
     case 'enclosed': {
-      const skirt = STRUCTURE_WALLS_BELOW.flatMap((wallName) => enclosedBaseWall(resolved, wallName, foundationY, sillY));
-      return { ...empty, walls: skirt, foundation: box(groundY, foundationY) };
+      const skirts = STRUCTURE_WALLS_BELOW.map((wallName) => [wallName, enclosedBaseWall(resolved, wallName, foundationY, sillY)]);
+      return { ...empty, skirts, foundation: box(groundY, foundationY) };
     }
     case 'brackets': {
       const projection = Math.abs(front - wall);

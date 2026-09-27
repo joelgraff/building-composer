@@ -102,6 +102,23 @@ export function computeFacadeLayout(footprint, config = {}) {
 }
 
 /**
+ * A facade layout with the facade surfaces of the building's roof structures
+ * (the `structureFacades` a build returns, see structureFacade in
+ * js/roof-structures.js) added alongside the footprint's: `structureWallRuns`,
+ * `structureStories`, and `railRuns`. The footprint's own `wallRuns` are left
+ * as they are (they also define the footprint a `.bld` file saves). Addressing
+ * runs volume -> roof structure -> wall run -> facade panel -> story.
+ */
+export function withStructureFacades(layout, structureFacades = []) {
+  return {
+    ...layout,
+    structureWallRuns: structureFacades.flatMap((facade) => facade.wallRuns),
+    structureStories: structureFacades.flatMap((facade) => facade.stories),
+    railRuns: structureFacades.flatMap((facade) => facade.railRuns),
+  };
+}
+
+/**
  * Decompose a rectilinear (axis-aligned) footprint into the minimal set of
  * non-overlapping rectangular volumes that exactly tile it, e.g. a U-shaped
  * footprint decomposes into 3 volumes (two legs + a base), an L-shape into 2.

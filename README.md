@@ -67,6 +67,7 @@ npm test
   - **Supports** for projecting porches: a solid deck, posts, a ground-level porch, brackets, or an enclosed base (a two-story bay).
   - **Stacking**: a structure can stand on another, e.g. a sleeping porch on a ground porch's roof.
   - Every placement is validated (host side, fit on one roof face, overlaps, supports), and anything not built is reported in the status line.
+  - **Facade surfaces**: each structure's visible walls become addressable wall runs (with their clipped shapes), with their own story and railing runs along open sides, ready for windows, trim, and railings. A structure can have its own wall and roof materials.
 
 - **Roof Graph & Edge Roles**:
   - Automatically identifies and tags exterior perimeter edges by their architectural roof role:
@@ -95,7 +96,7 @@ building-composer/
 │   ├── eaves.js           # Eave/rake overhang, fascia, and soffit geometry
 │   ├── export.js          # GLTF/GLB binary export logic
 │   ├── extrusion.js       # 3D procedural geometry builders for walls, roofs, foundation; roof merge resolver
-│   ├── facade.js          # Facade layout, volume decomposition, roof graph, .bld persistence
+│   ├── facade.js          # Facade layout (with roof structure surfaces), volume decomposition, roof graph, .bld persistence
 │   ├── footprint.js       # 2D polygon validation, normalization, and metrics
 │   ├── main.js            # UI controller, scene management, dual viewport rendering
 │   ├── materials.js       # Shared PBR material definitions and palette presets
