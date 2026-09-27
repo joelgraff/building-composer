@@ -104,17 +104,20 @@ export function computeFacadeLayout(footprint, config = {}) {
 /**
  * A facade layout with the facade surfaces of the building's roof structures
  * (the `structureFacades` a build returns, see structureFacade in
- * js/roof-structures.js) added alongside the footprint's: `structureWallRuns`,
- * `structureStories`, and `railRuns`. The footprint's own `wallRuns` are left
+ * js/roof-structures.js) and the widow's walks (`roofWalks`, see roofWalkFacade)
+ * added alongside the footprint's: `structureWallRuns`, `structureStories`,
+ * `roofWalks` (each walk's flat top, for a deck), and `railRuns` (along
+ * structures' open sides and walks' edges). The footprint's own `wallRuns` are left
  * as they are (they also define the footprint a `.bld` file saves). Addressing
  * runs volume -> roof structure -> wall run -> facade panel -> story.
  */
-export function withStructureFacades(layout, structureFacades = []) {
+export function withStructureFacades(layout, structureFacades = [], roofWalks = []) {
   return {
     ...layout,
     structureWallRuns: structureFacades.flatMap((facade) => facade.wallRuns),
     structureStories: structureFacades.flatMap((facade) => facade.stories),
-    railRuns: structureFacades.flatMap((facade) => facade.railRuns),
+    roofWalks,
+    railRuns: [...structureFacades.flatMap((facade) => facade.railRuns), ...roofWalks.flatMap((walk) => walk.railRuns)],
   };
 }
 
@@ -522,10 +525,20 @@ export function serializeBuildingState(layout, modelConfig) {
     roofBreakHeight: modelConfig.roofBreakHeight,
     roofLowerPitchRise: modelConfig.roofLowerPitchRise,
     roofUpperPitchRise: modelConfig.roofUpperPitchRise,
-    roofDeckHeight: modelConfig.roofDeckHeight,
+    roofWalkHeight: modelConfig.roofWalkHeight,
     roofStructures: modelConfig.roofStructures ?? [],
     roofGraph: layout.roofGraph,
   };
+}
+
+/** Per-volume roof shapes, with a widow's walk saved under its old name (`deckHeight`) renamed. */
+function legacyRoofShapes(shapes) {
+  const out = {};
+  Object.entries(shapes && typeof shapes === 'object' ? shapes : {}).forEach(([volumeId, shape]) => {
+    const { deckHeight, ...rest } = shape ?? {};
+    out[volumeId] = Number.isFinite(deckHeight) && !Number.isFinite(rest.walkHeight) ? { ...rest, walkHeight: deckHeight } : rest;
+  });
+  return out;
 }
 
 /**
@@ -548,7 +561,13 @@ export function deserializeBuildingState(data) {
   // and so is anything standing on it.
   const volumeIds = new Set(decomposeIntoVolumes(data.footprint).map((volume) => volume.id));
   const warnings = [];
-  let roofStructures = normalizeRoofStructures(data.roofStructures);
+  // a widow's walk was once a structure standing on a hip's flat top; it is
+  // now that flat top itself (roofWalkHeight), so the structure is dropped
+  const rawStructures = Array.isArray(data.roofStructures) ? data.roofStructures : [];
+  rawStructures.filter((raw) => raw?.kind === 'widows-walk').forEach((raw) => {
+    warnings.push(`Dropped roof structure ${raw.id ?? '(unnamed)'}: a widow's walk is now the flat top of a hip roof (its widow's walk height).`);
+  });
+  let roofStructures = normalizeRoofStructures(rawStructures.filter((raw) => raw?.kind !== 'widows-walk'));
   let dropped = true;
   while (dropped) {
     const structureIds = new Set(roofStructures.map((structure) => structure.id));
@@ -587,7 +606,7 @@ export function deserializeBuildingState(data) {
       volumeRidgeDirections: data.volumeRidgeDirections ?? {},
       volumeRoofTypes: data.volumeRoofTypes ?? {},
       volumeRoofConnections: data.volumeRoofConnections ?? {},
-      volumeRoofShapes: data.volumeRoofShapes ?? {},
+      volumeRoofShapes: legacyRoofShapes(data.volumeRoofShapes),
       roofRakeDepth: data.roofRakeDepth ?? data.roofEaveDepth ?? 0.35,
       roofFasciaDepth: data.roofFasciaDepth ?? 0.1524,
       eaveSoffit: data.eaveSoffit ?? 'flat',
@@ -598,8 +617,8 @@ export function deserializeBuildingState(data) {
       roofBreakHeight: Number.isFinite(data.roofBreakHeight) ? data.roofBreakHeight : undefined,
       roofLowerPitchRise: Number.isFinite(data.roofLowerPitchRise) ? data.roofLowerPitchRise : undefined,
       roofUpperPitchRise: Number.isFinite(data.roofUpperPitchRise) ? data.roofUpperPitchRise : undefined,
-      // a hip roof's flat deck, if cut flat
-      roofDeckHeight: Number.isFinite(data.roofDeckHeight) ? data.roofDeckHeight : undefined,
+      // a hip roof's widow's walk (its flat top), if any; older files called it a deck
+      roofWalkHeight: [data.roofWalkHeight, data.roofDeckHeight].find(Number.isFinite),
       roofStructures,
     },
   };

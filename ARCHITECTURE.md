@@ -40,7 +40,7 @@ surface. Detached objects (appurtenances) and separate structures
 | Footprint | 2D polygon (supplied by main model) | Vertices, area, perimeter segments |
 | Foundation | Base below/at grade | Depth, above-grade height, material |
 | Walls | Vertical extrusion | Story count, per-story height, wall thickness |
-| Roof | Top cap | Type (flat, gable, hip, shed, mansard, gambrel), pitch, break height and lower/upper pitches (mansard, gambrel), deck height (hip), overhang/eave depth |
+| Roof | Top cap | Type (flat, gable, hip, shed, mansard, gambrel), pitch, break height and lower/upper pitches (mansard, gambrel), widow's walk height (hip), overhang/eave depth |
 | Facade | Subdivided surface of the envelope | See §4 |
 | Substructure * | Associated separate footprint (shed, garage, gazebo) | Parent reference, relative transform, own extrusion params |
 | Roof structure | Dormer or porch outside the footprint (an envelope modifier) | Host volume or structure and side, offset, width, setback, depth, wall height, base height, own roof and eaves, open sides, support |
@@ -174,15 +174,18 @@ cornice boxes at the plate rather than the steep slope carried past the wall;
 a gambrel's rakes follow its broken profile. On a multi-volume footprint each
 volume gets its own two-slope roof, with sides fully covered by a neighbor left
 unsloped and closed with an end face clipped outside the neighbor; a continuous
-mansard around an L or U is later work. A hip roof can likewise be cut flat at
-a deck height (an added level plane), the flat top a widow's walk stands on.
+mansard around an L or U is later work. A hip roof can have a widow's walk: it is
+cut flat (an added level plane) at a height above the plate, and the flat top
+replaces its ridge. A continuous (straight-skeleton) hip over an L or U is cut
+flat at one height, leaving one walk of that shape. The walk is part of the
+roof; a deck on it and its railings are facade modifiers.
 
 **Standalone shed shell.** Shed roofs emit a sloped roof plane, vertical
 high-side return, and triangular end closures down to the supporting wall top.
 A shed is the half-gable special case: one of a gable's two slopes.
 
-**Roof structures.** Dormers, porches, cupolas, and widow's walks change the
-roof shell and have their own walls (or a deck), but are not part of the footprint (`js/roof-structures.js`; built by
+**Roof structures.** Dormers, porches, and cupolas change the
+roof shell and have their own walls, but are not part of the footprint (`js/roof-structures.js`; built by
 `withRoofStructures` in `js/extrusion.js`). They are envelope modifiers (§5). A
 structure is a small rectangle placed in the frame of one side of its host (a
 volume, or another structure): offset along the side, width, setback from the
@@ -209,9 +212,7 @@ come out of the clip for every roof type). The rules that follow:
 - A structure rising through the roof (`mount: 'through'`: a cupola,
   belvedere, or rooftop pavilion) does neither: it may straddle the ridge, its
   wall height is measured from the highest point of the roof under it, and it
-  leaves the host roof whole. A roofless one (`roofType: 'none'`) is a
-  platform: a widow's walk, a deck on a level part of the roof, whose railing
-  is a facade element.
+  leaves the host roof whole. It may stand on a widow's walk (a belvedere).
 - A flush front wall carries its host wall up through the eave: the eave is
   cut away across it and capped either side, unless the host is open on that
   side (then the eave runs on as a beam).
@@ -288,9 +289,12 @@ from the structure's floor. Windows and trim are placed within those pieces.
 Each structure has a story (`story-<structure>-1`, plus `-base` under an
 enclosed base) and railing runs (`rail-run-<structure>-<wall>`) along its open
 sides at floor level, where they stand clear of the building, with a railing
-height; a widow's walk is railing runs around its deck. These come from the
-build and sit beside the footprint's own wall runs in the layout
-(`structureWallRuns`, `structureStories`, `railRuns`).
+height. A widow's walk (`roof-walk-<volume>`, or `roof-walk-main` on a
+continuous hip) has its flat top in plan (`pieces`, at elevation `y`) for a
+deck, and railing runs (`rail-run-<walk>-<n>`) along each edge where the roof
+slopes away, stopping at anything standing on it. These come from the build
+and sit beside the footprint's own wall runs in the layout
+(`structureWallRuns`, `structureStories`, `roofWalks`, `railRuns`).
 
 **MVP addressing** is `story + wallRun`, with optional `facadePanel` detail.
 Volumes and roof zones are explicit metadata rather than inferred from
@@ -312,9 +316,9 @@ the building. Three categories, distinguished by a two-step test:
 
 | Category | Test | Examples |
 |----------|------|----------|
-| Facade modifier | Surface-applied; no functional space | Windows, doors, dentil courses, water table, window casings, cornices, gutters, eave depth, railings (including a widow's walk's) |
+| Facade modifier | Surface-applied; no functional space | Windows, doors, dentil courses, water table, window casings, cornices, gutters, eave depth, railings, a widow's walk's deck and railings |
 | Footprint modifier | Extends the plan; no functional space | Exterior steps, basement window wells, freestanding stoops, open porches |
-| Envelope modifier | Creates/extends functional space (regardless of enclosure) | Attached porches, bay windows, towers (Queen Anne), enclosed verandas, dormers, cupolas, widow's walks (the platform) |
+| Envelope modifier | Creates/extends functional space (regardless of enclosure) | Attached porches, bay windows, towers (Queen Anne), enclosed verandas, dormers, cupolas |
 
 **The test:**
 1. Does it share a boundary with the footprint polygon?

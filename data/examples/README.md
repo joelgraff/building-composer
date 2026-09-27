@@ -13,7 +13,8 @@ app. Every structure faces +Z, toward the default camera, unless noted.
 | `recessed-porch.bld` | Recessed porches on a story-and-a-half bungalow, set up the roof above an intact strip of roof and eave: an open porch in front of a set-back wall under a gable dormer roof (front), and a wider one under a shed roof (back, −Z). |
 | `second-empire.bld` | A mansard roof (steep lower slope to a curb at 3 m, low hip above, cornice eaves) with three dormers on the front slope, below the curb. |
 | `gambrel.bld` | A story-and-a-half house under a gambrel roof (gable ends with rakes following the broken profile), with two small dormers. |
-| `widows-walk.bld` | A widow's walk: a hip roof cut flat at 1.6 m (`roofDeckHeight`) with a deck filling the flat top. Its railing comes with facade elements. |
+| `widows-walk.bld` | A widow's walk: a hip roof cut flat 1.6 m above the plate (`roofWalkHeight`) in place of its ridge. The flat top and its edges are facade surfaces for a deck and railings (`roofWalks`, `railRuns`). |
+| `widows-walk-l.bld` | A widow's walk on an L-shaped house: the continuous (straight-skeleton) hip is cut flat into one L-shaped walk, with a belvedere standing on it. |
 | `cupola.bld` | A cupola on the ridge of a two-story gable house: 1.6 m square, pyramid roof, walls clearing the ridge by 1.2 m (`mount: 'through'`, centered). |
 | `belvedere.bld` | An Italianate belvedere at the center of a low hip roof, with a low hip roof of its own. |
 | `rooftop-pavilion.bld` | An open pavilion on a flat roof: a hip roof on posts standing on the roof deck. |

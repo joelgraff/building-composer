@@ -17,7 +17,7 @@ const VOLUMES = computeFacadeLayout(L, {}).volumes;
 // one story, 6:12 hip (slope 0.5); plate at 0.6 + 3 + 0.02
 const PLATE = 3.62;
 
-function build(structures) {
+function build(structures, config = {}) {
   return createBuildingFromFootprint(L, {
     storyCount: 1,
     storyHeight: 3,
@@ -26,6 +26,7 @@ function build(structures) {
     roofPitchRise: 6,
     roofPitchRun: 12,
     volumes: VOLUMES,
+    ...config,
     roofStructures: normalizeRoofStructures(structures),
   });
 }
@@ -86,5 +87,41 @@ describe('roof structures on a continuous (straight-skeleton) hip', () => {
     assert.deepEqual(entry.errors, []);
     // on the ridge of the 8 m arm, 2 m up
     assert.ok(Math.abs(entry.resolved.sillY - (PLATE + 2)) < 1e-6, `sill ${entry.resolved.sillY}`);
+  });
+
+  it('a widow\'s walk cuts the whole roof flat at one height: one L-shaped walk', () => {
+    const { building, roofZones, roofWalks } = build([], { roofWalkHeight: 1 });
+    roofZones.forEach((zone) => assert.ok(Math.abs(zone.roofHeight - 1) < 1e-6, zone.volumeId));
+    assert.equal(roofWalks.length, 1);
+    const [walk] = roofWalks;
+    assert.deepEqual(walk.volumeIds, ['volume-0', 'volume-1']);
+    assert.ok(Math.abs(walk.y - (PLATE + 1)) < 1e-6);
+    // at 6:12 the walk is the L inset 2 m from every wall
+    const area = (polygon) => Math.abs(polygon.reduce((sum, [x, z], i) => {
+      const [nx, nz] = polygon[(i + 1) % polygon.length];
+      return sum + x * nz - nx * z;
+    }, 0)) / 2;
+    assert.ok(Math.abs(walk.pieces.reduce((sum, piece) => sum + area(piece), 0) - (16 * 4 + 4 * 12)) < 1e-6, 'walk area');
+    const railLength = walk.railRuns.reduce((sum, rail) => sum + Math.hypot(rail.end[0] - rail.start[0], rail.end[2] - rail.start[2]), 0);
+    assert.ok(Math.abs(railLength - (16 + 4 + 12 + 12 + 4 + 16)) < 1e-6, `railing ${railLength}`);
+    // the roof mesh has the same flat top, and nothing above it
+    let flat = 0;
+    let highest = -Infinity;
+    building.traverse((child) => {
+      if (child.isMesh && child.userData?.roofZoneId) {
+        meshTriangles(child).forEach((tri) => {
+          const ys = tri.map(([, y]) => y + child.position.y);
+          highest = Math.max(highest, ...ys);
+          if (ys.every((y) => Math.abs(y - (PLATE + 1)) < 1e-4)) {
+            flat += area(tri.map(([x, , z]) => [x, z]));
+          }
+        });
+      }
+    });
+    assert.ok(Math.abs(flat - 112) < 1e-3, `flat roof ${flat}`);
+    assert.ok(highest < PLATE + 1 + 1e-4);
+    // a cupola stands on it
+    const [cupola] = build([{ id: 'c', kind: 'cupola', hostVolumeId: 'volume-1', hostSide: 'maxZ', setback: 3.2, depth: 1.6, width: 1.6 }], { roofWalkHeight: 1 }).roofStructures;
+    assert.ok(Math.abs(cupola.resolved.sillY - (PLATE + 1)) < 1e-6);
   });
 });

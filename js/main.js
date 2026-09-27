@@ -67,8 +67,9 @@ const twoSlopeFields = document.getElementById('two-slope-fields');
 const roofBreakHeightInput = document.getElementById('roof-break-height');
 const roofLowerPitchInput = document.getElementById('roof-lower-pitch');
 const roofUpperPitchInput = document.getElementById('roof-upper-pitch');
-const roofDeckField = document.getElementById('roof-deck-field');
-const roofDeckHeightInput = document.getElementById('roof-deck-height');
+const roofWalkField = document.getElementById('roof-walk-field');
+const roofWalkHeightInput = document.getElementById('roof-walk-height');
+const roofWalkSize = document.getElementById('roof-walk-size');
 const structurePresetSelect = document.getElementById('structure-preset');
 const structureSideSelect = document.getElementById('structure-side');
 const structureAddBtn = document.getElementById('structure-add-btn');
@@ -685,7 +686,9 @@ async function loadFootprint(footprintData, preserveView = true) {
   updateFacadeSummary(layout);
   setStatus(`Valid footprint loaded (${windingPreference})`, 'default');
 
-  const { building, foundationHeight, roofStructures, structureFacades } = createBuildingFromFootprint(normalized, {
+  const {
+    building, foundationHeight, roofStructures, structureFacades, roofWalks,
+  } = createBuildingFromFootprint(normalized, {
     storyCount: modelConfig.storyCount,
     storyHeight: modelConfig.storyHeight,
     panelsPerRun: modelConfig.panelsPerRun,
@@ -716,7 +719,7 @@ async function loadFootprint(footprintData, preserveView = true) {
     roofBreakHeight: modelConfig.roofBreakHeight,
     roofLowerPitchRise: modelConfig.roofLowerPitchRise,
     roofUpperPitchRise: modelConfig.roofUpperPitchRise,
-    roofDeckHeight: modelConfig.roofDeckHeight,
+    roofWalkHeight: modelConfig.roofWalkHeight,
     foundationDepth: 0.7,
     roofOverhang: 0.35,
   });
@@ -729,8 +732,9 @@ async function loadFootprint(footprintData, preserveView = true) {
   }
 
   group.add(building);
-  // the roof structures' walls and railings join the footprint's facade surfaces
-  activeLayout = withStructureFacades(layout, structureFacades);
+  // the roof structures' walls and railings, and the widow's walks, join the footprint's facade surfaces
+  activeLayout = withStructureFacades(layout, structureFacades, roofWalks);
+  showWalkSize(roofWalks);
   if (activeLayout.structureWallRuns.length || activeLayout.railRuns.length) {
     updateFacadeSummary(activeLayout);
   }
@@ -1235,12 +1239,12 @@ viewportCanvas.addEventListener('pointerup', (event) => {
   loadFootprint(loadedFootprint);
 });
 
-// --- Mansard, gambrel, and hip deck settings --------------------------------
+// --- Mansard, gambrel, and widow's walk settings --------------------------------
 
 /**
  * Shows the settings of the selected roof type: a mansard's or gambrel's
  * break height and two pitches (in place of the single pitch and rise), and a
- * hip's flat deck height. They edit the selected volume, or the building
+ * hip's widow's walk height (its flat top in place of the ridge). They edit the selected volume, or the building
  * defaults (see volumeShapeTarget).
  */
 function syncRoofShapeFields(roofType) {
@@ -1248,7 +1252,7 @@ function syncRoofShapeFields(roofType) {
   twoSlopeFields.style.display = twoSlope ? '' : 'none';
   roofPitchField.style.display = twoSlope ? 'none' : '';
   roofHeightField.style.display = twoSlope ? 'none' : '';
-  roofDeckField.style.display = roofType === 'hip' ? '' : 'none';
+  roofWalkField.style.display = roofType === 'hip' ? '' : 'none';
   const target = volumeShapeTarget();
   const own = target ? modelConfig.volumeRoofShapes[target] ?? {} : {};
   if (twoSlope) {
@@ -1258,8 +1262,25 @@ function syncRoofShapeFields(roofType) {
     roofLowerPitchInput.value = String(pick('lowerPitchRise', 'roofLowerPitchRise'));
     roofUpperPitchInput.value = String(pick('upperPitchRise', 'roofUpperPitchRise'));
   }
-  const deck = own.deckHeight ?? modelConfig.roofDeckHeight;
-  roofDeckHeightInput.value = Number.isFinite(deck) ? (deck * unitFactor()).toFixed(1) : '';
+  const walk = own.walkHeight ?? modelConfig.roofWalkHeight;
+  roofWalkHeightInput.value = Number.isFinite(walk) ? (walk * unitFactor()).toFixed(1) : '';
+}
+
+/** Under the widow's walk height: the size of the flat top it makes (for the selected volume, or all). */
+function showWalkSize(roofWalks) {
+  const target = volumeShapeTarget();
+  const walks = roofWalks.filter((walk) => !target || walk.volumeIds.includes(target));
+  const own = target ? modelConfig.volumeRoofShapes[target]?.walkHeight : undefined;
+  const height = own ?? modelConfig.roofWalkHeight;
+  const units = unitFactor();
+  const label = document.querySelector('#roof-walk-field .unit-label')?.textContent ?? '';
+  roofWalkSize.textContent = walks.length
+    ? walks.map((walk) => {
+      const points = walk.pieces.flat();
+      const size = (k) => (Math.max(...points.map((p) => p[k])) - Math.min(...points.map((p) => p[k]))) * units;
+      return `Walk: ${size(0).toFixed(1)} × ${size(1).toFixed(1)} ${label}${walk.pieces.length > 1 ? ' overall' : ''}`;
+    }).join('; ')
+    : height > 0 ? 'At or above the ridge: no flat top.' : '';
 }
 
 function setRoofShapeValue(key, buildingKey, value) {
@@ -1289,15 +1310,15 @@ roofLowerPitchInput.addEventListener('change', () => {
 roofUpperPitchInput.addEventListener('change', () => {
   setRoofShapeValue('upperPitchRise', 'roofUpperPitchRise', Math.max(0, Number(roofUpperPitchInput.value) || 0));
 });
-roofDeckHeightInput.addEventListener('change', () => {
-  const value = Number(roofDeckHeightInput.value);
-  setRoofShapeValue('deckHeight', 'roofDeckHeight', roofDeckHeightInput.value === '' || !(value > 0) ? undefined : value / unitFactor());
+roofWalkHeightInput.addEventListener('change', () => {
+  const value = Number(roofWalkHeightInput.value);
+  setRoofShapeValue('walkHeight', 'roofWalkHeight', roofWalkHeightInput.value === '' || !(value > 0) ? undefined : value / unitFactor());
 });
 
 // --- Roof structures -----------------------------------------------------------
 
 const SIDE_OPTIONS = [['minZ', 'Z-min side'], ['maxZ', 'Z-max side'], ['minX', 'X-min side'], ['maxX', 'X-max side']];
-const STRUCTURE_ROOF_OPTIONS = [['gable', 'Gable'], ['hip', 'Hip'], ['shed', 'Shed'], ['flat', 'Flat'], ['none', 'None (a platform)']];
+const STRUCTURE_ROOF_OPTIONS = [['gable', 'Gable'], ['hip', 'Hip'], ['shed', 'Shed'], ['flat', 'Flat']];
 const MATERIAL_OPTIONS = [['', 'Building default'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['metal', 'Metal'], ['stone', 'Stone']];
 
 function structureRecord(id) {
@@ -1367,7 +1388,6 @@ function renderStructurePanel() {
 
 function structureEditorHtml(structure) {
   const through = structure.mount === 'through';
-  const roofless = structure.roofType === 'none';
   const standing = structure.baseHeight !== null;
   const baseMode = structure.baseHeight === null ? 'roof' : structure.baseHeight === 'ground' ? 'ground' : 'height';
   const parts = [
@@ -1378,20 +1398,13 @@ function structureEditorHtml(structure) {
     // a porch stands on its base; only a structure without one joins or rises through the roof
     parts.push(selectField('Meets the roof', 'mount', [['join', 'Joins one slope (a dormer)'], ['through', 'Rises through it (a cupola)']], structure.mount));
   }
-  if (through) {
-    parts.push(checkField('Fill the flat roof top', 'fill', structure.fill));
-  }
-  if (structure.fill && through) {
-    parts.push(numberField('Margin', 'fillMargin', structure.fillMargin));
-  } else {
-    parts.push(numberField('Offset along the side', 'offset', structure.offset));
-    parts.push(numberField('Width', 'width', structure.width));
-    parts.push(checkField('Centered across the roof', 'setbackCenter', structure.setback === 'center'));
-    parts.push(numberField('Setback from the wall (negative projects)', 'setback', structure.setback === 'center' ? null : structure.setback, { disabled: structure.setback === 'center' }));
-    parts.push(checkField('Depth runs back to the roof', 'depthAuto', structure.depth === null));
-    parts.push(numberField('Depth', 'depth', structure.depth, { disabled: structure.depth === null }));
-  }
-  parts.push(numberField(roofless ? 'Railing height' : 'Wall height', 'wallHeight', structure.wallHeight));
+  parts.push(numberField('Offset along the side', 'offset', structure.offset));
+  parts.push(numberField('Width', 'width', structure.width));
+  parts.push(checkField('Centered across the roof', 'setbackCenter', structure.setback === 'center'));
+  parts.push(numberField('Setback from the wall (negative projects)', 'setback', structure.setback === 'center' ? null : structure.setback, { disabled: structure.setback === 'center' }));
+  parts.push(checkField('Depth runs back to the roof', 'depthAuto', structure.depth === null));
+  parts.push(numberField('Depth', 'depth', structure.depth, { disabled: structure.depth === null }));
+  parts.push(numberField('Wall height', 'wallHeight', structure.wallHeight));
   if (!through) {
     parts.push(selectField('Base', 'baseMode', [['roof', 'Rises out of the roof (a dormer)'], ['ground', 'Stands on the ground (a porch)'], ['height', 'Stands at a height above the host plate (a porch)']], baseMode));
     if (baseMode === 'height') {
@@ -1404,7 +1417,7 @@ function structureEditorHtml(structure) {
   if ((through || standing) && (structure.roofType === 'gable' || structure.roofType === 'hip')) {
     parts.push(selectField('Ridge', 'ridge', [['perpendicular', 'Runs into the roof'], ['parallel', 'Runs along the side']], structure.ridge));
   }
-  if (!['flat', 'none'].includes(structure.roofType)) {
+  if (structure.roofType !== 'flat') {
     parts.push(numberField('Roof pitch (rise per 12; empty for the building\'s)', 'pitch', structure.roofShape?.mode === 'slope' ? structure.roofShape.pitchRise : null, { length: false, step: 1, placeholder: 'building' }));
   }
   if (!through && !standing) {
@@ -1416,9 +1429,7 @@ function structureEditorHtml(structure) {
   parts.push('<div class="field"><label>Open sides</label>'
     + STRUCTURE_WALLS.map((wall) => checkField(wall, `open:${wall}`, structure.openSides.includes(wall))).join('') + '</div>');
   parts.push(selectField('Wall material', 'wallMaterial', MATERIAL_OPTIONS, structure.materials?.wall ?? ''));
-  if (!roofless) {
-    parts.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
-  }
+  parts.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
   parts.push('<div class="actions"><button data-action="delete">Delete</button></div>');
   return parts.join('');
 }
@@ -1499,8 +1510,6 @@ structureEditor.addEventListener('change', (event) => {
     switch (field) {
       case 'hostSide': edited.hostSide = input.value; break;
       case 'mount': edited.mount = input.value; break;
-      case 'fill': edited.fill = input.checked; break;
-      case 'fillMargin': edited.fillMargin = Math.max(0, length()); break;
       case 'offset': edited.offset = length(); break;
       case 'width': edited.width = Math.max(0.1, length()); break;
       case 'setbackCenter':

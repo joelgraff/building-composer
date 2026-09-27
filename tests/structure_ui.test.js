@@ -27,7 +27,7 @@ describe('roof structure UI presets', () => {
   const placement = { hostVolumeId: 'volume-0', hostSide: 'minZ', storyHeight: 3.2 };
 
   it('each builds without errors on a two-story house (on the roof it suits)', () => {
-    const suits = { cupola: {}, 'widows-walk': { roofType: 'hip', roofHeight: 5 * (8 / 12), roofDeckHeight: 1.6 } };
+    const suits = {};
     STRUCTURE_UI_PRESETS.filter((preset) => !preset.onStructure).forEach((preset) => {
       const record = newRoofStructure(preset.key, placement);
       assert.ok(record, preset.key);

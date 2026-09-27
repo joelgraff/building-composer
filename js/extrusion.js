@@ -11,7 +11,7 @@ import {
 import {
   clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, clipInsideConvexSolid, planPrism, volumeSolid, isInsideSolid,
   validateRoofStructures, structureWallPolygons, structureWallSides, structureFloorPolygon, structureRecess, hostEaveProfile, hostEaveCovers,
-  roofProfile, roofPeak, DECK_THICKNESS, structureFacade,
+  roofProfile, roofPeak, structureFacade, roofWalkFacade,
 } from './roof-structures.js';
 import {
   computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, makeEavePlane, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
@@ -106,7 +106,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   foundation.position.y = 0;
   group.add(foundation);
 
-  const { geometry: roofGeometry, zones: roofZones } = createRoofGeometry(footprint, {
+  const { geometry: roofGeometry, zones: roofZones, walks: skeletonWalks = [] } = createRoofGeometry(footprint, {
     roofType: resolvedRoofType,
     roofDirection: resolvedRoofDirection,
     roofHeight,
@@ -159,9 +159,48 @@ export function createBuildingFromFootprint(footprint, config = {}) {
     facadePanelsRendered: Boolean(config.facadeLayout && getRectangularBounds(footprint)),
   };
 
-  return withRoofStructures({
+  const walks = [
+    ...skeletonWalks.map((walk) => ({ ...walk, y: roof.position.y + walk.height })),
+    ...roofZones.filter((zone) => !zone.skeleton).flatMap(zoneWalk),
+  ];
+  const result = withRoofStructures({
     building: group, foundationHeight, totalHeight, roofZones,
   }, config);
+  // railings stop at anything standing on the walk
+  const standing = result.structureSolids ?? [];
+  delete result.structureSolids;
+  return { ...result, roofWalks: walks.map((walk) => roofWalkFacade(walk, standing)) };
+}
+
+/**
+ * A volume's widow's walk, if its roof has one: the flat top where the walk
+ * plane is the lowest of its roof planes, with its edges (where the roof
+ * slopes away).
+ */
+function zoneWalk(zone) {
+  const walkPlane = zone.planes.find((plane) => plane.tier === 'walk');
+  if (!walkPlane) {
+    return [];
+  }
+  const { bounds } = zone;
+  let region = [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]];
+  zone.planes.filter((plane) => plane !== walkPlane).forEach((plane) => {
+    region = clipPolygon(region, ([x, z]) => evalPlaneHeight(plane, x, z) - walkPlane.constantHeight);
+  });
+  if (region.length < 3) {
+    return [];
+  }
+  const onWall = ([x, z]) => [x - bounds.minX, bounds.maxX - x, z - bounds.minZ, bounds.maxZ - z].some((d) => Math.abs(d) < 1e-9);
+  const edges = region.map((point, i) => [point, region[(i + 1) % region.length]])
+    .filter(([a, b]) => Math.hypot(b[0] - a[0], b[1] - a[1]) > 1e-6 && !(onWall(a) && onWall(b) && (Math.abs(a[0] - b[0]) < 1e-9 || Math.abs(a[1] - b[1]) < 1e-9)));
+  return [{
+    id: `roof-walk-${zone.volumeId}`,
+    volumeIds: [zone.volumeId],
+    height: walkPlane.constantHeight,
+    y: zone.baseY + walkPlane.constantHeight,
+    pieces: [region],
+    edges,
+  }];
 }
 
 /**
@@ -260,22 +299,14 @@ function withRoofStructures(result, config) {
           ...(resolved.standing ? openSidePosts(resolved, [hostBody, ...others]) : []),
           ...supports.posts,
         ], [hostBody, ...others]),
-        // a structure rising through the roof stands its posts on the roof (a
-        // roofless one's railing posts are facade elements)
-        ...(resolved.through && resolved.roofType !== 'none'
+        // a structure rising through the roof stands its posts on the roof
+        ...(resolved.through
           ? clipOutside(openSidePosts(resolved, others, host.baseY), [hostSolid, ...others])
           : []),
       ], materials.wall],
       ['support', skirts.flatMap(([, triangles]) => triangles), structureMaterials.wall],
       ['foundation', clipOutside(supports.foundation, [hostSolid, ...others]), materials.foundation],
       ['eave-caps', interruptsHostEave(resolved, host) ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
-      // a roofless platform on a flat roof top (a widow's walk) is a deck
-      ['deck', resolved.through && resolved.roofType === 'none'
-        ? clipOutside(boxTriangles(
-          [resolved.bounds.minX, resolved.sillY, resolved.bounds.minZ],
-          [resolved.bounds.maxX, resolved.sillY + DECK_THICKNESS, resolved.bounds.maxZ]
-        ), others)
-        : [], materials.roof],
     ];
     parts.forEach(([part, triangles, material]) => {
       if (triangles.length) {
@@ -303,7 +334,7 @@ function withRoofStructures(result, config) {
     });
     builtSolids.push({ id: resolved.id, solid: volumeSolid(resolved, { floorY: resolved.sillY }) });
   });
-  return { ...result, roofStructures: results };
+  return { ...result, roofStructures: results, structureSolids: builtSolids.map((entry) => entry.solid) };
 }
 
 /**
@@ -667,9 +698,6 @@ function interruptHostEave(resolved, host, roofMeshes) {
  * walls and roof do not overlap.
  */
 function structureRoofTriangles(resolved, config) {
-  if (resolved.roofType === 'none') {
-    return [];
-  }
   const sides = structureWallSides(resolved.frame);
   const setup = structureEaveSetup(resolved, config);
   const { bounds } = resolved;
@@ -846,7 +874,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
       }
     }
     if (roofTypeForVolume === 'hip') {
-      Object.assign(roofConfig, withHipDeck(roofConfig, volume.id, config));
+      Object.assign(roofConfig, withHipWalk(roofConfig, volume.id, config));
     }
     if (isTwoSlope(roofTypeForVolume)) {
       const unsloped = unslopedSidesOf(adjacentSides.get(volume.id), volume);
@@ -1101,7 +1129,7 @@ function createRoofGeometry(footprint, config) {
     }
     if (bounds) {
       const shapedConfig = config.roofType === 'hip'
-        ? withHipDeck({ ...config, overhang: rectangleSetup.overhang, eaves: rectangleSetup.eaves }, rectangleVolumeId, config)
+        ? withHipWalk({ ...config, overhang: rectangleSetup.overhang, eaves: rectangleSetup.eaves }, rectangleVolumeId, config)
         : { ...config, overhang: rectangleSetup.overhang, eaves: rectangleSetup.eaves };
       const geometry = flatShaded(config.roofType === 'gable'
         ? createGableRoofGeometry(bounds, shapedConfig)
@@ -1119,7 +1147,11 @@ function createRoofGeometry(footprint, config) {
     if (config.roofType === 'hip' && config.volumes && config.volumes.length > 1 && straightSkeletonBuilder) {
       const topology = createStraightSkeletonHipGeometry(footprint, config);
       if (topology) {
-        return { geometry: topology.geometry, zones: skeletonHipZones(config.volumes, topology.faces, topology.pitchRatio) };
+        return {
+          geometry: topology.geometry,
+          zones: skeletonHipZones(config.volumes, topology),
+          walks: topology.walk ? [{ id: 'roof-walk-main', volumeIds: (config.volumes ?? []).map((volume) => volume.id), ...topology.walk }] : [],
+        };
       }
     }
     if (config.roofType === 'hip'
@@ -1153,31 +1185,52 @@ function createStraightSkeletonHipGeometry(footprint, config) {
   }
 
   const pitchRatio = (config.roofPitchRise ?? 6) / (config.roofPitchRun ?? 12);
+  const peak = Math.max(0, ...skeleton.vertices.map(([, , time]) => time * pitchRatio));
+  // a widow's walk cuts the whole roof flat at one height
+  const walkHeight = skeletonWalkHeight(config);
+  const cut = walkHeight !== undefined && walkHeight < peak - 1e-9 ? walkHeight : undefined;
   const positions = [];
+  const addPolygon = (polygon) => {
+    if (polygon.length < 3) {
+      return;
+    }
+    const triangles = THREE.ShapeUtils.triangulateShape(polygon.map(([x, , z]) => new THREE.Vector2(x, z)), []);
+    triangles.forEach((triangle) => triangle.forEach((index) => positions.push(...polygon[index])));
+  };
   // each skeleton face rises at the pitch from one footprint edge: the two of
   // its corners at height zero
   const faces = [];
+  const walkPieces = [];
+  const walkEdges = [];
 
-  skeleton.polygons.forEach((polygon) => {
-    const points = polygon.map((index) => {
+  skeleton.polygons.forEach((indices) => {
+    const polygon = indices.map((index) => {
       const [x, z, time] = skeleton.vertices[index];
-      return { x, z, height: time * pitchRatio };
+      return [x, time * pitchRatio, z];
     });
-    const base = points.filter((point) => point.height < 1e-9);
-    if (base.length === 2) {
-      faces.push({ edge: base.map((point) => [point.x, point.z]), polygon: points.map((point) => [point.x, point.height, point.z]) });
-    }
-    const triangles = THREE.ShapeUtils.triangulateShape(
-      points.map((point) => new THREE.Vector2(point.x, point.z)),
-      []
-    );
-    triangles.forEach(([first, second, third]) => {
-      [first, second, third].forEach((index) => {
-        const point = points[index];
-        positions.push(point.x, point.height, point.z);
+    const base = polygon.filter((point) => point[1] < 1e-9);
+    let below = polygon;
+    if (cut !== undefined) {
+      below = clipPolygon(polygon, (v) => cut - v[1]);
+      const above = clipPolygon(polygon, (v) => v[1] - cut).map(([x, , z]) => [x, cut, z]);
+      if (above.length >= 3) {
+        walkPieces.push(above);
+      }
+      // where this face meets the walk: its edge along the cut
+      below.forEach((point, i) => {
+        const next = below[(i + 1) % below.length];
+        if (Math.abs(point[1] - cut) < 1e-9 && Math.abs(next[1] - cut) < 1e-9
+          && Math.hypot(next[0] - point[0], next[2] - point[2]) > 1e-6) {
+          walkEdges.push([[point[0], point[2]], [next[0], next[2]]]);
+        }
       });
-    });
+    }
+    if (base.length === 2) {
+      faces.push({ edge: base.map((point) => [point[0], point[2]]), polygon: below });
+    }
+    addPolygon(below);
   });
+  walkPieces.forEach(addPolygon);
 
   if (positions.length === 0) {
     return null;
@@ -1185,7 +1238,23 @@ function createStraightSkeletonHipGeometry(footprint, config) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.computeVertexNormals();
-  return { geometry, faces, pitchRatio };
+  const walk = cut === undefined ? null : {
+    height: cut, pieces: walkPieces.map((piece) => piece.map(([x, , z]) => [x, z])), edges: walkEdges,
+  };
+  return { geometry, faces, pitchRatio, walk, walkFaces: walkPieces };
+}
+
+/**
+ * The widow's walk height of a continuous (straight-skeleton) hip: one flat
+ * top at one height across every volume, the building's, or failing that the
+ * lowest a volume sets.
+ */
+function skeletonWalkHeight(config) {
+  if (config.roofWalkHeight > 0) {
+    return config.roofWalkHeight;
+  }
+  const own = (config.volumes ?? []).map((volume) => config.volumeRoofShapes?.[volume.id]?.walkHeight).filter((height) => height > 0);
+  return own.length ? Math.min(...own) : undefined;
 }
 
 /**
@@ -1199,7 +1268,7 @@ function createStraightSkeletonHipGeometry(footprint, config) {
  * only meets the face it stands on, can use one; a porch, which replaces the
  * roof over its footprint, cannot.
  */
-function skeletonHipZones(volumes, faces, pitchRatio) {
+function skeletonHipZones(volumes, { faces, pitchRatio, walk, walkFaces }) {
   return (volumes ?? []).map((volume) => {
     const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
     const planes = [];
@@ -1214,11 +1283,15 @@ function skeletonHipZones(volumes, faces, pitchRatio) {
         faceRegions[side] = onSide.map(({ polygon }) => polygon.map(([x, , z]) => [x, z]));
       }
     });
+    if (walk) {
+      planes.push({ constantHeight: walk.height, tier: 'walk' });
+    }
     // the highest point of the roof over this volume
     const inside = [
       (v) => v[0] - bounds.minX, (v) => bounds.maxX - v[0], (v) => v[2] - bounds.minZ, (v) => bounds.maxZ - v[2],
     ];
-    const roofHeight = Math.max(0, ...faces.flatMap(({ polygon }) => inside.reduce((piece, distance) => clipPolygon(piece, distance), polygon).map((v) => v[1])));
+    const allFaces = [...faces.map(({ polygon }) => polygon), ...walkFaces];
+    const roofHeight = Math.max(0, ...allFaces.flatMap((polygon) => inside.reduce((piece, distance) => clipPolygon(piece, distance), polygon).map((v) => v[1])));
     return {
       volumeId: volume.id,
       roofType: 'hip',
@@ -1228,7 +1301,7 @@ function skeletonHipZones(volumes, faces, pitchRatio) {
       roofHeight,
       planes,
       faceRegions,
-      skeletonFaces: faces.map(({ polygon }) => polygon),
+      skeletonFaces: allFaces,
       slabThickness: 0,
       // the skeleton roof is built without eave trim
       overhang: {},
@@ -1311,7 +1384,7 @@ function createVolumeRoofAssembly(volumes, config) {
       connections: volumeConnections,
     };
     if (roofType === 'hip') {
-      Object.assign(roofConfig, withHipDeck(roofConfig, volume.id, config));
+      Object.assign(roofConfig, withHipWalk(roofConfig, volume.id, config));
     }
     if (isTwoSlope(roofType)) {
       const unsloped = unslopedSidesOf(adjacentSides.get(volume.id), volume);
@@ -2077,8 +2150,8 @@ function getRectangularBounds(footprint) {
 }
 
 const EAVE_CONFIG_KEYS = ['roofEaveDepth', 'roofRakeDepth', 'eaveSoffit', 'rakeSoffit', 'roofFasciaDepth', 'volumeEaves'];
-/** Building-wide roof shape settings: mansard and gambrel (see twoSlopeConfig), and a hip's flat deck (see hipDeckHeight). */
-const TWO_SLOPE_CONFIG_KEYS = ['roofBreakHeight', 'roofLowerPitchRise', 'roofUpperPitchRise', 'roofDeckHeight'];
+/** Building-wide roof shape settings: mansard and gambrel (see twoSlopeConfig), and a hip's widow's walk (see hipWalkHeight). */
+const TWO_SLOPE_CONFIG_KEYS = ['roofBreakHeight', 'roofLowerPitchRise', 'roofUpperPitchRise', 'roofWalkHeight'];
 
 /** The eave (and mansard/gambrel) settings of a config, to pass on to the roof builders. */
 function pickEaveConfig(config) {
@@ -2525,7 +2598,7 @@ function volumePlaneConfig(volume, config, adjacentSides) {
   if (isTwoSlope(roofType)) {
     planeConfig = withTwoSlope(planeConfig, volume.id, roofType, config, bounds, unslopedSidesOf(adjacentSides?.get(volume.id), bounds));
   } else if (roofType === 'hip') {
-    planeConfig = withHipDeck(planeConfig, volume.id, config);
+    planeConfig = withHipWalk(planeConfig, volume.id, config);
   }
   return { bounds, roofType, planeConfig };
 }
@@ -2560,19 +2633,23 @@ function minOfPlanesFaces(bounds, planes) {
   return triangles;
 }
 
-/** A hip's flat deck height, if it has one: the volume's own (`volumeRoofShapes[id].deckHeight`) or the building's (`roofDeckHeight`). */
-function hipDeckHeight(volumeId, config) {
-  const own = config.volumeRoofShapes?.[volumeId]?.deckHeight;
-  const deck = Number.isFinite(own) ? own : config.roofDeckHeight;
-  return deck > 0 ? deck : undefined;
+/**
+ * The height of a hip's widow's walk (the flat top that replaces its ridge),
+ * if it has one: the volume's own (`volumeRoofShapes[id].walkHeight`) or the
+ * building's (`roofWalkHeight`).
+ */
+function hipWalkHeight(volumeId, config) {
+  const own = config.volumeRoofShapes?.[volumeId]?.walkHeight;
+  const walk = Number.isFinite(own) ? own : config.roofWalkHeight;
+  return walk > 0 ? walk : undefined;
 }
 
-/** A hip roof config with its flat deck, if any: the roof stops at the deck. */
-function withHipDeck(roofConfig, volumeId, config) {
-  const deckHeight = hipDeckHeight(volumeId, config);
-  return deckHeight === undefined
+/** A hip roof config with its widow's walk, if any: the roof stops flat at the walk. */
+function withHipWalk(roofConfig, volumeId, config) {
+  const walkHeight = hipWalkHeight(volumeId, config);
+  return walkHeight === undefined
     ? roofConfig
-    : { ...roofConfig, deckHeight, roofHeight: Math.min(roofConfig.roofHeight, deckHeight) };
+    : { ...roofConfig, walkHeight, roofHeight: Math.min(roofConfig.roofHeight, walkHeight) };
 }
 
 /**
@@ -2693,8 +2770,8 @@ function createHipRoofGeometry(bounds, config) {
   const ov = overhangOf(config);
   const e = Math.min(ov.minX, ov.maxX, ov.minZ, ov.maxZ);
   const planes = computeVolumeEavePlanes(bounds, 'hip', config);
-  if (planes.some((plane) => plane.tier === 'deck')) {
-    // cut flat at a deck: the hip planes (carried past the walls) and the deck, face by face
+  if (planes.some((plane) => plane.tier === 'walk')) {
+    // cut flat at a widow's walk: the hip planes (carried past the walls) and the walk, face by face
     const outer = { minX: bounds.minX - e, maxX: bounds.maxX + e, minZ: bounds.minZ - e, maxZ: bounds.maxZ + e };
     const triangles = minOfPlanesFaces(outer, planes);
     if (config.eaves && e > 0) {

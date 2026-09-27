@@ -44,7 +44,6 @@ export const STRUCTURE_UI_PRESETS = Object.freeze([
     },
   },
   { key: 'cupola', label: 'Cupola', fields: { kind: 'cupola' } },
-  { key: 'widows-walk', label: 'Widow\'s walk', fields: { kind: 'widows-walk' } },
 ]);
 
 /**
@@ -93,7 +92,6 @@ const KIND_LABELS = {
   'recessed-porch': 'Recessed porch',
   porch: 'Porch',
   cupola: 'Cupola',
-  'widows-walk': 'Widow\'s walk',
 };
 
 const SIDE_LABELS = {

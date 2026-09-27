@@ -46,8 +46,6 @@
       "width": 9,
       "setback": -2.4,
       "mount": "join",
-      "fill": false,
-      "fillMargin": 0.3,
       "depth": 2.4,
       "wallHeight": 2.6,
       "baseHeight": "ground",

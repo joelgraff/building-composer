@@ -2,10 +2,18 @@
 // checks that each builds without errors. Run from anywhere:
 //   node data/examples/generate.mjs
 import { writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { normalizeFootprint } from '../../js/footprint.js';
 import { computeFacadeLayout } from '../../js/facade.js';
-import { createBuildingFromFootprint, roofHeightFromPitch } from '../../js/extrusion.js';
+import { createBuildingFromFootprint, roofHeightFromPitch, setStraightSkeletonBuilder } from '../../js/extrusion.js';
 import { normalizeRoofStructures } from '../../js/roof-structures.js';
+
+// the straight-skeleton hip over several volumes, as in the app (its browser build)
+globalThis.self ??= globalThis;
+globalThis.window ??= globalThis;
+const { SkeletonBuilder } = createRequire(import.meta.url)('../../node_modules/straight-skeleton/dist/index.js');
+await SkeletonBuilder.init();
+setStraightSkeletonBuilder(SkeletonBuilder);
 
 const rect = (w, d) => [[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]];
 
@@ -83,11 +91,17 @@ const examples = {
     })),
   },
   'widows-walk': {
-    note: 'A widow\'s walk: a hip roof cut flat at 1.6 m, with a deck filling the flat top less 0.3 m. Its railing (1 m, the structure\'s wall height) comes with facade elements.',
+    note: 'A widow\'s walk: a hip roof cut flat 1.6 m above the plate in place of its ridge. The flat top and its edges are facade surfaces for a deck and railings.',
     footprint: rect(14, 11),
-    config: { roofType: 'hip', roofPitchRise: 8, roofEaveDepth: 0.6, roofDeckHeight: 1.6 },
+    config: { roofType: 'hip', roofPitchRise: 8, roofEaveDepth: 0.6, roofWalkHeight: 1.6 },
+    structures: [],
+  },
+  'widows-walk-l': {
+    note: 'A widow\'s walk on an L-shaped house: its continuous hip is cut flat 1.4 m above the plate, leaving one L-shaped walk, with a belvedere standing on it.',
+    footprint: [[-8, -5], [8, -5], [8, 3], [0, 3], [0, 11], [-8, 11]],
+    config: { roofType: 'hip', roofPitchRise: 8, roofEaveDepth: 0.6, roofWalkHeight: 1.4 },
     structures: [
-      on('volume-0', { kind: 'widows-walk' }),
+      on('volume-1', { kind: 'cupola', width: 2.4, depth: 2.4, wallHeight: 2.2, openSides: ['front', 'back', 'left', 'right'] }),
     ],
   },
   cupola: {
@@ -151,7 +165,8 @@ for (const [name, example] of Object.entries(examples)) {
   });
   const issues = result.roofStructures.filter((entry) => entry.errors.length || entry.warnings.length)
     .map((entry) => `${entry.id}: ${[...entry.errors, ...entry.warnings].map((e) => e.code).join(', ')}`);
-  console.log(name.padEnd(20), layout.volumes.map((v) => v.id).join(','), issues.length ? issues.join('; ') : 'ok');
+  const walks = result.roofWalks.length ? ` (widow's walk: ${result.roofWalks.map((walk) => `${walk.railRuns.length} railing runs`).join(', ')})` : '';
+  console.log(name.padEnd(20), layout.volumes.map((v) => v.id).join(','), issues.length ? issues.join('; ') : 'ok', walks);
   if (result.roofStructures.some((entry) => entry.errors.length)) failed = true;
   const bld = {
     format: 'building-composer',

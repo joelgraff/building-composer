@@ -46,8 +46,6 @@
       "width": 4,
       "setback": "center",
       "mount": "through",
-      "fill": false,
-      "fillMargin": 0.3,
       "depth": 4,
       "wallHeight": 2.4,
       "baseHeight": null,

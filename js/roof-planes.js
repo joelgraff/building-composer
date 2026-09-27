@@ -61,10 +61,10 @@ export function computeVolumeEavePlanes(bounds, roofType, config) {
   if (roofType === 'hip') {
     const pitchRatio = (config.roofPitchRise ?? 0) / (config.roofPitchRun ?? 12);
     const planes = ['minX', 'maxX', 'minZ', 'maxZ'].map((side) => makeEavePlane(bounds, side, pitchRatio));
-    // a hip cut flat at a deck (the flat top a widow's walk stands on)
+    // a hip cut flat at a widow's walk (a flat top in place of the ridge)
     const naturalPeak = pitchRatio * Math.min(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) / 2;
-    if (config.deckHeight > 0 && config.deckHeight < naturalPeak - 1e-9) {
-      planes.push({ constantHeight: config.deckHeight, tier: 'deck' });
+    if (config.walkHeight > 0 && config.walkHeight < naturalPeak - 1e-9) {
+      planes.push({ constantHeight: config.walkHeight, tier: 'walk' });
     }
     return planes;
   }

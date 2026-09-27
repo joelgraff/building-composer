@@ -23,7 +23,7 @@ This plan is the execution guide for the MVP and follows the architecture in ARC
 
 ### In progress
 - Task 4: material assignment. Palette and story/panel selectors exist; solid finish panels render on rectangular footprints only. Roof structures take their own wall and roof materials.
-- Task 5: flat, gable, hip, shed, mansard, and gambrel roofs, and hips cut flat at a deck. Rectangular analytic meshes and one equal-pitch hip skeleton path work. Complex joins do not; mansards on L/U footprints are per-volume, not continuous. See [Complex roof structures](#complex-roof-structures).
+- Task 5: flat, gable, hip, shed, mansard, and gambrel roofs, and hips cut flat at a widow's walk (also on a continuous L/U hip). Rectangular analytic meshes and one equal-pitch hip skeleton path work. Complex joins do not; mansards on L/U footprints are per-volume, not continuous. See [Complex roof structures](#complex-roof-structures).
 - Task 9: automatic rectilinear volume decomposition and per-volume story, roof type, and ridge controls. Caps stay independent.
 - Task 10: roof-borne envelope modifiers (dormers, wall dormers, recessed porches, porches with supports and stacking, cupolas, widow's walks) are built and editable, with their walls and railings exposed as facade surfaces. The porch arrangements are provisional pending real buildings to model against. Bay windows and ground-level envelope modifiers beyond porches are not started. See [Roof-borne structures](#roof-borne-structures-dormers-raised-porches--plan).
 
@@ -415,7 +415,7 @@ Superseded approaches worth not repeating: recomputing only a height at the unmo
 
 Also in this slice: roof faces are flat-shaded (indexed builders shared vertices so normals smoothed across closure faces and shaded near-black); `clearModel` disposes nested groups; `.bld` files persist `volumeRoofConnections` and `volumeRoofShapes`.
 
-Known limits: hip and flat roofs do not act as the merging (lower/joining) roof; a hip neighbor's boundary is always at its eave, so only ridge-directed joins apply against it; non-footprint attached elements (dormers and porches) are now roof structures, built on the resolved zone descriptors (see [Roof-borne structures](#roof-borne-structures-dormers-raised-porches--plan)); widow's walks and cupolas are planned there (4d). Tests: `tests/roof_resolver.test.js`.
+Known limits: hip and flat roofs do not act as the merging (lower/joining) roof; a hip neighbor's boundary is always at its eave, so only ridge-directed joins apply against it; non-footprint attached elements (dormers and porches) are now roof structures, built on the resolved zone descriptors (see [Roof-borne structures](#roof-borne-structures-dormers-raised-porches--plan)); cupolas are built there (4d); widow's walks are a hip roof shape (see [Widow's walks as roof shape](#widows-walks-as-roof-shape)). Tests: `tests/roof_resolver.test.js`.
 
 ### Eaves (implemented)
 
@@ -447,7 +447,7 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
 ```js
 {
   id: 'structure-1',
-  kind: 'dormer' | 'wall-dormer' | 'recessed-porch' | 'porch' | 'cupola' | 'widows-walk',  // preset only; geometry is uniform
+  kind: 'dormer' | 'wall-dormer' | 'recessed-porch' | 'porch' | 'cupola',  // preset only; geometry is uniform
   hostVolumeId: 'volume-0',       // the volume it sits in or on ...
   hostStructureId: null,          // ... or another structure it stands on (a sleeping porch on a ground porch)
   hostSide: 'minZ',               // the side it faces out of
@@ -455,11 +455,9 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
   width: 2.4,
   setback: 0.9,       // front wall in from the host wall; 0 = flush; < 0 projects; 'center' = centered across the host
   depth: null,        // null = run back to the host ridge (the clip ends it)
-  wallHeight: 1.4,    // plate above the sill (a roofless platform's railing height)
+  wallHeight: 1.4,    // plate above the sill
   baseHeight: null,   // null = rises out of the roof; a number = floor above the host plate; 'ground' = at the foundation top
-  mount: 'join',      // 'join' a roof face (a dormer), or rise 'through' the roof (a cupola, a widow's walk)
-  fill: false,        // cover the host roof's flat top, less fillMargin (a widow's walk)
-  fillMargin: 0.3,
+  mount: 'join',      // 'join' a roof face (a dormer), or rise 'through' the roof (a cupola)
   inset: 0,           // front wall set back behind an open porch under the roof (a recessed porch)
   openSides: [],      // walls left open: front, back, left, right
   support: 'auto',    // when projecting: deck | posts | porch | brackets | enclosed | none
@@ -485,13 +483,13 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
 | Upper porch | `setback < 0`, `baseHeight` a story below the plate, a support (posts, brackets, an enclosed base) |
 | Sleeping porch | a flat-roofed ground porch, and an enclosed porch standing on it (`hostStructureId`) |
 | Cupola, belvedere, rooftop pavilion | `mount: 'through'`, `setback: 'center'` |
-| Widow's walk | `mount: 'through'`, `roofType: 'none'`, `fill` on a flat roof top |
+| Widow's walk | not a structure: a hip roof's flat top (`roofWalkHeight`) |
 
 ### Validation (`resolveRoofStructure` / `validateRoofStructures`)
 
 Each problem is an error with a code and a message, shown in the editor and the status line:
 
-- The host: `host-missing` (no such volume or structure, no analytic roof, or a circular stack) and `host-inexact` (a merged roof that isn't a min of planes, or a porch or fill on a straight-skeleton hip).
+- The host: `host-missing` (no such volume or structure, no analytic roof, or a circular stack) and `host-inexact` (a merged roof that isn't a min of planes, or a porch on a straight-skeleton hip).
 - Dimensions and placement: `invalid-dimensions`, `outside-host`, `outside-face`, `depth-required`, and `needs-base` (projecting past the wall needs a base).
 - Dormers only (joining one face, no base):
   - a dormer faces down a slope: on a side that isn't one (a gable end, after the ridge turned) it turns to the slope at the same end, a quarter turn round (`side-turned` warning). `side-not-sloped` remains for a side with no slope either way (a shed's high side and the rake beside it);
@@ -727,7 +725,7 @@ Each problem is an error with a code and a message, shown in the editor and the 
      - edge roles and `.bld` persistence.
    - Mutation check: removing the trim fails four tests.
    - Examples: `second-empire` (with dormers below the curb) and `gambrel`.
-4f. **Widow's walks.** Complete. A widow's walk sits on a flat roof top; its railing, when present, is a facade element (Phase 5).
+4f. **Widow's walks.** Complete, then revised: see [Widow's walks as roof shape](#widows-walks-as-roof-shape), which replaces the structure described here. As first built, a widow's walk sat on a flat roof top; its railing, when present, is a facade element (Phase 5).
    - A hip roof may be cut flat at `deckHeight` (per volume in `volumeRoofShapes`, or the building's `roofDeckHeight`). This adds a level deck plane (`tier: 'deck'`). The decked hip is built face by face with its usual hip trim; a deck above the pitch's natural peak is ignored.
    - `roofType: 'none'` gives a structure no roof. A through-mounted roofless structure is a platform: a thin deck (`DECK_THICKNESS`) on the roof, no roof, headers, or posts. Its wall height is kept as the railing height for Phase 5.
    - `fill: true` sizes and places a structure over the host roof's largest level region (a flat roof, a hip's deck, a flat-topped mansard), less `fillMargin`.
@@ -794,6 +792,17 @@ Each problem is an error with a code and a message, shown in the editor and the 
      - saving stacked porches;
      - a GLB with 27 meshes and no cue lines.
 7. **Docs.** Complete. Each phase updated the docs as it landed: ARCHITECTURE.md (§2 roof structures and two-slope roofs, §3 data model, §4 structure surfaces, §5 modifier examples, material precedence, and selected-element editing), the README features and project tree, `data/examples/README.md`, and this plan. A final pass brought the plan's status summary, data model, cases table, validation list, and next steps up to date.
+
+### Widow's walks as roof shape
+
+A widow's walk is a flat section of roof in place of the ridge, not a platform standing on the roof. A deck on it and its railings are facade modifiers. This replaces the 4f model (a hip "deck" plus a `widows-walk` structure on it):
+
+- The hip's `deckHeight`/`roofDeckHeight` became `walkHeight` (per volume in `volumeRoofShapes`) and `roofWalkHeight`, with the plane `tier: 'walk'`. Older files load with the old names renamed. The panel shows "Widow's walk height" and the size of the walk it makes.
+- A continuous (straight-skeleton) hip over an L or U is now cut too: each skeleton face is clipped at the walk height and the parts above become the flat top, one walk of the footprint's shape inset by the height over the pitch (`createStraightSkeletonHipGeometry`). It uses the building's walk height, or failing that the lowest a volume sets. Its zone descriptors get the walk plane, so dormers and cupolas stand on it as on any hip.
+- `roofWalks` in the build result and layout (`roofWalkFacade`): each walk's `id` (`roof-walk-<volume>`, or `roof-walk-main` on a continuous hip), `volumeIds`, elevation `y`, flat top in plan (`pieces`), and railing runs (`rail-run-<walk>-<n>`) along each edge where the roof slopes away, at `RAILING_HEIGHT`, clipped clear of structures standing on it (a belvedere). The walk's railing runs join `railRuns`.
+- Removed: the `widows-walk` structure kind and preset, `fill`/`fillMargin` (only the walk used them), `roofType: 'none'` platforms, `DECK_THICKNESS`, the `deck` structure part, and the `not-level` error. A saved `widows-walk` structure is dropped on load with a warning.
+- Tests: the walk surface and its four railing runs on a rectangle, railings broken by a belvedere, no walk on a plain hip or above the peak, loading an older file, and the L-shaped walk on a continuous hip (area, railing length, roof flat top, a cupola on it).
+- Examples: `widows-walk` (now just the roof) and `widows-walk-l`. The example generator loads the skeleton library, as the app does.
 
 ### Review fixes
 

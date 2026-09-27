@@ -4,7 +4,7 @@ import {
   computeFacadeLayout, withStructureFacades, serializeBuildingState,
 } from '../js/facade.js';
 import { createBuildingFromFootprint } from '../js/extrusion.js';
-import { normalizeRoofStructures, DECK_THICKNESS } from '../js/roof-structures.js';
+import { normalizeRoofStructures } from '../js/roof-structures.js';
 import { MATERIAL_PALETTE } from '../js/materials.js';
 
 const RECT = [[-10, -5], [10, -5], [10, 5], [-10, 5]];
@@ -116,18 +116,6 @@ describe('roof structure facade surfaces', () => {
     assert.equal(base.storyId, 'story-b-base');
     near(base.area, 3.6 * (PLATE + 3 - 3 - 0.6), 'from the foundation top to the floor');
     assert.deepEqual(layout.structureStories.map((story) => story.id), ['story-b-1', 'story-b-base']);
-  });
-
-  it('a widow\'s walk is four railing runs around its deck, at its railing height', () => {
-    const { layout } = build([{ id: 'ww', kind: 'widows-walk', hostVolumeId: 'volume-0', hostSide: 'minZ' }], { roofType: 'hip', roofDeckHeight: 1.5 });
-    assert.equal(layout.structureWallRuns.length, 0);
-    assert.equal(layout.railRuns.length, 4);
-    layout.railRuns.forEach((rail) => {
-      near(rail.start[1], PLATE + 1.5 + DECK_THICKNESS, 'on the deck');
-      near(rail.height, 1);
-    });
-    const [story] = layout.structureStories;
-    near(story.maxY - story.minY, DECK_THICKNESS + 1, 'deck and railing');
   });
 
   it('a cupola\'s walls run down to the roof, below its sill at the ridge', () => {

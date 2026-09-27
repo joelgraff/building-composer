@@ -6,7 +6,7 @@ import {
   computeFacadeLayout, classifyEdgeRole, serializeBuildingState, deserializeBuildingState,
 } from '../js/facade.js';
 import { createBuildingFromFootprint, computeVolumeEavePlanes, evalZoneHeight } from '../js/extrusion.js';
-import { normalizeRoofStructures, normalizeRoofStructure, DECK_THICKNESS } from '../js/roof-structures.js';
+import { normalizeRoofStructures, normalizeRoofStructure } from '../js/roof-structures.js';
 import { meshTriangles, totalArea, uncoveredEdges } from './helpers/mesh.js';
 
 const RECT = [[-10, -5], [10, -5], [10, 5], [-10, 5]];
@@ -227,12 +227,12 @@ describe('two-slope roofs with structures, roles, and persistence', () => {
   });
 });
 
-describe('hip roofs cut flat at a deck', () => {
-  it('stop at the deck height, with a level top inset by the deck height over the pitch', () => {
-    const result = build(RECT, { roofType: 'hip', roofDeckHeight: 1.5 });
+describe('hip roofs cut flat at a widow\'s walk', () => {
+  it('stop at the walk height, with a level top inset by the walk height over the pitch', () => {
+    const result = build(RECT, { roofType: 'hip', roofWalkHeight: 1.5 });
     const [zone] = result.roofZones;
     near(zone.roofHeight, 1.5);
-    assert.ok(zone.planes.some((plane) => plane.tier === 'deck'));
+    assert.ok(zone.planes.some((plane) => plane.tier === 'walk'));
     const roof = trianglesOf(result.building, isRoof);
     const top = roof.filter((tri) => tri.every((v) => Math.abs(v[1] - (PLATE + 1.5)) < 1e-5));
     // 6:12 reaches 1.5 m three meters in from each wall
@@ -242,66 +242,72 @@ describe('hip roofs cut flat at a deck', () => {
       const expected = zone.baseY + evalZoneHeight(zone.planes, x, z);
       assert.ok(surfaceHeightsAt(roof, x, z).some((h) => Math.abs(h - expected) < 1e-4), `surface at (${x}, ${z})`);
     });
-    assertWatertight(result, 'decked hip');
+    assertWatertight(result, 'hip with a widow\'s walk');
   });
 
-  it('take a per-volume deck over the building one, and ignore a deck above the natural peak', () => {
-    near(build(RECT, { roofType: 'hip', roofDeckHeight: 1.5, volumeRoofShapes: { 'volume-0': { deckHeight: 1 } } }).roofZones[0].roofHeight, 1);
-    const high = build(RECT, { roofType: 'hip', roofHeight: 2.5, roofDeckHeight: 9 }).roofZones[0];
-    assert.equal(high.planes.some((plane) => plane.tier === 'deck'), false);
+  it('take a per-volume walk over the building one, and ignore a walk above the natural peak', () => {
+    near(build(RECT, { roofType: 'hip', roofWalkHeight: 1.5, volumeRoofShapes: { 'volume-0': { walkHeight: 1 } } }).roofZones[0].roofHeight, 1);
+    const high = build(RECT, { roofType: 'hip', roofHeight: 2.5, roofWalkHeight: 9 }).roofZones[0];
+    assert.equal(high.planes.some((plane) => plane.tier === 'walk'), false);
     near(high.roofHeight, 2.5);
   });
 });
 
-describe('widow\'s walks', () => {
-  const walk = (fields = {}, config = {}) => build(RECT, {
-    roofType: 'hip', roofHeight: 2.5, roofDeckHeight: 1.5, ...config, roofStructures: [{ kind: 'widows-walk', hostVolumeId: 'volume-0', hostSide: 'minZ', ...fields }],
-  });
-  const deckOf = (result) => trianglesOf(result.building, (data) => data.structurePart === 'deck');
+describe('widow\'s walk surfaces', () => {
+  const railLength = (walk) => walk.railRuns.reduce((sum, rail) => sum + Math.hypot(rail.end[0] - rail.start[0], rail.end[2] - rail.start[2]), 0);
 
-  it('the preset is a roofless deck through the roof, filling the flat top', () => {
-    const record = normalizeRoofStructure({ kind: 'widows-walk', hostVolumeId: 'volume-0', hostSide: 'minZ' });
-    assert.equal(record.roofType, 'none');
-    assert.equal(record.mount, 'through');
-    assert.equal(record.fill, true);
-    assert.deepEqual(record.openSides, ['front', 'back', 'left', 'right']);
-  });
-
-  it('fills a hip\'s deck less its margin, standing on it', () => {
-    const result = walk();
-    const [{ resolved, errors }] = result.roofStructures;
-    assert.deepEqual(errors, []);
-    // the deck spans x within +-7 and z within +-2; less 0.3 m
-    ['minX', 'maxX', 'minZ', 'maxZ'].forEach((side) => near(Math.abs(resolved.bounds[side]), side.endsWith('X') ? 6.7 : 1.7, side));
-    near(resolved.sillY, PLATE + 1.5);
-    near(resolved.plateY, PLATE + 1.5 + 1, 'wall height is the railing height');
-    const deck = deckOf(result);
-    const ys = deck.flat().map((v) => v[1]);
-    near(Math.min(...ys), PLATE + 1.5);
-    near(Math.max(...ys), PLATE + 1.5 + DECK_THICKNESS);
-    ['walls', 'roof', 'posts'].forEach((part) => {
-      assert.equal(trianglesOf(result.building, (data) => data.structurePart === part).length, 0, `no ${part}`);
+  it('the flat top is a surface for a deck, with railing runs along its edges', () => {
+    const { roofWalks } = build(RECT, { roofType: 'hip', roofWalkHeight: 1.5 });
+    assert.equal(roofWalks.length, 1);
+    const [walk] = roofWalks;
+    assert.equal(walk.id, 'roof-walk-volume-0');
+    assert.deepEqual(walk.volumeIds, ['volume-0']);
+    near(walk.y, PLATE + 1.5);
+    const xs = walk.pieces.flat().map(([x]) => x);
+    const zs = walk.pieces.flat().map(([, z]) => z);
+    near(Math.max(...xs) - Math.min(...xs), 14);
+    near(Math.max(...zs) - Math.min(...zs), 4);
+    assert.equal(walk.railRuns.length, 4);
+    near(railLength(walk), 2 * (14 + 4), 'all the way round');
+    walk.railRuns.forEach((rail) => {
+      assert.equal(rail.roofWalkId, walk.id);
+      near(rail.start[1], PLATE + 1.5);
+      near(rail.end[1], PLATE + 1.5);
+      near(rail.height, 1);
     });
-    assertWatertight(result, 'widow\'s walk');
   });
 
-  it('fills a flat-topped mansard and a flat roof too', () => {
-    const mansard = walk({}, { roofType: 'mansard', roofUpperPitchRise: 0 });
-    assert.deepEqual(mansard.roofStructures[0].errors, []);
-    near(mansard.roofStructures[0].resolved.sillY, PLATE + 2.4);
-    const flat = walk({}, { roofType: 'flat' });
-    near(flat.roofStructures[0].resolved.bounds.maxX, 10 - 0.3);
+  it('railings stop at a belvedere standing on the walk', () => {
+    const { roofWalks, roofStructures } = build(RECT, {
+      roofType: 'hip', roofWalkHeight: 1.5,
+      roofStructures: [{ id: 'b', kind: 'cupola', hostVolumeId: 'volume-0', hostSide: 'minZ', width: 3, depth: 5, wallHeight: 2 }],
+    });
+    assert.deepEqual(roofStructures[0].errors, []);
+    const [walk] = roofWalks;
+    near(railLength(walk), 2 * (14 + 4) - 2 * 3, 'the front and back edges broken by its width');
+    assert.equal(walk.railRuns.length, 6);
+    assert.equal(new Set(walk.railRuns.map((rail) => rail.id)).size, 6);
   });
 
-  it('can be sized by hand, and only stands on the level part', () => {
-    assert.deepEqual(walk({ fill: false, width: 4, depth: 2 }).roofStructures[0].errors, []);
-    assert.deepEqual(walk({ fill: false, width: 4, depth: 5 }).roofStructures[0].errors.map((e) => e.code), ['not-level'], 'runs onto the slopes');
-    assert.deepEqual(walk({}, { roofDeckHeight: undefined }).roofStructures[0].errors.map((e) => e.code), ['not-level'], 'a plain hip');
-    assert.deepEqual(walk({}, { roofType: 'gable' }).roofStructures[0].errors.map((e) => e.code), ['not-level'], 'a gable');
+  it('there is none on a plain hip, or one cut above its peak', () => {
+    assert.deepEqual(build(RECT, { roofType: 'hip' }).roofWalks, []);
+    assert.deepEqual(build(RECT, { roofType: 'hip', roofHeight: 2.5, roofWalkHeight: 9 }).roofWalks, []);
+    assert.deepEqual(build(RECT, { roofType: 'gable', roofWalkHeight: 1.5 }).roofWalks, []);
   });
 
-  it('leaves the roof under it whole', () => {
-    const without = trianglesOf(build(RECT, { roofType: 'hip', roofDeckHeight: 1.5 }).building, isRoof).length;
-    assert.equal(trianglesOf(walk().building, isRoof).length, without);
+  it('a widow\'s walk is no longer a roof structure; older files load as the hip\'s flat top', () => {
+    assert.equal(normalizeRoofStructure({ kind: 'widows-walk', hostVolumeId: 'volume-0', hostSide: 'minZ' }), null);
+    const { state, warnings } = deserializeBuildingState({
+      footprint: RECT,
+      roofType: 'hip',
+      roofDeckHeight: 1.5,
+      volumeRoofShapes: { 'volume-0': { deckHeight: 1.2 } },
+      roofStructures: [{ id: 'ww', kind: 'widows-walk', hostVolumeId: 'volume-0', hostSide: 'minZ' }, { id: 'd', hostVolumeId: 'volume-0', hostSide: 'minZ' }],
+    });
+    assert.equal(state.roofWalkHeight, 1.5);
+    assert.deepEqual(state.volumeRoofShapes, { 'volume-0': { walkHeight: 1.2 } });
+    assert.deepEqual(state.roofStructures.map((structure) => structure.id), ['d']);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /widow's walk/);
   });
 });

@@ -1,30 +1,38 @@
 {
   "format": "building-composer",
   "version": 1,
-  "note": "An Italianate belvedere: a windowed lookout at the center of a low hip roof, with a low hip roof of its own.",
+  "note": "A widow's walk on an L-shaped house: its continuous hip is cut flat 1.4 m above the plate, leaving one L-shaped walk, with a belvedere standing on it.",
   "footprint": [
     [
-      -6,
-      -6
+      -6.666666666666667,
+      -6.666666666666666
     ],
     [
-      6,
-      -6
+      9.333333333333334,
+      -6.666666666666666
     ],
     [
-      6,
-      6
+      9.333333333333334,
+      1.3333333333333335
     ],
     [
-      -6,
-      6
+      1.3333333333333333,
+      1.3333333333333335
+    ],
+    [
+      1.3333333333333333,
+      9.333333333333334
+    ],
+    [
+      -6.666666666666667,
+      9.333333333333334
     ]
   ],
   "storyCount": 2,
   "storyHeight": 3.2,
   "roofType": "hip",
   "roofDirection": "z-min",
-  "roofPitchRise": 4,
+  "roofPitchRise": 8,
   "roofPitchRun": 12,
   "roofHeightMode": "slope",
   "roofEaveDepth": 0.6,
@@ -33,35 +41,36 @@
   "eaveSoffit": "flat",
   "rakeSoffit": "sloped",
   "wallMaterial": "wood",
-  "roofHeight": 2,
+  "roofWalkHeight": 1.4,
+  "roofHeight": 2.6666666666666665,
   "volumeStoryOverrides": {},
   "roofStructures": [
     {
       "id": "structure-1",
       "kind": "cupola",
-      "hostVolumeId": "volume-0",
+      "hostVolumeId": "volume-1",
       "hostStructureId": null,
       "hostSide": "maxZ",
       "offset": 0,
-      "width": 3.2,
+      "width": 2.4,
       "setback": "center",
       "mount": "through",
-      "depth": 3.2,
-      "wallHeight": 1.8,
+      "depth": 2.4,
+      "wallHeight": 2.2,
       "baseHeight": null,
       "support": "auto",
-      "openSides": [],
+      "openSides": [
+        "front",
+        "left",
+        "right",
+        "back"
+      ],
       "inset": 0,
       "roofType": "hip",
       "ridge": "perpendicular",
-      "roofShape": {
-        "mode": "slope",
-        "pitchRise": 4
-      },
+      "roofShape": null,
       "join": "auto",
-      "eaves": {
-        "eaveDepth": 0.45
-      },
+      "eaves": {},
       "materials": {}
     }
   ]
