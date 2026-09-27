@@ -23,7 +23,7 @@ const box = (x0, z0, x1, z1) => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
 const defaults = {
   storyCount: 2, storyHeight: 2.9, roofType: 'gable', roofDirection: 'z-min', roofPitchRise: 8, roofPitchRun: 12,
   roofHeightMode: 'slope', roofEaveDepth: 0.35, roofRakeDepth: 0.25, roofFasciaDepth: 0.1524, eaveSoffit: 'flat', rakeSoffit: 'sloped',
-  wallMaterial: 'wood', volumeSplit: 'auto',
+  wallMaterial: 'wood', volumeSplit: 'auto', foundationDepth: 0.7,
 };
 
 /**
@@ -42,7 +42,7 @@ const houses = {
       storyHeight: ft(12), roofType: 'hip', roofPitchRise: 4, roofEaveDepth: 0.75, roofRakeDepth: 0.75, wallMaterial: 'brick',
     },
     volumes: [
-      { at: [-2, -8], storyCount: 1, roofType: 'shed', ridge: 'z-max' },
+      { at: [-2, -8], storyCount: 1, storyHeight: ft(8.5), roofType: 'shed', ridge: 'z-max' },
     ],
     structures: [
       { at: [0, 0], kind: 'cupola', width: 2.4, depth: 2.4, wallHeight: 1.5, roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 4 } },
@@ -57,7 +57,6 @@ const houses = {
     ],
     gaps: [
       'The side bay is canted (octagonal) on the real houses; structures are rectangles, so it is a square box bay.',
-      'The rear wing\'s own lower story height (8-9 ft against the main block\'s 12 ft) cannot be set: story height is building-wide.',
       'The entry porch\'s flat roof usually carries a balustrade: a railing on a roof edge, not yet a facade element.',
       'Paired brackets, tall arched windows, and hood molds are facade modifiers (not built yet).',
     ],
@@ -215,6 +214,10 @@ const houses = {
     config: {
       storyCount: 1, storyHeight: 2.7, roofType: 'hip', roofPitchRise: 4, roofEaveDepth: 0.6, roofRakeDepth: 0.6,
     },
+    volumes: [
+      // the garage on a slab at grade, its walls taller so its plate stays level with the house
+      { at: [5, 12], foundation: 0, storyHeight: 2.7 + 0.7 },
+    ],
     structures: [
       {
         // a recessed entry in the ell, beside the garage wing, under the main roof
@@ -224,7 +227,6 @@ const houses = {
     ],
     gaps: [
       'The continuous (straight-skeleton) hip has no eave overhang or fascia, so the low, deep eaves that define a ranch are missing.',
-      'A garage has a lower floor (at grade) than the house; floor levels are building-wide.',
     ],
   },
 };
@@ -246,8 +248,10 @@ for (const [name, house] of Object.entries(houses)) {
   const volumeRoofTypes = {};
   const volumeRoofConnections = {};
   const volumeKneeWalls = {};
+  const volumeStoryHeights = {};
+  const volumeFoundationHeights = {};
   (house.volumes ?? []).forEach(({
-    at, storyCount, kneeWall, roofType, ridge, connection,
+    at, storyCount, storyHeight, foundation, kneeWall, roofType, ridge, connection,
   }) => {
     const id = volumeAt(at);
     if (!id) {
@@ -258,13 +262,15 @@ for (const [name, house] of Object.entries(houses)) {
     if (ridge) volumeRidgeDirections[id] = ridge;
     if (connection) volumeRoofConnections[id] = connection;
     if (kneeWall !== undefined) volumeKneeWalls[id] = kneeWall;
+    if (storyHeight !== undefined) volumeStoryHeights[id] = storyHeight;
+    if (foundation !== undefined) volumeFoundationHeights[id] = foundation;
   });
   const roofStructures = normalizeRoofStructures((house.structures ?? []).map(({ at, ...fields }) => ({
     hostSide: 'maxZ', ...fields, hostVolumeId: volumeAt(at),
   })));
   const roofHeight = roofHeightFromPitch(norm, cfg.roofDirection, cfg.roofPitchRise, 12, layout.volumes);
   const full = {
-    ...cfg, roofHeight, volumeStoryOverrides, volumeRidgeDirections, volumeRoofTypes, volumeRoofConnections, volumeKneeWalls,
+    ...cfg, roofHeight, volumeStoryOverrides, volumeRidgeDirections, volumeRoofTypes, volumeRoofConnections, volumeKneeWalls, volumeStoryHeights, volumeFoundationHeights,
   };
   const result = createBuildingFromFootprint(norm, {
     ...full, volumes: layout.volumes, roofZones: layout.roofZones, foundationDepth: 0.7, roofStructures,

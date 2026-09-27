@@ -2,7 +2,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import { validateFootprint, normalizeFootprint, computeFootprintMetrics } from './footprint.js';
 import {
-  createBuildingFromFootprint, volumeWallHeight, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS,
+  createBuildingFromFootprint, volumeWallHeight, volumeFoundationHeight, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS,
 } from './extrusion.js';
 import { normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS } from './roof-structures.js';
 import { STRUCTURE_UI_PRESETS, newRoofStructure, structureLabel } from './structure-ui.js';
@@ -25,6 +25,7 @@ const unitSelect = document.getElementById('unit-select');
 const storyCountInput = document.getElementById('story-count');
 const storyHeightInput = document.getElementById('story-height');
 const kneeWallInput = document.getElementById('knee-wall-height');
+const foundationInput = document.getElementById('foundation-height');
 const panelsPerRunInput = document.getElementById('panels-per-run');
 const roofTypeSelect = document.getElementById('roof-type');
 const roofDirectionSelect = document.getElementById('roof-direction');
@@ -182,6 +183,10 @@ let modelConfig = {
   // a half story's knee wall, for the building (undefined for none) and by volume
   kneeWallHeight: undefined,
   volumeKneeWalls: {},
+  // the floor above grade, for the building and by volume, and story height by volume
+  foundationDepth: 0.7,
+  volumeFoundationHeights: {},
+  volumeStoryHeights: {},
   volumeRidgeDirections: {},
   volumeRoofTypes: {},
   volumeRoofConnections: {},
@@ -222,6 +227,7 @@ function syncUnitLabels() {
 
 function syncLengthInputs() {
   storyHeightInput.value = (modelConfig.storyHeight * unitFactor()).toFixed(1);
+  foundationInput.value = ((modelConfig.foundationDepth ?? 0.7) * unitFactor()).toFixed(1);
   kneeWallInput.value = modelConfig.kneeWallHeight > 0 ? (modelConfig.kneeWallHeight * unitFactor()).toFixed(1) : '';
   roofHeightInput.value = (modelConfig.roofHeight * unitFactor()).toFixed(1);
   roofEaveDepthInput.value = (modelConfig.roofEaveDepth * unitFactor()).toFixed(1);
@@ -522,16 +528,20 @@ function renderVolumeControls(layout) {
   const width = formatLength(Math.min(volume.maxX - volume.minX, volume.maxZ - volume.minZ));
   const length = formatLength(Math.max(volume.maxX - volume.minX, volume.maxZ - volume.minZ));
   const currentValue = modelConfig.volumeStoryOverrides[volume.id] ?? modelConfig.storyCount;
-  const knee = modelConfig.volumeKneeWalls[volume.id];
+  // lengths this volume can set for itself, each empty for the building's
+  const lengthField = (key, label, own, fallback, id) => `
+    <div class="field">
+      <label for="${volume.id}-${id}">${label} (${unitLabel()}; empty for the building's)</label>
+      <input type="number" min="0" max="20" step="0.1" value="${Number.isFinite(own) ? (own * unitFactor()).toFixed(1) : ''}" placeholder="${Number.isFinite(fallback) ? (fallback * unitFactor()).toFixed(1) : 'none'}" data-volume-length="${key}" data-volume="${volume.id}" id="${volume.id}-${id}" />
+    </div>`;
   volumeControlsBox.innerHTML = `
     <div class="field">
       <label for="${volume.id}-stories">${volume.id.replace('-', ' ')} (${width} × ${length})</label>
       <input type="number" min="1" max="12" step="1" value="${currentValue}" data-volume-id="${volume.id}" id="${volume.id}-stories" />
     </div>
-    <div class="field">
-      <label for="${volume.id}-knee">Half story above: knee wall (${unitLabel()}; empty for the building's)</label>
-      <input type="number" min="0" max="10" step="0.1" value="${Number.isFinite(knee) ? (knee * unitFactor()).toFixed(1) : ''}" placeholder="${Number.isFinite(modelConfig.kneeWallHeight) ? (modelConfig.kneeWallHeight * unitFactor()).toFixed(1) : 'none'}" data-volume-knee="${volume.id}" id="${volume.id}-knee" />
-    </div>
+    ${lengthField('volumeStoryHeights', 'Story height', modelConfig.volumeStoryHeights[volume.id], modelConfig.storyHeight, 'story-height')}
+    ${lengthField('volumeKneeWalls', 'Half story above: knee wall', modelConfig.volumeKneeWalls[volume.id], modelConfig.kneeWallHeight, 'knee')}
+    ${lengthField('volumeFoundationHeights', 'Floor above grade (foundation)', modelConfig.volumeFoundationHeights[volume.id], modelConfig.foundationDepth ?? 0.7, 'foundation')}
   `;
 }
 
@@ -720,6 +730,8 @@ async function loadFootprint(footprintData, preserveView = true) {
     volumeStoryOverrides: modelConfig.volumeStoryOverrides,
     kneeWallHeight: modelConfig.kneeWallHeight,
     volumeKneeWalls: modelConfig.volumeKneeWalls,
+    volumeFoundationHeights: modelConfig.volumeFoundationHeights,
+    volumeStoryHeights: modelConfig.volumeStoryHeights,
     volumeRidgeDirections: modelConfig.volumeRidgeDirections,
     volumeRoofTypes: modelConfig.volumeRoofTypes,
     volumeRoofConnections: modelConfig.volumeRoofConnections,
@@ -735,7 +747,7 @@ async function loadFootprint(footprintData, preserveView = true) {
     roofLowerPitchRise: modelConfig.roofLowerPitchRise,
     roofUpperPitchRise: modelConfig.roofUpperPitchRise,
     roofWalkHeight: modelConfig.roofWalkHeight,
-    foundationDepth: 0.7,
+    foundationDepth: modelConfig.foundationDepth ?? 0.7,
     roofOverhang: 0.35,
   });
   const unbuilt = roofStructures.filter((entry) => entry.errors.length);
@@ -799,6 +811,8 @@ async function loadSampleFootprint() {
   const requestId = ++footprintLoadRequest;
   modelConfig.volumeStoryOverrides = {};
   modelConfig.volumeKneeWalls = {};
+  modelConfig.volumeFoundationHeights = {};
+  modelConfig.volumeStoryHeights = {};
   modelConfig.volumeRidgeDirections = {};
   modelConfig.volumeRoofTypes = {};
   modelConfig.volumeRoofConnections = {};
@@ -834,7 +848,7 @@ function renderSelectedVolumeHighlight(layout, foundationHeight) {
 }
 
 function renderVolumeCue(volume, foundationHeight, color, opacity, parent) {
-  const height = volumeWallHeight(volume.id, modelConfig) + foundationHeight;
+  const height = volumeWallHeight(volume.id, modelConfig) + volumeFoundationHeight(volume.id, modelConfig);
   const width = volume.maxX - volume.minX;
   const depth = volume.maxZ - volume.minZ;
   const centerX = (volume.minX + volume.maxX) / 2;
@@ -863,7 +877,7 @@ function renderVolumeCue(volume, foundationHeight, color, opacity, parent) {
 
 function addVolumePickTargets(layout, foundationHeight) {
   pickTargets = layout.volumes.map((volume) => {
-    const height = volumeWallHeight(volume.id, modelConfig) + foundationHeight;
+    const height = volumeWallHeight(volume.id, modelConfig) + volumeFoundationHeight(volume.id, modelConfig);
     const target = new THREE.Mesh(
       new THREE.BoxGeometry(volume.maxX - volume.minX, height, volume.maxZ - volume.minZ),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
@@ -939,6 +953,8 @@ function handleFileInput(event) {
   }
   modelConfig.volumeStoryOverrides = {};
   modelConfig.volumeKneeWalls = {};
+  modelConfig.volumeFoundationHeights = {};
+  modelConfig.volumeStoryHeights = {};
   modelConfig.volumeRidgeDirections = {};
   modelConfig.volumeRoofTypes = {};
   modelConfig.volumeRoofConnections = {};
@@ -1033,6 +1049,13 @@ storyCountInput.addEventListener('input', () => {
   }
 });
 
+foundationInput.addEventListener('change', () => {
+  modelConfig.foundationDepth = Math.max(0, Number(foundationInput.value) || 0) / unitFactor();
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
+
 kneeWallInput.addEventListener('change', () => {
   const value = Number(kneeWallInput.value);
   modelConfig.kneeWallHeight = kneeWallInput.value === '' || !(value > 0) ? undefined : value / unitFactor();
@@ -1069,7 +1092,7 @@ roofTypeSelect.addEventListener('change', () => {
 volumeSplitSelect.addEventListener('change', () => {
   modelConfig.volumeSplit = volumeSplitSelect.value;
   // volumes are renumbered, so settings kept by volume no longer apply
-  const volumeKeys = ['volumeStoryOverrides', 'volumeKneeWalls', 'volumeRidgeDirections', 'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves'];
+  const volumeKeys = ['volumeStoryOverrides', 'volumeKneeWalls', 'volumeFoundationHeights', 'volumeStoryHeights', 'volumeRidgeDirections', 'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves'];
   const hadVolumeSettings = volumeKeys.some((key) => Object.keys(modelConfig[key] ?? {}).length);
   volumeKeys.forEach((key) => {
     modelConfig[key] = {};
@@ -1167,16 +1190,20 @@ eaveSoffitSelect.addEventListener('change', () => setEaveValue('eaveSoffit', 'ea
 rakeSoffitSelect.addEventListener('change', () => setEaveValue('rakeSoffit', 'rakeSoffit', rakeSoffitSelect.value));
 
 volumeControlsBox.addEventListener('change', (event) => {
-  const input = event.target.closest('input[data-volume-knee]');
+  const input = event.target.closest('input[data-volume-length]');
   if (!input) {
     return;
   }
-  const id = input.dataset.volumeKnee;
+  const map = modelConfig[input.dataset.volumeLength];
+  const id = input.dataset.volume;
   if (input.value === '') {
-    delete modelConfig.volumeKneeWalls[id];
+    delete map[id];
   } else {
-    // 0 for no half story on this volume, whatever the building has
-    modelConfig.volumeKneeWalls[id] = Math.max(0, Number(input.value) || 0) / unitFactor();
+    // 0 is a real value: no half story, or a floor at grade
+    map[id] = Math.max(0, Number(input.value) || 0) / unitFactor();
+    if (input.dataset.volumeLength === 'volumeStoryHeights' && !(map[id] > 0)) {
+      delete map[id];
+    }
   }
   if (loadedFootprint) {
     loadFootprint(loadedFootprint);

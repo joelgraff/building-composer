@@ -42,6 +42,7 @@
   "rakeSoffit": "sloped",
   "wallMaterial": "wood",
   "volumeSplit": "auto",
+  "foundationDepth": 0.7,
   "roofHeight": 2.291666666666667,
   "volumeStoryOverrides": {},
   "volumeRidgeDirections": {
@@ -51,6 +52,8 @@
   "volumeRoofTypes": {},
   "volumeRoofConnections": {},
   "volumeKneeWalls": {},
+  "volumeStoryHeights": {},
+  "volumeFoundationHeights": {},
   "roofStructures": [
     {
       "id": "structure-1",

@@ -861,12 +861,13 @@ A second review of the renders added:
 - Wraparounds take a shed roof too (planes from the front and outer side only, hipped at the outer corner, plain far ends closed from the plate up, with the eave capped at them). The Queen Anne's is a shed.
 - `above-eave` warning: a projecting porch whose roof rises through the host eave. Builders usually keep it below; the Cape Cod and Dutch Colonial entries now tuck under their eaves.
 
-5. Per-volume story height and floor level.
+5. **Per-volume story height and floor level.** Done, with item 10. A volume can set its own story height (`volumeStoryHeights`, used by `volumeWallHeight`) and its own floor above grade (`volumeFoundationHeights`; `volumeFoundationHeight`), and the building's foundation (`foundationDepth`) is a setting (it was fixed at 0.7 m in the app). Volumes get their own roofs when their *plates* differ; volumes level at the plate share one roof even over different floors (a garage at grade with taller walls under the ranch's continuous hip), each with its own walls and foundation. Plates compared between volumes (merges, eaves over lower neighbors) are heights above grade. Saved in `.bld`; panel fields for the building and the selected volume. Tests: `tests/volume_levels.test.js`.
+   - Found on the way: a gable merging into a neighbor whose plate is a little higher was cut level at the neighbor's plate beyond the wall, leaving its valleys inside the neighbor's attic; it is now cut along the neighbor's roof slope (`clipInsideNeighbor`). This predated the change but only showed once gables merged by default.
 6. Eaves on continuous (straight-skeleton) hips.
 7. Dormers crossing a two-slope break.
 8. Canted bays and towers (non-rectangular structures).
 9. Entry hoods (a roof on brackets, no floor).
-10. Foundation height as a setting.
+10. **Foundation height as a setting.** Done with item 5.
 11. Dormer refusals that say which limit was hit and by how much.
 
 ## Immediate next implementation step

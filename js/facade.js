@@ -580,6 +580,9 @@ export function serializeBuildingState(layout, modelConfig) {
     volumeStoryOverrides: modelConfig.volumeStoryOverrides ?? {},
     kneeWallHeight: modelConfig.kneeWallHeight,
     volumeKneeWalls: modelConfig.volumeKneeWalls ?? {},
+    foundationDepth: modelConfig.foundationDepth,
+    volumeStoryHeights: modelConfig.volumeStoryHeights ?? {},
+    volumeFoundationHeights: modelConfig.volumeFoundationHeights ?? {},
     volumeRidgeDirections: modelConfig.volumeRidgeDirections ?? {},
     volumeRoofTypes: modelConfig.volumeRoofTypes ?? {},
     volumeRoofConnections: modelConfig.volumeRoofConnections ?? {},
@@ -677,6 +680,10 @@ export function deserializeBuildingState(data) {
       // a half story's knee wall, for the building and by volume
       kneeWallHeight: Number.isFinite(data.kneeWallHeight) && data.kneeWallHeight > 0 ? data.kneeWallHeight : undefined,
       volumeKneeWalls: data.volumeKneeWalls ?? {},
+      // the foundation (floor level above grade), for the building and by volume, and story height by volume
+      foundationDepth: Number.isFinite(data.foundationDepth) && data.foundationDepth >= 0 ? data.foundationDepth : undefined,
+      volumeStoryHeights: data.volumeStoryHeights ?? {},
+      volumeFoundationHeights: data.volumeFoundationHeights ?? {},
       volumeRidgeDirections: data.volumeRidgeDirections ?? {},
       volumeRoofTypes: data.volumeRoofTypes ?? {},
       volumeRoofConnections: data.volumeRoofConnections ?? {},

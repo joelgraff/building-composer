@@ -62,14 +62,23 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   const volumes = config.volumes ?? [];
   const overrides = config.volumeStoryOverrides ?? {};
   const buildingWallHeight = volumeWallHeight(null, config);
+  const levelConfig = { ...config, foundationDepth };
+  const buildingFoundation = volumeFoundationHeight(null, levelConfig);
+  const plateOf = (id) => volumeFoundationHeight(id, levelConfig) + volumeWallHeight(id, config);
+  // volumes whose plates differ get their own roofs; ones level at the plate
+  // share one roof, even over different floor levels (a garage at grade)
   const hasVolumeOverrides = volumes.length > 1
-    && volumes.some((volume) => Math.abs(volumeWallHeight(volume.id, config) - buildingWallHeight) > 1e-9);
+    && volumes.some((volume) => Math.abs(plateOf(volume.id) - (buildingFoundation + buildingWallHeight)) > 1e-9);
+  const mixedFloors = volumes.length > 1
+    && volumes.some((volume) => Math.abs(volumeFoundationHeight(volume.id, levelConfig) - buildingFoundation) > 1e-9);
 
   if (hasVolumeOverrides) {
     return withStructuresAndWalks(createMultiVolumeBuilding(volumes, overrides, {
       wallMaterial: config.wallMaterial,
       kneeWallHeight: config.kneeWallHeight,
       volumeKneeWalls: config.volumeKneeWalls,
+      volumeStoryHeights: config.volumeStoryHeights,
+      volumeFoundationHeights: config.volumeFoundationHeights,
       storyCount, storyHeight, foundationDepth, roofEaveDepth, roofType, roofHeight, roofPitchRise, roofPitchRun, roofHeightMode: config.roofHeightMode, volumeRidgeDirections: config.volumeRidgeDirections, volumeRoofTypes: config.volumeRoofTypes, volumeRoofConnections: config.volumeRoofConnections, volumeRoofShapes: config.volumeRoofShapes,
       ...pickEaveConfig({ ...config, roofEaveDepth }),
     }), config);
@@ -85,31 +94,48 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   const resolvedRoofPitchRise = primaryRoofZone?.roofPitchRise ?? roofPitchRise;
   const resolvedRoofPitchRun = primaryRoofZone?.roofPitchRun ?? roofPitchRun;
 
-  const shape = buildShape(footprint, 0);
-  const wallGeometry = new THREE.ExtrudeGeometry(shape, {
-    depth: totalHeight,
-    bevelEnabled: false,
-    steps: 1,
-    curveSegments: 12,
-  });
+  if (mixedFloors) {
+    // one roof over volumes on different floors: each its own walls, up to the shared plate
+    volumes.forEach((volume) => {
+      const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
+      const floor = volumeFoundationHeight(volume.id, levelConfig);
+      const volumeWalls = new THREE.Mesh(createBoxWallGeometry(bounds, foundationHeight + totalHeight - floor), materials.wall);
+      volumeWalls.position.y = floor;
+      volumeWalls.userData = { volumeId: volume.id, bodyPart: 'walls' };
+      group.add(volumeWalls);
+      if (floor > 1e-9) {
+        const volumeFoundation = new THREE.Mesh(createBoxWallGeometry(bounds, floor), materials.foundation);
+        volumeFoundation.userData = { volumeId: volume.id };
+        group.add(volumeFoundation);
+      }
+    });
+  } else {
+    const shape = buildShape(footprint, 0);
+    const wallGeometry = new THREE.ExtrudeGeometry(shape, {
+      depth: totalHeight,
+      bevelEnabled: false,
+      steps: 1,
+      curveSegments: 12,
+    });
 
-  wallGeometry.rotateX(-Math.PI / 2);
-  const walls = new THREE.Mesh(wallGeometry, materials.wall);
-  walls.position.y = foundationHeight;
-  walls.userData = { bodyPart: 'walls' };
-  group.add(walls);
+    wallGeometry.rotateX(-Math.PI / 2);
+    const walls = new THREE.Mesh(wallGeometry, materials.wall);
+    walls.position.y = foundationHeight;
+    walls.userData = { bodyPart: 'walls' };
+    group.add(walls);
 
-  const foundationShape = buildShape(footprint, 0);
-  const foundationGeometry = new THREE.ExtrudeGeometry(foundationShape, {
-    depth: foundationHeight,
-    bevelEnabled: false,
-    steps: 1,
-    curveSegments: 12,
-  });
-  foundationGeometry.rotateX(-Math.PI / 2);
-  const foundation = new THREE.Mesh(foundationGeometry, materials.foundation);
-  foundation.position.y = 0;
-  group.add(foundation);
+    const foundationShape = buildShape(footprint, 0);
+    const foundationGeometry = new THREE.ExtrudeGeometry(foundationShape, {
+      depth: foundationHeight,
+      bevelEnabled: false,
+      steps: 1,
+      curveSegments: 12,
+    });
+    foundationGeometry.rotateX(-Math.PI / 2);
+    const foundation = new THREE.Mesh(foundationGeometry, materials.foundation);
+    foundation.position.y = 0;
+    group.add(foundation);
+  }
 
   const { geometry: roofGeometry, zones: roofZones, walks: skeletonWalks = [] } = createRoofGeometry(footprint, {
     roofType: resolvedRoofType,
@@ -131,7 +157,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   roofZones.forEach((zone) => {
     zone.baseY = roof.position.y;
     zone.wallTopY = foundationHeight + totalHeight;
-    zone.foundationTopY = foundationHeight;
+    zone.foundationTopY = volumeFoundationHeight(zone.volumeId, levelConfig);
   });
   roof.userData = {
     roofZoneId: primaryRoofZone?.id ?? 'roof-zone-main',
@@ -216,16 +242,29 @@ function zoneWalk(zone) {
 
 /**
  * The height of a volume's walls above its foundation: its stories (its own
- * count, `volumeStoryOverrides`, or the building's), plus the knee wall of a
+ * count, `volumeStoryOverrides`, or the building's, each its own height,
+ * `volumeStoryHeights`, or the building's `storyHeight`), plus the knee wall of a
  * half story above them if it has one (a story and a half: the top floor
  * rises only that far before the roof starts; `volumeKneeWalls`, or the
  * building's `kneeWallHeight`). Without a volume id, the building's.
  */
 export function volumeWallHeight(volumeId, config = {}) {
   const stories = (volumeId && config.volumeStoryOverrides?.[volumeId]) ?? config.storyCount ?? 1;
+  const ownStory = volumeId ? config.volumeStoryHeights?.[volumeId] : undefined;
+  const storyHeight = ownStory > 0 ? ownStory : config.storyHeight ?? 3.2;
   const own = volumeId ? config.volumeKneeWalls?.[volumeId] : undefined;
   const knee = Number.isFinite(own) ? own : config.kneeWallHeight;
-  return stories * (config.storyHeight ?? 3.2) + (knee > 0 ? knee : 0);
+  return stories * storyHeight + (knee > 0 ? knee : 0);
+}
+
+/**
+ * The height of a volume's floor above grade: its foundation (its own,
+ * `volumeFoundationHeights`, such as a garage slab at grade, or the
+ * building's `foundationDepth`). Without a volume id, the building's.
+ */
+export function volumeFoundationHeight(volumeId, config = {}) {
+  const own = volumeId ? config.volumeFoundationHeights?.[volumeId] : undefined;
+  return Number.isFinite(own) && own >= 0 ? own : config.foundationDepth ?? 0.6;
 }
 
 /**
@@ -1000,15 +1039,18 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
   const foundationHeight = foundationDepth;
   let maxTotalHeight = 0;
   const roofZones = [];
-  const volumePlateHeights = Object.fromEntries(
-    roofVolumes.map((volume) => [volume.id, volumeWallHeight(volume.id, { ...config, volumeStoryOverrides: overrides })])
-  );
+  const heightConfig = { ...config, volumeStoryOverrides: overrides };
+  const wallHeights = Object.fromEntries(roofVolumes.map((volume) => [volume.id, volumeWallHeight(volume.id, heightConfig)]));
+  const foundations = Object.fromEntries(roofVolumes.map((volume) => [volume.id, volumeFoundationHeight(volume.id, heightConfig)]));
+  // each volume's plate above grade: how its roof meets its neighbors' depends on these
+  const volumePlateHeights = Object.fromEntries(roofVolumes.map((volume) => [volume.id, foundations[volume.id] + wallHeights[volume.id]]));
   const connections = resolveRoofConnections(roofVolumes, { ...config, volumePlateHeights });
   const adjacentSides = adjacentSidesByVolume(roofVolumes, volumePlateHeights);
   const setups = buildRoofSetups(roofVolumes, config, connections, adjacentSides, (volume) => config.volumeRoofTypes?.[volume.id] ?? roofType);
 
   roofVolumes.forEach((volume) => {
-    const totalHeight = volumePlateHeights[volume.id];
+    const totalHeight = wallHeights[volume.id];
+    const volumeFoundation = foundations[volume.id];
     maxTotalHeight = Math.max(maxTotalHeight, totalHeight);
     const roofTypeForVolume = config.volumeRoofTypes?.[volume.id] ?? roofType;
     const volumeConnections = connections.get(volume.id);
@@ -1020,13 +1062,16 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
     const wallBounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
 
     const walls = new THREE.Mesh(createBoxWallGeometry(wallBounds, totalHeight), materials.wall);
-    walls.position.y = foundationHeight;
+    walls.position.y = volumeFoundation;
     walls.userData = { volumeId: volume.id, bodyPart: 'walls' };
     group.add(walls);
 
-    const foundation = new THREE.Mesh(createBoxWallGeometry(wallBounds, foundationHeight), materials.foundation);
-    foundation.userData = { volumeId: volume.id };
-    group.add(foundation);
+    // a volume on a slab at grade (a garage) has no foundation wall
+    if (volumeFoundation > 1e-9) {
+      const foundation = new THREE.Mesh(createBoxWallGeometry(wallBounds, volumeFoundation), materials.foundation);
+      foundation.userData = { volumeId: volume.id };
+      group.add(foundation);
+    }
 
     const roofDirectionForVolume = volume.ridgeAxis;
     const params = volumeRoofParams(volume.id, halfSpanForBounds(wallBounds, roofDirectionForVolume), config);
@@ -1073,7 +1118,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
           ? createShedRoofGeometry(bounds, roofConfig)
         : createFlatRoofGeometry(bounds, setup.overhang);
     const roof = new THREE.Mesh(flatShaded(clipInsideNeighbor(roofGeometry, volumeConnections)), materials.roof);
-    roof.position.y = foundationHeight + totalHeight + ROOF_LIFT;
+    roof.position.y = volumeFoundation + totalHeight + ROOF_LIFT;
     roofZones.push({
       ...roofZoneDescriptor(volume.id, {
         wallBounds,
@@ -1084,8 +1129,8 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
         exact: !hasCoplanarShedMerge(roofTypeForVolume, volumeConnections),
       }),
       baseY: roof.position.y,
-      wallTopY: foundationHeight + totalHeight,
-      foundationTopY: foundationHeight,
+      wallTopY: volumeFoundation + totalHeight,
+      foundationTopY: volumeFoundation,
     });
     roof.userData = {
       volumeId: volume.id,
@@ -1819,7 +1864,10 @@ function resolveGableEndMerge(own, neighbor, side, gap = 0) {
     gableEnd: end,
     kind: intersects ? 'intersect' : 'snap',
     suppressClosure: true,
-    clip: { axis: sideAxis, wall: wallCoord, direction, gap },
+    // beyond the wall, what shows is above the neighbor's roof, rising from the wall at its slope
+    clip: {
+      axis: sideAxis, wall: wallCoord, direction, gap, slope: facingPlane.slope,
+    },
     along: wallCoord + direction * ((height - gap) / facingPlane.slope),
     height,
     plateGap: gap,
@@ -2079,11 +2127,13 @@ function clipInsideNeighbor(geometry, connections) {
     return geometry;
   }
   let polygons = geometryTriangles(geometry);
-  clips.forEach(({ axis, wall, direction, gap }) => {
+  clips.forEach(({
+    axis, wall, direction, gap, slope = 0,
+  }) => {
     const beyond = (v) => direction * ((axis === 'x' ? v[0] : v[2]) - wall);
     polygons = polygons.flatMap((polygon) => {
       const near = clipPolygon(polygon, (v) => -beyond(v));
-      const far = clipPolygon(clipPolygon(polygon, beyond), (v) => v[1] - gap);
+      const far = clipPolygon(clipPolygon(polygon, beyond), (v) => v[1] - gap - slope * beyond(v));
       return [near, far].filter((poly) => poly.length >= 3);
     });
   });

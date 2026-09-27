@@ -5,7 +5,6 @@
     "front": "maxZ",
     "gaps": [
       "The side bay is canted (octagonal) on the real houses; structures are rectangles, so it is a square box bay.",
-      "The rear wing's own lower story height (8-9 ft against the main block's 12 ft) cannot be set: story height is building-wide.",
       "The entry porch's flat roof usually carries a balustrade: a railing on a roof edge, not yet a facade element.",
       "Paired brackets, tall arched windows, and hood molds are facade modifiers (not built yet)."
     ],
@@ -120,8 +119,7 @@
     "note": "A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and an entry recessed under the roof in the ell.",
     "front": "maxZ",
     "gaps": [
-      "The continuous (straight-skeleton) hip has no eave overhang or fascia, so the low, deep eaves that define a ranch are missing.",
-      "A garage has a lower floor (at grade) than the house; floor levels are building-wide."
+      "The continuous (straight-skeleton) hip has no eave overhang or fascia, so the low, deep eaves that define a ranch are missing."
     ],
     "issues": [],
     "refused": [],

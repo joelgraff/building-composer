@@ -39,6 +39,7 @@ npm test
 - **Parametric 3D Massing Engine**:
   - Extrudes foundation below grade, vertical walls per story, and roof envelope.
   - Story-and-a-half houses: a knee wall above the full stories, for the building or a volume.
+  - Story height and floor level (foundation height) for the building or a volume; volumes level at the plate share one roof even over different floors.
   - Rectilinear volume decomposition (`decomposeIntoVolumes`): automatically splits complex rectilinear footprints into constituent massing blocks, cutting the way that follows the massing (or along a chosen axis).
   - Independent volume editing: configure story counts, roof forms, and ridge directions per volume or at the building-default level.
   - Interactive 3D volume picking: hover over building volumes for amber highlighting and click to select for direct parametric control.

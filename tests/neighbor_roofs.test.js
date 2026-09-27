@@ -110,3 +110,17 @@ describe('a gable end meeting a neighbor\'s roof', () => {
   });
 });
 
+describe('a gable merging into a slightly taller neighbor', () => {
+  it('meets its roof on valleys that lie on it (not inside its attic)', () => {
+    // a main block (x 0..10, z 0..8) whose plate is 0.7 m higher than the wing behind it
+    const L = [[0, 0], [10, 0], [10, 8], [6, 8], [6, 14], [0, 14]];
+    const volumes = computeFacadeLayout(L, {}).volumes;
+    const main = volumes.find((volume) => volume.maxX - volume.minX > 9);
+    const result = createBuildingFromFootprint(L, {
+      storyCount: 1, storyHeight: 2.7, foundationDepth: 0.7, roofType: 'gable', roofPitchRise: 8, roofPitchRun: 12, roofEaveDepth: 0.35,
+      volumes, roofStructures: [], volumeKneeWalls: { [main.id]: 0.7 },
+    });
+    assertWatertight(result, 'merge across a small plate gap');
+  });
+});
+
