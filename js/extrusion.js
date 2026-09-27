@@ -11,7 +11,7 @@ import {
 import {
   clipPolygon, polygonsToTriangles, FLAT_ROOF_THICKNESS, clipOutsideConvexSolid, clipInsideConvexSolid, planPrism, volumeSolid, isInsideSolid,
   validateRoofStructures, structureWallPolygons, structureWallSides, structureFloorPolygon, structureRecess, hostEaveProfile, hostEaveCovers,
-  roofProfile, roofPeak, structureFacade, roofWalkFacade,
+  roofProfile, roofPeak, structureFacade, roofWalkFacade, zoneSolids, zoneRoofHeight,
 } from './roof-structures.js';
 import {
   computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, makeEavePlane, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
@@ -244,10 +244,11 @@ function withRoofStructures(result, config) {
     // that runs into a taller neighbor merges into its walls and roof the
     // same way it meets its host.
     const others = [
-      ...result.roofZones.filter((zone) => zone.volumeId !== host.volumeId).map((zone) => volumeSolid(zone)),
+      ...result.roofZones.filter((zone) => zone.volumeId !== host.volumeId).flatMap((zone) => zoneSolids(zone)),
       ...builtSolids.filter((entry) => entry.id !== host.volumeId).map((entry) => entry.solid),
     ];
-    const hostSolid = volumeSolid(host);
+    // the space under the host roof: one solid, or one per roof piece
+    const hostSolids = zoneSolids(host);
     // The host's body: its walls up to their top, without the roof. A
     // standing structure's floor stops at it, and so do its walls where the
     // host roof over them is cut away (see standingWalls).
@@ -278,18 +279,18 @@ function withRoofStructures(result, config) {
     walls.forEach((wall) => {
       addFaces(wall.wall, flushFront && wall.wall === 'front'
         ? clipOutside(polygonsToTriangles([flushFront.polygon]), others)
-        : standingWalls(polygonsToTriangles([wall.polygon]), resolved, { hostSolid, hostBody, others, clipOutside }));
+        : standingWalls(polygonsToTriangles([wall.polygon]), resolved, { hostSolids, hostBody, others, clipOutside }));
     });
     const supports = structureSupports(resolved, host);
-    const recess = recessParts(resolved, host, walls, { hostSolid, others, clipOutside });
+    const recess = recessParts(resolved, host, walls, { hostSolids, others, clipOutside });
     recess.sides.forEach(([name, triangles]) => addFaces(name, triangles));
     addFaces('inner', recess.inner);
-    const skirts = supports.skirts.map(([name, triangles]) => [name, clipOutside(triangles, [hostSolid, ...others])]);
+    const skirts = supports.skirts.map(([name, triangles]) => [name, clipOutside(triangles, [...hostSolids, ...others])]);
     result.structureFacades.push(structureFacade(resolved, wallFaces, skirts, [hostBody, ...others]));
     const structureMaterials = materialsFor(resolved, materials);
     const parts = [
       ['walls', [...[...wallFaces.values()].flat(), ...clipOutside(kneeWalls(resolved, host), others), ...recess.liftStrip], structureMaterials.wall],
-      ['roof', clipOutside(structureRoofTriangles(resolved, config), [hostSolid, ...others]), structureMaterials.roof],
+      ['roof', clipOutside(structureRoofTriangles(resolved, config), [...hostSolids, ...others]), structureMaterials.roof],
       ['floor', [
         ...(resolved.standing ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved)]), floorSolids) : []),
         ...recess.floor,
@@ -301,11 +302,11 @@ function withRoofStructures(result, config) {
         ], [hostBody, ...others]),
         // a structure rising through the roof stands its posts on the roof
         ...(resolved.through
-          ? clipOutside(openSidePosts(resolved, others, host.baseY), [hostSolid, ...others])
+          ? clipOutside(openSidePosts(resolved, others, host.baseY), [...hostSolids, ...others])
           : []),
       ], materials.wall],
       ['support', skirts.flatMap(([, triangles]) => triangles), structureMaterials.wall],
-      ['foundation', clipOutside(supports.foundation, [hostSolid, ...others]), materials.foundation],
+      ['foundation', clipOutside(supports.foundation, [...hostSolids, ...others]), materials.foundation],
       ['eave-caps', interruptsHostEave(resolved, host) ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
     ];
     parts.forEach(([part, triangles, material]) => {
@@ -363,7 +364,7 @@ function materialsFor(resolved, materials) {
  * also closes the roof-lift gap under its front edge, which a flush front
  * wall would otherwise have covered.
  */
-function recessParts(resolved, host, walls, { hostSolid, others, clipOutside }) {
+function recessParts(resolved, host, walls, { hostSolids, others, clipOutside }) {
   const recess = structureRecess(resolved);
   if (!recess) {
     return {
@@ -374,7 +375,7 @@ function recessParts(resolved, host, walls, { hostSolid, others, clipOutside }) 
   const sides = resolved.standing
     ? []
     : walls.map((wall) => [wall.wall, clipOutside(
-      clipInsideConvexSolid(clipInsideConvexSolid(polygonsToTriangles([wall.polygon]), planPrism(recess.plan)), hostSolid),
+      hostSolids.flatMap((solid) => clipInsideConvexSolid(clipInsideConvexSolid(polygonsToTriangles([wall.polygon]), planPrism(recess.plan)), solid)),
       [belowFloor, ...others]
     )]);
   const [p0, p1] = recess.plan; // the front edge
@@ -552,7 +553,7 @@ function kneeWalls(resolved, host) {
   const closedLines = Object.entries(sides)
     .filter(([wallName]) => !resolved.openSides.includes(wallName))
     .map(([, side]) => [side === 'minX' || side === 'maxX' ? 0 : 1, bounds[side]]);
-  const roofY = ([x, z]) => host.baseY + (host.planes?.length ? evalZoneHeight(host.planes, x, z) : host.slabThickness ?? 0);
+  const roofY = (point) => host.baseY + zoneRoofHeight(host, point);
   const pieces = resolved.removedRoof;
   const insidePiece = (point, piece) => piece.every(([x0, z0], i) => {
     const [x1, z1] = piece[(i + 1) % piece.length];
@@ -602,13 +603,13 @@ function kneeWalls(resolved, host) {
  * nothing covers them any more; elsewhere the host roof still does.
  */
 function standingWalls(triangles, resolved, {
-  hostSolid, hostBody, others, clipOutside,
+  hostSolids, hostBody, others, clipOutside,
 }) {
-  const aboveRoof = clipOutside(triangles, [hostSolid, ...others]);
+  const aboveRoof = clipOutside(triangles, [...hostSolids, ...others]);
   if (!resolved.standing) {
     return aboveRoof;
   }
-  const underHostRoof = clipInsideConvexSolid(triangles, hostSolid);
+  const underHostRoof = hostSolids.flatMap((solid) => clipInsideConvexSolid(triangles, solid));
   const underRemovedRoof = resolved.removedRoof.flatMap((piece) => clipOutside(
     clipInsideConvexSolid(underHostRoof, planPrism(piece)),
     [hostBody, ...others]
@@ -1244,6 +1245,45 @@ function createStraightSkeletonHipGeometry(footprint, config) {
   return { geometry, faces, pitchRatio, walk, walkFaces: walkPieces };
 }
 
+/** The plane of a skeleton face rising from its (axis-aligned) footprint edge, as an eave plane. */
+function skeletonFacePlane(edge, polygon, pitchRatio) {
+  const alongX = Math.abs(edge[0][1] - edge[1][1]) < 1e-9;
+  const [axis, k] = alongX ? ['z', 2] : ['x', 0];
+  const constant = alongX ? edge[0][1] : edge[0][0];
+  const inward = polygon.reduce((sum, v) => sum + v[k], 0) / polygon.length - constant;
+  return { axis, sign: Math.sign(inward) || 1, constant, slope: pitchRatio, side: `${inward > 0 ? 'min' : 'max'}${axis.toUpperCase()}` };
+}
+
+/** A plan polygon clipped to a rectangle. */
+function clipToBounds(polygon, bounds) {
+  return [
+    ([x]) => x - bounds.minX, ([x]) => bounds.maxX - x, ([, z]) => z - bounds.minZ, ([, z]) => bounds.maxZ - z,
+  ].reduce((piece, distance) => (piece.length ? clipPolygon(piece, distance) : piece), polygon);
+}
+
+/** A simple plan polygon as convex pieces: itself if convex, otherwise its triangles. */
+function convexPieces(polygon) {
+  const area = (points) => points.reduce((sum, [x, z], i) => {
+    const [nx, nz] = points[(i + 1) % points.length];
+    return sum + x * nz - nx * z;
+  }, 0) / 2;
+  if (polygon.length < 3 || Math.abs(area(polygon)) < 1e-9) {
+    return [];
+  }
+  const turn = Math.sign(area(polygon));
+  const convex = polygon.every(([x0, z0], i) => {
+    const [x1, z1] = polygon[(i + 1) % polygon.length];
+    const [x2, z2] = polygon[(i + 2) % polygon.length];
+    return turn * ((x1 - x0) * (z2 - z1) - (z1 - z0) * (x2 - x1)) >= -1e-9;
+  });
+  if (convex) {
+    return [polygon];
+  }
+  return THREE.ShapeUtils.triangulateShape(polygon.map(([x, z]) => new THREE.Vector2(x, z)), [])
+    .map((triangle) => triangle.map((index) => polygon[index]))
+    .filter((triangle) => Math.abs(area(triangle)) > 1e-9);
+}
+
 /**
  * The widow's walk height of a continuous (straight-skeleton) hip: one flat
  * top at one height across every volume, the building's, or failing that the
@@ -1260,13 +1300,13 @@ function skeletonWalkHeight(config) {
 /**
  * Zone descriptors for the volumes under a straight-skeleton hip roof (one
  * continuous hip over the whole footprint). Each skeleton face is a plane
- * rising at the pitch from one footprint edge, so a volume's planes are those
- * of its sides on the footprint's outline, and `faceRegions[side]` is where
- * each one is the roof (its skeleton faces, in plan). Inside a volume the
- * roof is not the min of its own planes near a shared side or a valley, so
- * these are marked `skeleton` rather than `exact`: a dormer or cupola, which
- * only meets the face it stands on, can use one; a porch, which replaces the
- * roof over its footprint, cannot.
+ * rising at the pitch from one footprint edge. Inside a volume the roof is
+ * not the min of its own planes (near an inner side or a valley), so the
+ * descriptor lists the roof exactly as convex plan pieces, each under one
+ * face's plane (`roofPieces`; zoneSolids makes a prism of each), and is
+ * marked `skeleton` rather than `exact`. `planes` holds the planes of the
+ * volume's sides on the footprint's outline (the faces a dormer can stand
+ * on), and `faceRegions[side]` where each one is the roof, in plan.
  */
 function skeletonHipZones(volumes, { faces, pitchRatio, walk, walkFaces }) {
   return (volumes ?? []).map((volume) => {
@@ -1286,6 +1326,12 @@ function skeletonHipZones(volumes, { faces, pitchRatio, walk, walkFaces }) {
     if (walk) {
       planes.push({ constantHeight: walk.height, tier: 'walk' });
     }
+    // the exact roof over this volume: each skeleton face (and the walk) within it, in convex pieces
+    const roofPieces = [
+      ...faces.map(({ edge, polygon }) => ({ polygon, plane: skeletonFacePlane(edge, polygon, pitchRatio) })),
+      ...walkFaces.map((polygon) => ({ polygon, plane: { constantHeight: walk.height, tier: 'walk' } })),
+    ].flatMap(({ polygon, plane }) => convexPieces(clipToBounds(polygon.map(([x, , z]) => [x, z]), bounds))
+      .map((piece) => ({ polygon: piece, plane })));
     // the highest point of the roof over this volume
     const inside = [
       (v) => v[0] - bounds.minX, (v) => bounds.maxX - v[0], (v) => v[2] - bounds.minZ, (v) => bounds.maxZ - v[2],
@@ -1302,6 +1348,7 @@ function skeletonHipZones(volumes, { faces, pitchRatio, walk, walkFaces }) {
       planes,
       faceRegions,
       skeletonFaces: allFaces,
+      roofPieces,
       slabThickness: 0,
       // the skeleton roof is built without eave trim
       overhang: {},

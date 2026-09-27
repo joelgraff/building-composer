@@ -185,6 +185,46 @@ export function volumeSolid(zone, { floorY = zone.floorY ?? 0 } = {}) {
   return [...walls, ...roof];
 }
 
+/**
+ * The convex solids whose union is the space under a zone's roof. A zone
+ * whose roof is the min of its planes is one solid (volumeSolid). A zone
+ * cut from a larger roof (a volume under a continuous straight-skeleton hip)
+ * lists its roof as convex plan pieces, each under one plane (`roofPieces`),
+ * and gets a prism per piece, capped by that piece's plane.
+ */
+export function zoneSolids(zone, options = {}) {
+  if (!zone.roofPieces?.length) {
+    return [volumeSolid(zone, options)];
+  }
+  const floorY = options.floorY ?? zone.floorY ?? 0;
+  return zone.roofPieces.map(({ polygon, plane }) => [
+    ...planPrism(polygon),
+    normalizedHalfSpace([0, -1, 0], -floorY),
+    roofPlaneHalfSpace(plane, zone.baseY),
+  ]);
+}
+
+/** Whether a plan point is inside a convex polygon (or on its edge). */
+function insideConvex([x, z], polygon) {
+  const turn = Math.sign(polygon.reduce((sum, [ax, az], k) => {
+    const [bx, bz] = polygon[(k + 1) % polygon.length];
+    return sum + ax * bz - bx * az;
+  }, 0)) || 1;
+  return polygon.every(([x0, z0], i) => {
+    const [x1, z1] = polygon[(i + 1) % polygon.length];
+    return turn * ((x1 - x0) * (z - z0) - (z1 - z0) * (x - x0)) >= -1e-9;
+  });
+}
+
+/** A zone's roof height above its plate at a plan point. */
+export function zoneRoofHeight(zone, point) {
+  const piece = zone.roofPieces?.find(({ polygon }) => insideConvex(point, polygon));
+  if (piece) {
+    return evalPlaneHeight(piece.plane, point[0], point[1]);
+  }
+  return zone.planes?.length ? evalZoneHeight(zone.planes, point[0], point[1]) : zone.slabThickness ?? 0;
+}
+
 // ---------------------------------------------------------------------------
 // Structure records: data model, placement, validation
 // ---------------------------------------------------------------------------
@@ -482,10 +522,8 @@ export function resolveRoofStructure(structure, host, config = {}) {
   // A continuous (straight-skeleton) hip over several volumes is planar on
   // each face but not the min of one volume's planes everywhere, so it hosts
   // only what meets a single face (a dormer) or stands on it (a cupola).
-  if (!host.exact && !(host.skeleton && structure.baseHeight === null)) {
-    return fail('host-inexact', host.skeleton
-      ? `${host.volumeId}'s roof is one continuous hip over several volumes; only dormers and structures rising through it can stand on it.`
-      : `Host volume ${host.volumeId} has a merged roof whose surface is not planar enough to host a structure.`);
+  if (!host.exact && !host.roofPieces) {
+    return fail('host-inexact', `Host volume ${host.volumeId} has a merged roof whose surface is not planar enough to host a structure.`);
   }
   if (!(structure.width > GEOMETRY_EPSILON) || !(structure.wallHeight > GEOMETRY_EPSILON)
     || (structure.depth !== null && !(structure.depth > GEOMETRY_EPSILON))) {
@@ -656,25 +694,29 @@ export function resolveRoofStructure(structure, host, config = {}) {
     hostContact = clipPolygon(hostContact, distance);
   });
   // on a skeleton hip the face is the roof only over its own region
-  if (host.skeleton && face && !through
+  if (host.skeleton && face && !through && !standing
     && !hostContact.every((point) => onFaceRegion(point, host.faceRegions?.[structure.hostSide] ?? []))) {
     return fail('crosses-face', `The structure runs off ${host.volumeId}'s ${structure.hostSide} roof face into a hip or valley.`);
   }
   // The host roof the structure removes: where the host roof lies under the
-  // structure's roof. Host roof height is a min of planes, so this is a union
-  // of convex pieces, one per host face: the face's own region (where it is
-  // the lowest plane) where the structure's roof is above that face. A dormer
-  // stands on one face, so its piece is its `hostContact`.
+  // structure's roof. The host roof is a union of convex pieces, each under
+  // one plane: for a min of planes, each face's own region (where it is the
+  // lowest plane); for a roof cut from a larger one, its `roofPieces`. The
+  // removed roof is each piece where the structure's roof is above it. A
+  // dormer stands on one face, so its piece is its `hostContact`.
+  const hostPieces = host.roofPieces ?? hostRoofFaces(host).map((plane, index, faces) => ({
+    plane,
+    polygon: faces.reduce((piece, other, k) => (k === index || !piece.length
+      ? piece
+      : clipPolygon(piece, ([x, z]) => evalPlaneHeight(other, x, z) - evalPlaneHeight(plane, x, z))), clipToHostWalls(host.bounds, host)),
+  }));
   const removedRoof = through
     ? []
     : standing
-    ? hostRoofFaces(host).map((hostFace, index, faces) => {
-      let piece = clipToHostWalls(bounds, host);
-      faces.forEach((other, k) => {
-        if (k !== index) {
-          piece = clipPolygon(piece, ([x, z]) => evalPlaneHeight(other, x, z) - evalPlaneHeight(hostFace, x, z));
-        }
-      });
+    ? hostPieces.map(({ plane: hostFace, polygon }) => {
+      let piece = [
+        ([x]) => x - bounds.minX, ([x]) => bounds.maxX - x, ([, z]) => z - bounds.minZ, ([, z]) => bounds.maxZ - z,
+      ].reduce((clipped, distance) => (clipped.length ? clipPolygon(clipped, distance) : clipped), polygon);
       const faceY = ([x, z]) => host.baseY + evalPlaneHeight(hostFace, x, z);
       (planes.length
         ? planes.map((plane) => ([x, z]) => plateY + evalPlaneHeight(plane, x, z) - faceY([x, z]))

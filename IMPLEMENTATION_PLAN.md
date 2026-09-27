@@ -436,7 +436,7 @@ A roof structure is a small rectangular **structure volume** with its own raised
 
 Both operations use one primitive, **clip triangles outside a convex solid**: the difference of convex solids, split into pieces with Sutherland-Hodgman, one half-space per face. This generalizes the `clipPolygon`/`clipInsideNeighbor` code that already exists. A small tolerance puts coplanar faces inside the solid, so a porch's back wall against the main wall is dropped and does not z-fight.
 
-Clipping works on the finished triangle soup, so it does not care how the host's roof mesh was built. The host's *solid*, however, comes from its resolved zone descriptor. The analytic per-volume builders produce exact ones. The straight-skeleton hip produces approximate ones (`skeleton: true`, see [Review fixes](#review-fixes)), which host dormers and structures rising through the roof but not porches. The sampled field and a flat cap over a non-rectangular footprint produce none, so they host nothing (`host-missing`).
+Clipping works on the finished triangle soup, so it does not care how the host's roof mesh was built. The host's *solid*, however, comes from its resolved zone descriptor. The analytic per-volume builders produce exact ones. The straight-skeleton hip produces piecewise ones (`skeleton: true`, `roofPieces`, see [Porches on continuous hips](#porches-on-continuous-hips)), which host every kind of structure. The sampled field and a flat cap over a non-rectangular footprint produce none, so they host nothing (`host-missing`).
 
 As built, the two clips are joined by a third: a structure is also kept outside every *other* volume and every structure built before it. A porch running into a taller block therefore merges with it, and structures can stand on each other.
 
@@ -489,7 +489,7 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
 
 Each problem is an error with a code and a message, shown in the editor and the status line:
 
-- The host: `host-missing` (no such volume or structure, no analytic roof, or a circular stack) and `host-inexact` (a merged roof that isn't a min of planes, or a porch on a straight-skeleton hip).
+- The host: `host-missing` (no such volume or structure, no analytic roof, or a circular stack) and `host-inexact` (a merged roof that isn't a min of planes, such as a height-mode hip whose ridge ends were moved to meet a neighbor's).
 - Dimensions and placement: `invalid-dimensions`, `outside-host`, `outside-face`, `depth-required`, and `needs-base` (projecting past the wall needs a base).
 - Dormers only (joining one face, no base):
   - a dormer faces down a slope: on a side that isn't one (a gable end, after the ridge turned) it turns to the slope at the same end, a quarter turn round (`side-turned` warning). `side-not-sloped` remains for a side with no slope either way (a shed's high side and the rake beside it);
@@ -793,6 +793,17 @@ Each problem is an error with a code and a message, shown in the editor and the 
      - a GLB with 27 meshes and no cue lines.
 7. **Docs.** Complete. Each phase updated the docs as it landed: ARCHITECTURE.md (§2 roof structures and two-slope roofs, §3 data model, §4 structure surfaces, §5 modifier examples, material precedence, and selected-element editing), the README features and project tree, `data/examples/README.md`, and this plan. A final pass brought the plan's status summary, data model, cases table, validation list, and next steps up to date.
 
+### Porches on continuous hips
+
+The review fixes let dormers and cupolas stand on a straight-skeleton hip but refused porches, which replace the roof over their footprint and so need the host's exact solid. That is now built:
+
+- Each skeleton zone lists its roof exactly as convex plan pieces, each under one face's plane (`roofPieces`: every skeleton face and walk piece clipped to the volume, triangulated where not convex).
+- `zoneSolids(zone)` (`js/roof-structures.js`) gives one prism per piece, capped by its plane, or the single `volumeSolid` for a min-of-planes zone. Structures are clipped outside every solid of the host and the other volumes, and inside them for the parts under the host roof, as before with one solid each.
+- The roof a standing structure removes is each host piece (a face region for a min of planes, a `roofPieces` entry otherwise) where the structure's roof is above it. `zoneRoofHeight` gives the host roof height for knee walls.
+- The dormer face-region check applies to dormers only; porches may span faces, hips, and valleys.
+- Tests (`tests/skeleton_structures.test.js`): a ground porch and a porch on posts against the L, a porch standing on the plate astride the valley (the roof removed on each face under it), and a gable porch with an open front, each watertight but for its open sides. Mutation checks: using the single approximate solid, or min-of-planes pieces, fails the valley test.
+- Still refused: height-mode hips over several volumes, whose ridge ends are moved to meet a neighbor's (`host-inexact`).
+
 ### Widow's walks as roof shape
 
 A widow's walk is a flat section of roof in place of the ridge, not a platform standing on the roof. A deck on it and its railings are facade modifiers. This replaces the 4f model (a hip "deck" plus a `widows-walk` structure on it):
@@ -808,7 +819,7 @@ A widow's walk is a flat section of roof in place of the ridge, not a platform s
 
 A review after phase 7 found and fixed:
 
-- **Structures on a straight-skeleton hip.** A multi-volume equal-pitch hip is one skeleton roof, which used to return no zone descriptors, so nothing could stand on an L or U hip. `skeletonHipZones` (`js/extrusion.js`) now describes each volume by the planes of its sides on the footprint outline, each face's region in plan (`faceRegions`, from the skeleton polygon rising from that edge), and the skeleton faces themselves. Inside a volume the roof is not the min of those planes near an inner side or a valley, so the descriptors are `exact: false, skeleton: true`. A dormer must stand within its face's region (`crosses-face` otherwise), and a cupola takes its sill from the skeleton faces under it. Porches and fills are refused (`host-inexact`), since they replace the roof over their footprint. The skeleton roof has no eave trim, so a structure there cuts no eave. Tests load the browser build of the skeleton library with `self`/`window` shims (`tests/skeleton_structures.test.js`).
+- **Structures on a straight-skeleton hip.** A multi-volume equal-pitch hip is one skeleton roof, which used to return no zone descriptors, so nothing could stand on an L or U hip. `skeletonHipZones` (`js/extrusion.js`) now describes each volume by the planes of its sides on the footprint outline, each face's region in plan (`faceRegions`, from the skeleton polygon rising from that edge), and the skeleton faces themselves. Inside a volume the roof is not the min of those planes near an inner side or a valley, so the descriptors are `exact: false, skeleton: true`. A dormer must stand within its face's region (`crosses-face` otherwise), and a cupola takes its sill from the skeleton faces under it. Porches and fills are refused (`host-inexact`), since they replace the roof over their footprint. (Since lifted: see [Porches on continuous hips](#porches-on-continuous-hips).) The skeleton roof has no eave trim, so a structure there cuts no eave. Tests load the browser build of the skeleton library with `self`/`window` shims (`tests/skeleton_structures.test.js`).
 - **Dormers follow their slope.** A dormer's centerline is always square to the host ridge. When the ridge turns, a dormer on what is now a gable end faces the slope at the same end (minZ ↔ minX, maxZ ↔ maxX), keeping its offset along the wall, with a `side-turned` warning. The record keeps its side, so turning the ridge back restores it. A dormer's `ridge` is ignored (always perpendicular), and the editor shows the Ridge option only for porches and structures rising through the roof.
 - **GLB export.** The invisible volume pick targets are marked `editorOnly`, so the export leaves them out.
 - **Roof merges.** "Merge into adjacent roof" is offered only when the neighbor it would merge into is not a mansard or gambrel (the resolver skips those merges).

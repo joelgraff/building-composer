@@ -220,10 +220,10 @@ come out of the clip for every roof type). The rules that follow:
   piece per host face); its walls run down to the host wall top there, and
   knee walls close the attic around it.
 - A structure can stand on another; hosts are resolved first.
-- On a straight-skeleton hip (one hip over several volumes) each volume's
-  descriptor is approximate: the planes of its outside sides and each face's
-  region in plan. Dormers (within one face's region) and structures rising
-  through the roof can stand there; porches cannot.
+- On a straight-skeleton hip (one hip over several volumes) a volume's roof is
+  not one convex solid, so its descriptor lists the roof as convex pieces, each
+  under one face's plane, and its solid is the union of a prism per piece.
+  Every kind of structure stands there; a dormer must stay within one face.
 - Structures refer to volumes by id, so footprints are assumed fixed once
   structures are placed; editing the footprint can renumber its volumes.
 

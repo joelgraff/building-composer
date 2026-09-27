@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { computeFacadeLayout } from '../js/facade.js';
 import { createBuildingFromFootprint, setStraightSkeletonBuilder } from '../js/extrusion.js';
 import { normalizeRoofStructures } from '../js/roof-structures.js';
-import { meshTriangles, totalArea } from './helpers/mesh.js';
+import { meshTriangles, totalArea, uncoveredEdges } from './helpers/mesh.js';
 
 // the browser build of the skeleton library, as index.html loads it
 globalThis.self ??= globalThis;
@@ -41,6 +41,19 @@ function roofArea(building) {
   return area;
 }
 
+/** No see-through edges, but the roof lift at the plate and the porches' open sides (`openPlanes`: [axis index, value]). */
+function assertWatertight(result, label, openPlanes = []) {
+  const tris = [];
+  result.building.traverse((child) => {
+    if (child.isMesh && !child.userData?.editorOnly) {
+      meshTriangles(child).forEach((tri) => tris.push(tri.map(([x, y, z]) => [x, y + child.position.y, z])));
+    }
+  });
+  const lift = (edge) => result.roofZones.some((zone) => edge.every((p) => Math.abs(p[1] - zone.baseY) < 1e-3));
+  const opening = (edge) => openPlanes.some(([k, value]) => edge.every((p) => Math.abs(p[k] - value) < 1e-3));
+  assert.deepEqual(uncoveredEdges(tris).filter((edge) => !lift(edge) && !opening(edge)), [], `${label}: see-through edges`);
+}
+
 const dormer = { id: 'd', kind: 'dormer', hostVolumeId: 'volume-0', hostSide: 'minZ', offset: 2, width: 2.4, setback: 0.6 };
 
 describe('roof structures on a continuous (straight-skeleton) hip', () => {
@@ -68,7 +81,7 @@ describe('roof structures on a continuous (straight-skeleton) hip', () => {
     assert.ok(roofArea(building) < plain - 1, 'the roof under the dormer is removed');
   });
 
-  it('refuses a dormer running off its face into a hip, and a porch replacing the roof', () => {
+  it('refuses a dormer running off its face into a hip or valley', () => {
     const [offFace] = build([{ ...dormer, offset: -8.5 }]).roofStructures;
     assert.deepEqual(offFace.errors.map((e) => e.code), ['crosses-face']);
     // volume-0's back wall is inside the L short of x = 8, where the roof is volume-1's side face
@@ -76,10 +89,46 @@ describe('roof structures on a continuous (straight-skeleton) hip', () => {
     assert.deepEqual(overValley.errors.map((e) => e.code), ['crosses-face']);
     const [besideValley] = build([{ ...dormer, hostSide: 'maxZ', offset: 3 }]).roofStructures;
     assert.deepEqual(besideValley.errors, []);
-    const [porch] = build([{
-      id: 'p', kind: 'porch', hostVolumeId: 'volume-0', hostSide: 'minZ', setback: -2, depth: 2, width: 4, baseHeight: 'ground', wallHeight: 2.6,
-    }]).roofStructures;
-    assert.deepEqual(porch.errors.map((e) => e.code), ['host-inexact']);
+  });
+
+  describe('porches', () => {
+    const porch = (fields) => ({
+      id: 'p', kind: 'porch', hostVolumeId: 'volume-0', roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 2 }, ...fields,
+    });
+    const twoStory = (structures) => build(structures, { storyCount: 2 });
+
+    it('a ground porch and a porch on posts stand against the wall and meet the roof above them', () => {
+      const ground = twoStory([porch({
+        hostSide: 'minZ', setback: -2.4, depth: 2.4, width: 4.8, baseHeight: 'ground', wallHeight: 2.6, openSides: ['front', 'left', 'right'],
+      })]);
+      assert.deepEqual(ground.roofStructures[0].errors, []);
+      assertWatertight(ground, 'ground porch', [[2, -2.4], [0, 7.6], [0, 12.4]]);
+      const upper = twoStory([porch({
+        hostSide: 'minZ', setback: -2.4, depth: 2.4, width: 3.6, baseHeight: -3, wallHeight: 2.4, openSides: ['front', 'left', 'right'], support: 'posts',
+      })]);
+      assert.deepEqual(upper.roofStructures[0].errors, []);
+      assert.equal(upper.roofStructures[0].resolved.support, 'posts');
+      assertWatertight(upper, 'upper porch', [[2, -2.4], [0, 8.2], [0, 11.8]]);
+    });
+
+    it('a porch standing on the plate across the valley replaces the roof on every face under it', () => {
+      // on volume-0's inner (maxZ) side short of x = 8, astride the valley from (8, 8) to (4, 4)
+      const result = build([porch({
+        hostSide: 'maxZ', offset: -4, setback: 0, depth: 3, width: 4, baseHeight: 0, wallHeight: 2.4, openSides: [],
+      })]);
+      const [entry] = result.roofStructures;
+      assert.deepEqual(entry.errors, []);
+      assert.ok(entry.resolved.removedRoof.length >= 2, 'more than one roof face');
+      assertWatertight(result, 'porch across the valley');
+    });
+
+    it('a gable porch on the plate with an open front', () => {
+      const result = build([porch({
+        hostSide: 'minZ', offset: 3, setback: 0, depth: 3, width: 4, baseHeight: 0, wallHeight: 2.4, roofType: 'gable', roofShape: null, openSides: ['front'],
+      })]);
+      assert.deepEqual(result.roofStructures[0].errors, []);
+      assertWatertight(result, 'gable porch', [[2, 0]]);
+    });
   });
 
   it('a cupola rises through the roof from its highest point under it', () => {
