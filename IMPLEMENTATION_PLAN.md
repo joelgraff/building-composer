@@ -424,7 +424,7 @@ The exposed part of a partly shared eave side gets its own eave strip (top, fasc
 
 ## Roof-borne structures (dormers, raised porches) — plan
 
-Status: Phases 0–4 and 4a–4c complete; 4d and 5–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
+Status: Phases 0–4 and 4a–4d complete; 5–7 planned. This covers structures that change the roof shell and have their own walls, but are not part of the footprint: gable, hip, shed, and flat dormers, wall dormers (a front wall that continues the main wall up through the eave), and second-story sleeping or smoking porches. Under ARCHITECTURE.md §5 they are **envelope modifiers**, because they add functional space. This work belongs to Task 10 and is also the "attached roof zone" noted under *Roof merge resolver → Known limits*.
 
 ### Core idea
 
@@ -649,10 +649,32 @@ Structures are stored as a list in `modelConfig.roofStructures`, persisted in `.
    - Example: `recessed-porch` (a gable-roofed recess on the front and a shed-roofed one on the back, both set up the roof).
    - Not modeled: a railing, or a knee wall/curb across the open front raising it above the roof. These come with facade modifiers, or a front knee-wall height if real cases call for one.
 
-4d. **Cupolas and belvederes.** A structure rising out of the roof that is not joining it: it sits over the ridge (or at the center of a flat or hip roof), with its whole roof above the host's.
-   - A `mount: 'roof'` option skips the single-face rule and the ridge cap. Its walls still stop at the host roof, as a dormer's do. The host roof it covers comes from the per-face `removedRoof` union.
-   - Placement uses the same frame; a helper centers it on the ridge.
-   - Its roof is a hip (a pyramid on a square) or any roof type. Windows on every side come with facade modifiers.
+4d. **Cupolas and belvederes.** Complete.
+   - `mount: 'through'` makes a structure rise through the roof without joining it; `'join'` (the default) is a dormer's. A through structure:
+     - skips the single-face rule and the ridge cap;
+     - measures its wall height from the highest point of the host roof under it (`highestHostRoof`: the roof is linear on each face's region, so the highest point is a corner of one of those pieces);
+     - has walls that stop at the host roof as a dormer's do;
+     - keeps its roof overhang on every side (no buried back);
+     - leaves the host roof whole: an enclosed one hides the roof inside it, and an open one stands on it.
+   - `setback: 'center'` centers a structure across its host (on the ridge); it needs an explicit depth.
+   - The `cupola` preset is 1.6 m square, with 1.2 m walls, a hip (pyramid) roof, `mount: 'through'`, and `setback: 'center'`.
+   - Open sides of a through structure get posts from the roof surface to the plate (and headers), so an open pavilion on a flat roof, or an open cupola, stands on the roof.
+   - Validation:
+     - `mount-conflict`: a through structure cannot also have a base height;
+     - `inset-not-supported`;
+     - `outside-host`: it must stand within the host walls;
+     - `depth-required`: a centered or through structure needs a depth.
+   - Tests:
+     - centered on the ridge, sill at the ridge, plate one wall height above;
+     - walls down to the slopes and nothing below the roof;
+     - host roof untouched, overhang all round;
+     - on a hip ridge and on a flat roof (belvedere);
+     - an open pavilion on posts standing on the deck;
+     - an open cupola's posts on the slopes;
+     - all watertight;
+     - the refusals, and normalization of `mount` and the centered setback.
+   - Mutation checks: posts from the sill instead of the roof fail the open-cupola test; cutting the host roof fails four tests.
+   - Examples: `cupola` (gable ridge), `belvedere` (low hip roof), and `rooftop-pavilion` (flat roof, open).
 
    New examples as each lands:
    - a ground porch with posts;

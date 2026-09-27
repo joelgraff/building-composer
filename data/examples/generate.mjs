@@ -66,6 +66,29 @@ const examples = {
       { hostVolumeId: 'volume-0', hostSide: 'minZ', kind: 'recessed-porch', width: 5.4, setback: 0.9, inset: 1.2, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 3 } },
     ],
   },
+  cupola: {
+    note: 'A cupola on the ridge of a two-story gable house: 1.6 m square with a pyramid roof, its walls clearing the ridge by 1.2 m.',
+    footprint: rect(16, 9),
+    structures: [
+      on('volume-0', { kind: 'cupola', roofShape: { mode: 'slope', pitchRise: 12 } }),
+    ],
+  },
+  belvedere: {
+    note: 'An Italianate belvedere: a windowed lookout at the center of a low hip roof, with a low hip roof of its own.',
+    footprint: rect(12, 12),
+    config: { roofType: 'hip', roofPitchRise: 4, roofEaveDepth: 0.6 },
+    structures: [
+      on('volume-0', { kind: 'cupola', width: 3.2, depth: 3.2, wallHeight: 1.8, roofShape: { mode: 'slope', pitchRise: 4 }, eaves: { eaveDepth: 0.45 } }),
+    ],
+  },
+  'rooftop-pavilion': {
+    note: 'An open pavilion on a flat roof: a hip roof on posts standing on the roof deck, set back from the edges.',
+    footprint: rect(14, 10),
+    config: { roofType: 'flat' },
+    structures: [
+      on('volume-0', { kind: 'cupola', width: 4, depth: 4, wallHeight: 2.4, roofShape: { mode: 'slope', pitchRise: 6 }, openSides: ['front', 'back', 'left', 'right'] }),
+    ],
+  },
   'ground-porch': {
     note: 'A ground-level porch on a solid deck, open on three sides with posts, its shed roof butting the wall below the second floor.',
     footprint: rect(16, 9),

@@ -286,6 +286,14 @@ describe('roof structure records', () => {
     assert.ok(recessed.setback > 0, 'set up the roof, above an intact strip of roof and eave');
   });
 
+  it('read a mount and a centered setback, with the cupola preset', () => {
+    const cupola = normalizeRoofStructure({ kind: 'cupola', hostVolumeId: 'volume-0', hostSide: 'minZ' });
+    assert.equal(cupola.mount, 'through');
+    assert.equal(cupola.setback, 'center');
+    assert.equal(cupola.roofType, 'hip');
+    assert.equal(normalizeRoofStructure({ hostVolumeId: 'volume-0', hostSide: 'minZ', mount: 'sideways' }).mount, 'join');
+  });
+
   it('get unique ids, keeping valid ones', () => {
     const list = normalizeRoofStructures([
       { id: 'structure-2', hostVolumeId: 'volume-0', hostSide: 'minZ' },

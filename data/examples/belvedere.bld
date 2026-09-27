@@ -1,69 +1,67 @@
 {
   "format": "building-composer",
   "version": 1,
-  "note": "A ground-level porch on a solid deck, open on three sides with posts, its shed roof butting the wall below the second floor.",
+  "note": "An Italianate belvedere: a windowed lookout at the center of a low hip roof, with a low hip roof of its own.",
   "footprint": [
     [
-      -8,
-      -4.5
+      -6,
+      -6
     ],
     [
-      8,
-      -4.5
+      6,
+      -6
     ],
     [
-      8,
-      4.5
+      6,
+      6
     ],
     [
-      -8,
-      4.5
+      -6,
+      6
     ]
   ],
   "storyCount": 2,
   "storyHeight": 3.2,
-  "roofType": "gable",
+  "roofType": "hip",
   "roofDirection": "z-min",
-  "roofPitchRise": 8,
+  "roofPitchRise": 4,
   "roofPitchRun": 12,
   "roofHeightMode": "slope",
-  "roofEaveDepth": 0.35,
+  "roofEaveDepth": 0.6,
   "roofRakeDepth": 0.25,
   "roofFasciaDepth": 0.1524,
   "eaveSoffit": "flat",
   "rakeSoffit": "sloped",
   "wallMaterial": "wood",
-  "roofHeight": 3,
+  "roofHeight": 2,
   "volumeStoryOverrides": {},
   "roofStructures": [
     {
       "id": "structure-1",
-      "kind": "porch",
+      "kind": "cupola",
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
       "hostSide": "maxZ",
       "offset": 0,
-      "width": 9,
-      "setback": -2.4,
-      "mount": "join",
-      "depth": 2.4,
-      "wallHeight": 2.6,
-      "baseHeight": "ground",
+      "width": 3.2,
+      "setback": "center",
+      "mount": "through",
+      "depth": 3.2,
+      "wallHeight": 1.8,
+      "baseHeight": null,
       "support": "auto",
-      "openSides": [
-        "front",
-        "left",
-        "right"
-      ],
+      "openSides": [],
       "inset": 0,
-      "roofType": "shed",
+      "roofType": "hip",
       "ridge": "perpendicular",
       "roofShape": {
         "mode": "slope",
-        "pitchRise": 3
+        "pitchRise": 4
       },
       "join": "auto",
-      "eaves": {},
+      "eaves": {
+        "eaveDepth": 0.45
+      },
       "materials": {}
     }
   ]

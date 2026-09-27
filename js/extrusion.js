@@ -243,10 +243,14 @@ function withRoofStructures(result, config) {
         ...(resolved.standing ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved)]), floorSolids) : []),
         ...recess.floor,
       ], materials.roof],
-      ['posts', clipOutside([
-        ...(resolved.standing ? openSidePosts(resolved, [hostBody, ...others]) : []),
-        ...supports.posts,
-      ], [hostBody, ...others]), materials.wall],
+      ['posts', [
+        ...clipOutside([
+          ...(resolved.standing ? openSidePosts(resolved, [hostBody, ...others]) : []),
+          ...supports.posts,
+        ], [hostBody, ...others]),
+        // a structure rising through the roof stands its posts on the roof
+        ...(resolved.through ? clipOutside(openSidePosts(resolved, others, host.baseY), [hostSolid, ...others]) : []),
+      ], materials.wall],
       ['support', clipOutside(supports.walls, [hostSolid, ...others]), materials.wall],
       ['foundation', clipOutside(supports.foundation, [hostSolid, ...others]), materials.foundation],
       ['eave-caps', interruptsHostEave(resolved, host) ? interruptHostEave(resolved, host, roofMeshes) : [], materials.roof],
@@ -266,7 +270,9 @@ function withRoofStructures(result, config) {
     // A standing structure's solid starts at its floor, so a flat host's slab
     // below the deck goes too; a dormer's reaches down through the host roof.
     const cut = volumeSolid(resolved, { floorY: resolved.standing ? resolved.sillY : 0 });
-    roofMeshes.filter((mesh) => mesh.userData?.structureId !== resolved.id).forEach((mesh) => {
+    // A structure rising through the roof leaves it whole: an enclosed one
+    // hides the roof inside it, and an open one stands on it.
+    roofMeshes.filter((mesh) => !resolved.through && mesh.userData?.structureId !== resolved.id).forEach((mesh) => {
       const y = mesh.position.y;
       const absolute = geometryTriangles(mesh.geometry).map((tri) => tri.map(([px, py, pz]) => [px, py + y, pz]));
       const kept = clipOutsideConvexSolid(absolute, cut).map((tri) => tri.map(([px, py, pz]) => [px, py - y, pz]));
@@ -336,11 +342,11 @@ function postBox(bounds, [x, z], y0, y1) {
 
 /**
  * Posts holding up the roof along a structure's open sides: at each end and
- * no more than MAX_POST_SPAN apart, from floor to plate. An end against a
+ * no more than MAX_POST_SPAN apart, from floor (or `bottomY`) to plate. An end against a
  * closed wall of its own, or against the host or another volume (where the
  * roof bears on that wall), gets no post.
  */
-function openSidePosts(resolved, solids) {
+function openSidePosts(resolved, solids, bottomY = resolved.sillY) {
   const sides = structureWallSides(resolved.frame);
   const { bounds, sillY, plateY } = resolved;
   const closedSides = Object.entries(sides).filter(([wallName]) => !resolved.openSides.includes(wallName)).map(([, side]) => side);
@@ -362,7 +368,7 @@ function openSidePosts(resolved, solids) {
       }
     });
   });
-  return [...points.values()].flatMap((point) => postBox(bounds, point, sillY, plateY));
+  return [...points.values()].flatMap((point) => postBox(bounds, point, bottomY, plateY));
 }
 
 /**
@@ -669,7 +675,7 @@ function structureEaveSetup(resolved, config) {
     resolved.roofType,
     { ridgeAxis: resolved.ridgeAxis, roofHighEdge: resolved.roofHighEdge },
     eaveConfig,
-    resolved.roofType === 'hip' ? [] : [sides.back],
+    resolved.roofType === 'hip' || resolved.through ? [] : [sides.back],
     undefined,
     resolved.bounds
   );

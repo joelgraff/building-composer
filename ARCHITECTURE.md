@@ -185,6 +185,10 @@ same lines as one closed shell (valleys, ridge ends, and wall-on-roof seams
 come out of the clip for every roof type). The rules that follow:
 
 - A dormer stands on one roof face and its roof never passes the host ridge.
+- A structure rising through the roof (`mount: 'through'`: a cupola,
+  belvedere, or rooftop pavilion) does neither: it may straddle the ridge, its
+  wall height is measured from the highest point of the roof under it, and it
+  leaves the host roof whole.
 - A flush front wall carries its host wall up through the eave: the eave is
   cut away across it and capped either side, unless the host is open on that
   side (then the eave runs on as a beam).

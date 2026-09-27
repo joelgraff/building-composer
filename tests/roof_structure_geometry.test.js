@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { normalizeFootprint } from '../js/footprint.js';
 import { computeFacadeLayout } from '../js/facade.js';
 import { createBuildingFromFootprint } from '../js/extrusion.js';
-import { normalizeRoofStructures, volumeSolid, isInsideSolid } from '../js/roof-structures.js';
+import { normalizeRoofStructures, volumeSolid, isInsideSolid, FLAT_ROOF_THICKNESS } from '../js/roof-structures.js';
 import { meshTriangles, openTriangleEdges, totalArea, uncoveredEdges } from './helpers/mesh.js';
 
 const uFootprint = JSON.parse(readFileSync('./data/footprint_u.json', 'utf8'));
@@ -704,5 +704,80 @@ describe('recessed porches', () => {
   it('refuses a recess that would run back under the host roof', () => {
     assert.deepEqual(recessed({ inset: 3.5 }).roofStructures[0].errors.map((e) => e.code), ['inset-too-deep']);
     assert.deepEqual(recessed({ inset: 9 }).roofStructures[0].errors.map((e) => e.code), ['inset-too-deep']);
+  });
+});
+
+describe('cupolas and belvederes', () => {
+  const cupola = (fields = {}, config = {}) => build([{ kind: 'cupola', hostVolumeId: 'volume-0', hostSide: 'minZ', ...fields }], config);
+  const RIDGE = PLATE + 2.5;
+  const openAll = (b) => [[0, b.minX], [0, b.maxX], [2, b.minZ], [2, b.maxZ]];
+
+  it('a cupola sits centered on the ridge, its walls clearing it by their height', () => {
+    const result = cupola();
+    const [{ resolved, errors, warnings }] = result.roofStructures;
+    assert.deepEqual([errors, warnings], [[], []]);
+    assert.equal(resolved.through, true);
+    ['minX', 'maxX', 'minZ', 'maxZ'].forEach((side) => near(Math.abs(resolved.bounds[side]), 0.8, side));
+    near(resolved.sillY, RIDGE, 'measured from the ridge');
+    near(resolved.plateY, RIDGE + 1.2);
+    assertWatertight(result, 'cupola');
+  });
+
+  it('its walls run down to the roof slopes on both sides of the ridge', () => {
+    const result = cupola();
+    const walls = partOf(result, 'walls');
+    // the corners stand 0.8 m either side of the ridge, where the 6:12 roof is 0.4 m lower
+    near(Math.min(...walls.flat().map((v) => v[1])), RIDGE - 0.4);
+    walls.forEach((tri) => {
+      const centroid = [0, 1, 2].map((k) => (tri[0][k] + tri[1][k] + tri[2][k]) / 3);
+      assert.ok(centroid[1] >= hostY(centroid) - 1e-3, 'nothing below the roof');
+    });
+  });
+
+  it('leaves the host roof whole and overhangs on every side', () => {
+    const without = planArea(trianglesOf(build([]).building, isHostRoof));
+    const result = cupola();
+    assert.ok(Math.abs(planArea(trianglesOf(result.building, isHostRoof)) - without) < 1e-6);
+    const [xs, , zs] = [0, 1, 2].map((k) => {
+      const values = partOf(result, 'roof').flat().map((v) => v[k]);
+      return [Math.min(...values), Math.max(...values)];
+    });
+    [...xs, ...zs].forEach((value) => assert.ok(Math.abs(value) > 0.8 + 0.1, 'past the walls all round'));
+  });
+
+  it('also stands on a hip roof\'s ridge and on a flat roof (a belvedere)', () => {
+    const hip = cupola({}, { roofType: 'hip' });
+    assert.deepEqual(hip.roofStructures[0].errors, []);
+    near(hip.roofStructures[0].resolved.sillY, RIDGE);
+    assertWatertight(hip, 'hip cupola');
+    const belvedere = cupola({ width: 3, depth: 3, wallHeight: 2.4 }, { roofType: 'flat' });
+    near(belvedere.roofStructures[0].resolved.sillY, PLATE + FLAT_ROOF_THICKNESS, 'on the slab');
+    assertWatertight(belvedere, 'belvedere');
+  });
+
+  it('an open pavilion on a flat roof is a roof on posts standing on the roof', () => {
+    const result = cupola({ width: 4, depth: 4, wallHeight: 2.4, openSides: ['front', 'back', 'left', 'right'] }, { roofType: 'flat' });
+    const { resolved } = result.roofStructures[0];
+    assert.equal(partOf(result, 'walls').length, 0);
+    const posts = partOf(result, 'posts');
+    const ys = posts.flat().map((v) => v[1]);
+    near(Math.min(...ys), PLATE + FLAT_ROOF_THICKNESS, 'on the roof');
+    near(Math.max(...ys), resolved.plateY);
+    assertWatertight(result, 'pavilion', openAll(resolved.bounds));
+  });
+
+  it('an open cupola on a gable stands its posts on the slopes', () => {
+    const result = cupola({ openSides: ['front', 'back', 'left', 'right'] });
+    const { resolved } = result.roofStructures[0];
+    near(Math.min(...partOf(result, 'posts').flat().map((v) => v[1])), RIDGE - 0.4, 'down to the roof at the corners');
+    assertWatertight(result, 'open cupola', openAll(resolved.bounds));
+  });
+
+  it('refuses what a cupola cannot be', () => {
+    const code = (fields) => cupola(fields).roofStructures[0].errors.map((e) => e.code);
+    assert.deepEqual(code({ baseHeight: 0 }), ['mount-conflict']);
+    assert.deepEqual(code({ inset: 0.5 }), ['inset-not-supported']);
+    assert.deepEqual(code({ setback: -1 }), ['outside-host']);
+    assert.deepEqual(code({ depth: null }), ['depth-required']);
   });
 });

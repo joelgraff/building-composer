@@ -1,7 +1,7 @@
 {
   "format": "building-composer",
   "version": 1,
-  "note": "A ground-level porch on a solid deck, open on three sides with posts, its shed roof butting the wall below the second floor.",
+  "note": "A cupola on the ridge of a two-story gable house: 1.6 m square with a pyramid roof, its walls clearing the ridge by 1.2 m.",
   "footprint": [
     [
       -8,
@@ -38,29 +38,25 @@
   "roofStructures": [
     {
       "id": "structure-1",
-      "kind": "porch",
+      "kind": "cupola",
       "hostVolumeId": "volume-0",
       "hostStructureId": null,
       "hostSide": "maxZ",
       "offset": 0,
-      "width": 9,
-      "setback": -2.4,
-      "mount": "join",
-      "depth": 2.4,
-      "wallHeight": 2.6,
-      "baseHeight": "ground",
+      "width": 1.6,
+      "setback": "center",
+      "mount": "through",
+      "depth": 1.6,
+      "wallHeight": 1.2,
+      "baseHeight": null,
       "support": "auto",
-      "openSides": [
-        "front",
-        "left",
-        "right"
-      ],
+      "openSides": [],
       "inset": 0,
-      "roofType": "shed",
+      "roofType": "hip",
       "ridge": "perpendicular",
       "roofShape": {
         "mode": "slope",
-        "pitchRise": 3
+        "pitchRise": 12
       },
       "join": "auto",
       "eaves": {},
