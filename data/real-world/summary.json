@@ -46,7 +46,7 @@
       {
         "label": "hip dormer 2.4 m wide, 1.1 m walls, under a 6:12 roof",
         "errors": [
-          "The structure crosses a hip, ridge, or valley of the host roof; it must stand on one roof face."
+          "The structure crosses a hip, ridge, or valley of the host roof; it must stand on one roof face. It fits at 1.70 m wide (0.70 m narrower)."
         ],
         "warnings": [
           "The structure's roof was lowered to meet the host ridge."

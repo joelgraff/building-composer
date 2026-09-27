@@ -443,6 +443,27 @@ describe('resolveRoofStructure', () => {
     assert.deepEqual(resolveRoofStructure(normalizeRoofStructure({ hostVolumeId: 'volume-9', hostSide: 'minZ' }), undefined).errors.map((e) => e.code), ['host-missing']);
   });
 
+  it('says what would fit when a structure is refused', () => {
+    // a 2.4 m hip dormer with 1.1 m walls on the 6:12 hip end runs into the hips
+    const wide = dormer({ hostSide: 'minX', width: 4 }, hipHost);
+    const [crossing] = wide.errors;
+    assert.equal(crossing.code, 'crosses-face');
+    assert.ok(crossing.fix.width < 4, 'a narrower width');
+    assert.match(crossing.message, /It fits at \d+\.\d\d m wide/);
+    assert.deepEqual(dormer({ hostSide: 'minX', width: crossing.fix.width }, hipHost).errors, [], 'and it does');
+    // too tall for the ridge: narrowing doesn't help a flat roof's height, lowering the walls does
+    const [tall] = dormer({ wallHeight: 2.2, roofType: 'flat', depth: 2 }).errors;
+    assert.equal(tall.code, 'above-ridge');
+    assert.ok(tall.fix.wallHeight < 2.2);
+    assert.deepEqual(dormer({ wallHeight: tall.fix.wallHeight, roofType: 'flat', depth: 2 }).errors, []);
+    // past the end of the wall: narrower about its center
+    const [past] = dormer({ offset: 9 }).errors;
+    assert.equal(past.code, 'outside-host');
+    assert.ok(Math.abs(past.fix.width - 2) < 1e-9, `${past.fix.width}`);
+    // nothing smaller helps a structure with no host
+    assert.equal(resolveRoofStructure(normalizeRoofStructure({ hostVolumeId: 'volume-9', hostSide: 'minZ' }), undefined).errors[0].fix, undefined);
+  });
+
   it('resolves to a solid (the zone descriptor shape)', () => {
     const { resolved } = dormer({});
     const solid = volumeSolid(resolved, { floorY: resolved.sillY });

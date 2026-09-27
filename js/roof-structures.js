@@ -551,12 +551,57 @@ function hostFacePlane(host, side) {
  * standing on a base (`baseHeight`, a porch) replaces the host roof inside
  * its footprint instead: it is not capped and may span several roof faces.
  *
+ * When a structure doesn't fit (it crosses a hip or valley, rises above the
+ * ridge, or runs past its face or wall), the error says what would: the
+ * widest width, and failing that the tallest wall height, at which it
+ * does (`fix: { width }` or `fix: { wallHeight }`, also in the message).
+ *
  * @param {object} structure - a normalized record
  * @param {object|undefined} host - the host volume's roof zone descriptor
  * @param {object} [config] - building defaults (`roofPitchRise`, `roofPitchRun`)
- * @returns {{ resolved: object|null, errors: Array<{code: string, message: string}>, warnings: Array<{code: string, message: string}> }}
+ * @returns {{ resolved: object|null, errors: Array<{code: string, message: string, fix?: object}>, warnings: Array<{code: string, message: string}> }}
  */
 export function resolveRoofStructure(structure, host, config = {}) {
+  const result = resolveStructureOnce(structure, host, config);
+  const [first] = result.errors;
+  if (!first || !FIXABLE.includes(first.code)) {
+    return result;
+  }
+  const fix = suggestFit(structure, host, config);
+  if (fix) {
+    const meters = (value) => `${value.toFixed(2)} m`;
+    first.fix = fix;
+    first.message += 'width' in fix
+      ? ` It fits at ${meters(fix.width)} wide (${meters(structure.width - fix.width)} narrower).`
+      : ` It fits with ${meters(fix.wallHeight)} walls (${meters(structure.wallHeight - fix.wallHeight)} lower).`;
+  }
+  return result;
+}
+
+/** The refusals a smaller structure can get past. */
+const FIXABLE = ['crosses-face', 'above-ridge', 'outside-face', 'outside-host'];
+
+/**
+ * The largest structure like this one that fits, narrowing it about its
+ * center first (in 5 cm steps) and failing that lowering its walls; null if
+ * neither does.
+ */
+function suggestFit(structure, host, config) {
+  const fits = (fields) => !resolveStructureOnce({ ...structure, ...fields }, host, config).errors.length;
+  for (let width = structure.width - 0.05; width >= 0.3; width -= 0.05) {
+    if (fits({ width })) {
+      return { width: Math.round(width * 100) / 100 };
+    }
+  }
+  for (let wallHeight = structure.wallHeight - 0.05; wallHeight >= 0.2; wallHeight -= 0.05) {
+    if (fits({ wallHeight })) {
+      return { wallHeight: Math.round(wallHeight * 100) / 100 };
+    }
+  }
+  return null;
+}
+
+function resolveStructureOnce(structure, host, config = {}) {
   const errors = [];
   const warnings = [];
   const fail = (code, message) => {
