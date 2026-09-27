@@ -598,8 +598,8 @@ export function resolveRoofStructure(structure, host, config = {}) {
     if (structure.depth !== null && Math.abs(structure.depth + structure.setback) > WRAP_TOLERANCE) {
       return fail('wrap-depth', 'A wraparound stands wholly outside the walls: its depth must equal its projection.');
     }
-    if (structure.roofType !== 'hip') {
-      return fail('wrap-roof', 'A wraparound takes a hip roof, which turns the corner.');
+    if (!['hip', 'shed'].includes(structure.roofType)) {
+      return fail('wrap-roof', 'A wraparound takes a hip or shed roof, which turns the corner on a hip.');
     }
   }
 
@@ -710,8 +710,31 @@ export function resolveRoofStructure(structure, host, config = {}) {
   const planeConfig = {
     roofHeight, roofDirection: ridgeAxis, roofHighEdge, roofPitchRise, roofPitchRun,
   };
-  const planes = computeVolumeEavePlanes(bounds, roofType, planeConfig);
+  let planes = computeVolumeEavePlanes(bounds, roofType, planeConfig);
+  // A hip porch projecting from a wall is a hipped shed: it slopes from its
+  // front and ends only, running level into the wall (no slope back down to
+  // it). One standing on a roof, with nothing behind it, keeps its full hip.
+  let eaveRoof = null;
+  if (standing && roofType === 'hip' && setback < -GEOMETRY_EPSILON && roofPitchRun > 0) {
+    const walls = structureWallSides(frame);
+    const eaveSides = [walls.front, walls.left, walls.right];
+    planes = eaveSides.map((side) => makeEavePlane(bounds, side, roofPitchRise / roofPitchRun));
+    roofHeight = roofPeak(planes, [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]]);
+    eaveRoof = { eaveSides };
+  }
   const slabThickness = roofType === 'flat' ? FLAT_ROOF_THICKNESS : 0;
+  // A porch whose roof rises through the host eave meets the host roof in
+  // valleys; builders usually keep it below the eave instead (fewer joins,
+  // less risk of a leak), so say so.
+  if (standing && projecting && plateY < host.wallTopY - GEOMETRY_EPSILON) {
+    const [x, z] = pointOn(frame, (along[0] + along[1]) / 2, wall);
+    const roofAtWall = plateY + (planes.length ? evalZoneHeight(planes, x, z) : slabThickness);
+    const profile = hostEaveProfile(host, structure.hostSide, (along[0] + along[1]) / 2);
+    const atWall = profile?.outline.filter(([u]) => Math.abs(u - wall) < 1e-9).map(([, v]) => v) ?? [];
+    if (atWall.length && roofAtWall > host.baseY + Math.min(...atWall) + GEOMETRY_EPSILON) {
+      warnings.push(error('above-eave', 'The porch roof rises through the host eave. Porches are usually kept below it (a lower pitch or wall height), which avoids a valley and a likely leak.'));
+    }
+  }
   const topAt = planes.length
     ? (point) => plateY + evalZoneHeight(planes, point[0], point[1])
     : () => plateY + slabThickness;
@@ -842,6 +865,8 @@ export function resolveRoofStructure(structure, host, config = {}) {
       ])],
       // where a wraparound's two segments meet (and its front segment's back): no wall, post, header, or railing
       seamSides: structure.seamSides ?? [],
+      // a roof rising from these eaves only (see eaveRoofTriangles)
+      eaveRoof,
       // the record it was built from (a wraparound's side segment is part of its porch)
       recordId: structure.wrapOf ?? structure.id,
       wrapSegment: structure.wrapSegment ?? null,
@@ -1041,7 +1066,8 @@ export function validateRoofStructures(structures, roofZones, config = {}, { des
     return entry;
   };
   const entries = list.map((structure) => resolveOne(structure));
-  joinWrapRoofs(entries);
+  joinWrapRoofs(entries, [...zones.values()]);
+  settleEaveRoofs(entries, [...zones.values()]);
   return entries;
 }
 
@@ -1099,11 +1125,47 @@ function expandWraps(structures, zones) {
 }
 
 /**
- * The two segments of a wraparound share one roof: the planes rising from
- * every outer eave (none from the walls), so it is hipped at the far ends
- * and at the corner and runs level into the walls.
+ * Whether a structure's side stands against a volume's wall: just outside it
+ * is inside one of `zones` (a porch's end run up to a projection, or into
+ * the inside corner of an L). A roof never slopes down onto such a side.
  */
-function joinWrapRoofs(entries) {
+function againstWall(resolved, side, zones) {
+  const { bounds } = resolved;
+  const acrossX = side === 'minX' || side === 'maxX';
+  const out = bounds[side] + (side.startsWith('min') ? -0.01 : 0.01);
+  const [lo, hi] = acrossX ? [bounds.minZ, bounds.maxZ] : [bounds.minX, bounds.maxX];
+  return [0.25, 0.5, 0.75].some((t) => {
+    const along = lo + (hi - lo) * t;
+    const [x, z] = acrossX ? [out, along] : [along, out];
+    return zones.some((zone) => x > zone.bounds.minX && x < zone.bounds.maxX && z > zone.bounds.minZ && z < zone.bounds.maxZ);
+  });
+}
+
+/** Gives structures a roof rising from `eaveSides` (per structure) only, at `slope`: their shared planes and peak. */
+function setEaveRoof(segments, eaveSides, slope) {
+  const planes = segments.flatMap((resolved, k) => eaveSides[k].map((side) => makeEavePlane(resolved.bounds, side, slope)));
+  const unique = planes.filter((plane, i) => planes.findIndex((other) => other.axis === plane.axis && other.sign === plane.sign
+    && Math.abs(other.constant - plane.constant) < 1e-9) === i);
+  segments.forEach((resolved, k) => {
+    const { bounds } = resolved;
+    const rectangle = [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]];
+    Object.assign(resolved, {
+      planes: unique,
+      roofHeight: roofPeak(unique, rectangle),
+      eaveRoof: { eaveSides: eaveSides[k] },
+    });
+    resolved.topY = resolved.plateY + resolved.roofHeight;
+  });
+}
+
+/**
+ * The two segments of a wraparound share one roof: the planes rising from
+ * its outer eaves (none from the walls), so it turns the corner on a hip
+ * that drains away from the house and runs level into the walls. A hip roof
+ * also slopes from its far ends, a shed's ends are plain; either way an end
+ * against a wall runs level into it.
+ */
+function joinWrapRoofs(entries, zones) {
   entries.filter((entry) => entry.structure.wrapSegment === 'side').forEach((sideEntry) => {
     const frontEntry = entries.find((entry) => entry.id === sideEntry.structure.wrapOf);
     const segments = [frontEntry?.resolved, sideEntry.resolved];
@@ -1116,23 +1178,25 @@ function joinWrapRoofs(entries) {
       return;
     }
     const slope = segments[0].roofPitchRun > 0 ? segments[0].roofPitchRise / segments[0].roofPitchRun : 0;
-    const eaveSides = segments.map((resolved) => {
+    const hipped = segments[0].roofType === 'hip';
+    const eaveSides = segments.map((resolved, k) => {
       const walls = structureWallSides(resolved.frame);
-      return ['front', 'left', 'right'].filter((wall) => !resolved.seamSides.includes(wall)).map((wall) => walls[wall])
-        .filter((wallSide) => !(resolved.wrapSegment === 'front' && wallSide === walls.back));
+      // the front segment's corner end continues the side segment's front eave
+      const ends = hipped ? ['left', 'right'] : (k === 0 ? [frontEntry.structure.wrapEnd] : []);
+      return ['front', ...ends].filter((wall) => !resolved.seamSides.includes(wall)).map((wall) => walls[wall])
+        .filter((side) => !againstWall(resolved, side, zones));
     });
-    const planes = segments.flatMap((resolved, k) => eaveSides[k].map((side) => makeEavePlane(resolved.bounds, side, slope)));
-    const unique = planes.filter((plane, i) => planes.findIndex((other) => other.axis === plane.axis && other.sign === plane.sign
-      && Math.abs(other.constant - plane.constant) < 1e-9) === i);
-    segments.forEach((resolved, k) => {
-      const rectangle = [[resolved.bounds.minX, resolved.bounds.minZ], [resolved.bounds.maxX, resolved.bounds.minZ], [resolved.bounds.maxX, resolved.bounds.maxZ], [resolved.bounds.minX, resolved.bounds.maxZ]];
-      Object.assign(resolved, {
-        planes: unique,
-        roofHeight: roofPeak(unique, rectangle),
-        wrapRoof: { eaveSides: eaveSides[k] },
-      });
-      resolved.topY = resolved.plateY + resolved.roofHeight;
-    });
+    setEaveRoof(segments, eaveSides, slope);
+  });
+}
+
+/** A hipped porch roof (see resolveRoofStructure) runs level into any wall one of its ends stands against. */
+function settleEaveRoofs(entries, zones) {
+  entries.filter((entry) => entry.resolved?.eaveRoof && !entry.structure.wrapSegment).forEach(({ resolved }) => {
+    const sides = resolved.eaveRoof.eaveSides.filter((side) => !againstWall(resolved, side, zones));
+    if (sides.length < resolved.eaveRoof.eaveSides.length) {
+      setEaveRoof([resolved], [sides], resolved.roofPitchRun > 0 ? resolved.roofPitchRise / resolved.roofPitchRun : 0);
+    }
   });
 }
 

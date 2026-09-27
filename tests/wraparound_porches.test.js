@@ -110,11 +110,11 @@ describe('wraparound porches', () => {
     });
   });
 
-  it('must reach the corner, stand wholly outside the walls, and take a hip roof', () => {
+  it('must reach the corner, stand wholly outside the walls, and take a hip or shed roof', () => {
     const codes = (fields) => build([porch(fields)]).result.roofStructures.map((entry) => entry.errors.map((e) => e.code));
     assert.deepEqual(codes({ offset: 1 }), [['wrap-not-at-corner'], ['wrap-incomplete']]);
     assert.deepEqual(codes({ depth: 3 }), [['wrap-depth'], ['wrap-incomplete']]);
-    assert.deepEqual(codes({ roofType: 'shed' }), [['wrap-roof'], ['wrap-roof']]);
+    assert.deepEqual(codes({ roofType: 'gable' }), [['wrap-roof'], ['wrap-roof']]);
     assert.deepEqual(codes({ setback: 0, depth: 2.4 }), [['wrap-not-porch']]);
   });
 
@@ -123,4 +123,59 @@ describe('wraparound porches', () => {
     assert.equal(normalizeRoofStructure(porch({ wrap: { end: 'up', length: 4 } })).wrap, null);
     assert.equal(normalizeRoofStructure(porch({ wrap: { end: 'left', length: 0 } })).wrap, null);
   });
+
+  it('a shed wraparound turns the corner on a hip and has plain far ends', () => {
+    const { result } = build([porch({ roofType: 'shed' })]);
+    const [front, side] = result.roofStructures;
+    assert.deepEqual([front.errors, side.errors], [[], []]);
+    assert.deepEqual(front.resolved.eaveRoof.eaveSides.sort(), ['maxX', 'maxZ']);
+    assert.deepEqual(side.resolved.eaveRoof.eaveSides, ['maxX']);
+    const plate = front.resolved.plateY;
+    // near the far end the front slope carries straight on (no hip there)
+    near(roofHeightAt(result, 'p', [-0.9, 5.2]), plate + SLOPE * 1.2, 'no hip at the far end');
+    near(roofHeightAt(result, 'p', [6.2, 5.2]), plate + SLOPE * 1.2, 'the corner hip');
+    const tris = [];
+    result.building.traverse((child) => {
+      if (child.isMesh && !child.userData?.editorOnly) {
+        meshTriangles(child).forEach((tri) => tris.push(tri.map(([x, y, z]) => [x, y + child.position.y, z])));
+      }
+    });
+    const lift = (edge) => result.roofZones.some((zone) => edge.every((p) => Math.abs(p[1] - zone.baseY) < 1e-3));
+    // the open far ends (x = -1 and z = 0) are openings under their plain end faces
+    // (within the porch: out over the eave, the eave's end must be capped)
+    const opening = (edge) => edge.every(([x, , z]) => (Math.abs(x + 1) < 1e-3 && z <= 6.4 + 1e-3) || (Math.abs(z) < 1e-3 && x <= 7.4 + 1e-3));
+    assert.deepEqual(uncoveredEdges(tris).filter((edge) => !lift(edge) && !opening(edge)), []);
+  });
+
+  it('runs level into a wall its end stands against, instead of draining a hip toward the house', () => {
+    // a main block (x -5..5, z -4..4) with a projection on its +X side (z -3..1): the side segment runs back to it
+    const footprint = [[-5, -4], [5, -4], [5, -3], [7.4, -3], [7.4, 1], [5, 1], [5, 4], [-5, 4]];
+    const volumes = computeFacadeLayout(footprint, { volumeSplit: 'auto' }).volumes;
+    const main = volumes.find((volume) => volume.maxZ - volume.minZ > 7);
+    const result = createBuildingFromFootprint(footprint, {
+      storyCount: 2, storyHeight: 3, foundationDepth: 0.6, roofType: 'gable', roofPitchRise: 8, roofPitchRun: 12, roofEaveDepth: 0.35, volumes,
+      roofStructures: normalizeRoofStructures([porch({ hostVolumeId: main.id, wrap: { end: 'right', length: 3 } })]),
+    });
+    const [front, side] = result.roofStructures;
+    assert.deepEqual([front.errors, side.errors], [[], []]);
+    assert.deepEqual(side.resolved.bounds, { minX: 5, maxX: 7.4, minZ: 1, maxZ: 4 });
+    assert.ok(!side.resolved.eaveRoof.eaveSides.includes('minZ'), 'no eave against the projection');
+    // beside the projection's wall the roof is at the outer eave's slope, not dropping toward the wall
+    near(roofHeightAt(result, 'p-wrap', [6.8, 1.05]), side.resolved.plateY + SLOPE * 0.6);
+  });
+
+  it('a hip porch in the inside corner of an L runs level into the wing', () => {
+    const L = [[-5, -4], [5, -4], [5, 4], [1, 4], [1, 8], [-5, 8]];
+    const volumes = computeFacadeLayout(L, { volumeSplit: 'auto' }).volumes;
+    const main = volumes.find((volume) => volume.maxX - volume.minX > 9);
+    // on the main block's +Z wall, from the wing (x = 1) to the corner (x = 5)
+    const result = createBuildingFromFootprint(L, {
+      storyCount: 2, storyHeight: 3, foundationDepth: 0.6, roofType: 'gable', roofPitchRise: 8, roofPitchRun: 12, roofEaveDepth: 0.35, volumes,
+      roofStructures: normalizeRoofStructures([porch({ hostVolumeId: main.id, wrap: null, width: 4, offset: 3 })]),
+    });
+    const [entry] = result.roofStructures;
+    assert.deepEqual(entry.errors, []);
+    assert.deepEqual(entry.resolved.eaveRoof.eaveSides.sort(), ['maxX', 'maxZ'], 'no hip against the wing at x = 1');
+  });
 });
+

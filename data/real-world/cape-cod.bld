@@ -107,7 +107,7 @@
       "setback": -1.2,
       "mount": "join",
       "depth": 1.2,
-      "wallHeight": 2.3,
+      "wallHeight": 2.1,
       "baseHeight": "ground",
       "support": "auto",
       "openSides": [
@@ -120,7 +120,7 @@
       "ridge": "perpendicular",
       "roofShape": {
         "mode": "slope",
-        "pitchRise": 12
+        "pitchRise": 8
       },
       "join": "auto",
       "wrap": null,

@@ -724,9 +724,8 @@ function standingWalls(triangles, resolved, {
 
 /**
  * Whether a structure breaks its host's eave. A flush front wall does,
- * where the host has a wall under the eave. A projecting porch does when it rises past the host plate where it
- * meets the wall; a lower one tucks under the eave, or its roof passes
- * through the soffit, which the structure's own solid already cuts.
+ * where the host has a wall under the eave, and so does a projecting porch
+ * whose walls rise past the host's wall top.
  */
 function interruptsHostEave(resolved, host) {
   // a flush wall carries the host's wall up through the eave; where the host
@@ -738,17 +737,11 @@ function interruptsHostEave(resolved, host) {
   if (resolved.flush) {
     return true;
   }
-  if (!resolved.projecting) {
-    return false;
-  }
-  const { frame } = resolved;
-  const wall = host.bounds[resolved.hostSide];
-  const along = (resolved.along[0] + resolved.along[1]) / 2;
-  const [x, z] = frame.along === 'x' ? [along, wall] : [wall, along];
-  const top = resolved.planes.length
-    ? resolved.plateY + evalZoneHeight(resolved.planes, x, z)
-    : resolved.plateY + resolved.slabThickness;
-  return top >= host.baseY - 1e-9;
+  // A projecting porch breaks the eave only when its walls rise past the
+  // host's wall top. Where just its roof rises past the eave, the porch's
+  // solid cuts the host eave away where the porch roof is above it, and the
+  // two roofs meet in valleys as one shell.
+  return resolved.projecting && resolved.plateY >= host.wallTopY - 1e-9;
 }
 
 /**
@@ -816,9 +809,9 @@ function structureRoofTriangles(resolved, config) {
     overhang: setup.overhang,
     eaves: setup.eaves,
   };
-  if (resolved.wrapRoof) {
+  if (resolved.eaveRoof) {
     return [
-      ...wrapRoofTriangles(resolved, setup).map((tri) => tri.map(([x, y, z]) => [x, y + resolved.plateY, z])),
+      ...eaveRoofTriangles(resolved, setup).map((tri) => tri.map(([x, y, z]) => [x, y + resolved.plateY, z])),
       ...openEaveHeaders(resolved, setup),
     ];
   }
@@ -869,11 +862,11 @@ function structureEaveSetup(resolved, config) {
     undefined,
     resolved.bounds
   );
-  if (resolved.wrapRoof) {
+  if (resolved.eaveRoof) {
     // a wraparound overhangs only its outer eaves: not at its walls or where its segments meet
-    const depth = Math.max(0, ...resolved.wrapRoof.eaveSides.map((side) => setup.overhang?.[side] ?? 0));
+    const depth = Math.max(0, ...resolved.eaveRoof.eaveSides.map((side) => setup.overhang?.[side] ?? 0));
     setup.overhang = Object.fromEntries(['minX', 'maxX', 'minZ', 'maxZ']
-      .map((side) => [side, resolved.wrapRoof.eaveSides.includes(side) ? depth : 0]));
+      .map((side) => [side, resolved.eaveRoof.eaveSides.includes(side) ? depth : 0]));
   }
   return setup;
 }
@@ -883,7 +876,7 @@ function structureEaveSetup(resolved, config) {
  * rectangle carried out over its eaves, face by face, with a fascia and
  * soffit along each eave. Heights are above the plate.
  */
-function wrapRoofTriangles(resolved, setup) {
+function eaveRoofTriangles(resolved, setup) {
   const { bounds } = resolved;
   const overhang = setup.overhang;
   const outer = {
@@ -912,7 +905,39 @@ function wrapRoofTriangles(resolved, setup) {
       [[w0[0], inner, w0[1]], [o1[0], y - fascia, o1[1]], [o0[0], y - fascia, o0[1]]],
     );
   });
-  return [...minOfPlanesFaces(outer, resolved.planes), ...trim];
+  // a plain end (a shed's, or one against a wall) is closed from the plate up
+  // to the roof; against a wall the wall's solid clips it away
+  const walls = structureWallSides(resolved.frame);
+  const seams = (resolved.seamSides ?? []).map((wall) => walls[wall]);
+  const ends = ['minX', 'maxX', 'minZ', 'maxZ'].filter((side) => overhang[side] <= 1e-9 && !seams.includes(side)).map((side) => {
+    const [a, b] = side === 'minX' || side === 'maxX'
+      ? [[bounds[side], bounds.minZ], [bounds[side], bounds.maxZ]]
+      : [[bounds.minX, bounds[side]], [bounds.maxX, bounds[side]]];
+    const top = roofProfile(resolved.planes, a, b).reverse()
+      .map(([t, height]) => [a[0] + (b[0] - a[0]) * t, height, a[1] + (b[1] - a[1]) * t]);
+    return [[a[0], 0, a[1]], [b[0], 0, b[1]], ...top];
+  });
+  // an eave running out to a plain end is capped there with its cross-section
+  const order = ['minZ', 'maxX', 'maxZ', 'minX'];
+  const caps = order.flatMap((side, i) => {
+    const depth = overhang[side];
+    if (depth <= 1e-9) {
+      return [];
+    }
+    const y = -slope * depth;
+    const inner = setup.eaves.eaveSoffit === 'sloped' ? -fascia : y - fascia;
+    const outward = side.startsWith('min') ? -depth : depth;
+    return [order[(i + 3) % 4], order[(i + 1) % 4]]
+      .filter((end) => overhang[end] <= 1e-9 && !seams.includes(end))
+      .map((end) => {
+        const at = (across, height) => (side === 'minX' || side === 'maxX'
+          ? [across, height, bounds[end]]
+          : [bounds[end], height, across]);
+        const wall = bounds[side];
+        return [at(wall, 0), at(wall + outward, y), at(wall + outward, y - fascia), at(wall, inner)];
+      });
+  });
+  return [...minOfPlanesFaces(outer, resolved.planes), ...trim, ...polygonsToTriangles([...ends, ...caps])];
 }
 
 /**
@@ -1015,7 +1040,7 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
       roofHeight: roofHeightForVolume,
       overhang: setup.overhang,
       eaves: setup.eaves,
-      abut: eaveAbutments(volumeConnections, setups),
+      abut: eaveAbutments(volumeConnections, setups, volumePlateHeights, volume.id),
       roofPitchRise: params.pitchRise,
       roofPitchRun: params.pitchRun,
       connections: volumeConnections,
@@ -1074,6 +1099,26 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
       },
     };
     group.add(roof);
+  });
+
+  // an eave run on over a lower neighbor is cut where the neighbor's roof passes through it,
+  const zonesById = new Map(roofZones.map((zone) => [zone.volumeId, zone]));
+  group.children.filter((child) => child.isMesh && child.userData?.roofType && child.userData.volumeId).forEach((roof) => {
+    // and where a gable merging into it runs up through its eave
+    const lower = new Set([
+      ...[...(adjacentSides.get(roof.userData.volumeId)?.values() ?? [])].flat().filter((link) => link.below).map((link) => link.neighborId),
+      ...mergingNeighbors(roof.userData.volumeId, connections),
+    ]);
+    if (!lower.size) {
+      return;
+    }
+    const y = roof.position.y;
+    let triangles = geometryTriangles(roof.geometry).map((tri) => tri.map(([px, py, pz]) => [px, py + y, pz]));
+    lower.forEach((id) => {
+      triangles = clipOutsideConvexSolid(triangles, volumeSolid(zonesById.get(id)));
+    });
+    roof.geometry.dispose();
+    roof.geometry = flatShaded(trianglesToGeometry(triangles.map((tri) => tri.map(([px, py, pz]) => [px, py - y, pz]))));
   });
 
   group.userData = { multiVolume: true, volumeCount: volumes.length };
@@ -1613,7 +1658,29 @@ function createVolumeRoofAssembly(volumes, config) {
     }));
     return clipInsideNeighbor(chunk, volumeConnections);
   });
-  return { geometry: mergeFlatGeometries(chunks), zones };
+  // a roof a gable merges into keeps its eave along the whole side; it is cut
+  // where it passes into the merging roof (whose valleys take over there)
+  const zonesById = new Map(zones.map((zone) => [zone.volumeId, zone]));
+  const clipped = chunks.map((chunk, index) => {
+    const merging = mergingNeighbors(roofVolumes[index].id, connections);
+    if (!merging.length) {
+      return chunk;
+    }
+    const triangles = merging.reduce(
+      (kept, id) => clipOutsideConvexSolid(kept, volumeSolid(zonesById.get(id), { floorY: -1e3 })),
+      geometryTriangles(chunk)
+    );
+    chunk.dispose();
+    return trianglesToGeometry(triangles);
+  });
+  return { geometry: mergeFlatGeometries(clipped), zones };
+}
+
+/** The volumes whose gable ends merge into `volumeId`'s roof (see resolveRoofConnections). */
+function mergingNeighbors(volumeId, connections) {
+  return [...connections].filter(([, sides]) => Object.values(sides ?? {})
+    .some((resolution) => resolution.gableEnd && resolution.neighborId === volumeId))
+    .map(([id]) => id);
 }
 
 function applyVolumeRidgeDirections(volumes, directions) {
@@ -1795,11 +1862,11 @@ function gableMergeGeometry(volume, bounds, connections, ridgeHeight) {
  * should merge into an adjacent volume's roof, or stay a standalone,
  * independently closed edge. Merging is an optimization, not a requirement:
  * a side is only considered when its own roof is genuinely sloped there
- * (something to merge). Merging is opt-in: nothing merges unless
- * `config.volumeRoofConnections[volumeId] === 'merge-plane'` for that volume
- * (the sidebar's "Merge into adjacent roof" option — the UI defaults every
- * side to 'standalone' the moment it becomes selectable, so a side only
- * merges on a deliberate choice). Once opted in, a side tries two things in
+ * (something to merge). A gable's end merges by default (one shell, no
+ * gable face stopped against the neighbor's eave) unless its volume's
+ * `config.volumeRoofConnections` entry is 'standalone'; a shed merges only
+ * when set to 'merge-plane' (the sidebar's "Merge into adjacent roof").
+ * A merging side tries two things in
  * order, matching ARCHITECTURE.md's two connection semantics — this is a
  * single unified "merge" behavior, not two separately selectable modes:
  *
@@ -1851,7 +1918,12 @@ export function resolveRoofConnections(volumes, config) {
       // to 'standalone' the first time it becomes selectable, so this only
       // engages on a deliberate choice, matching a standalone shell being an
       // equally valid, unforced outcome).
-      if (config.volumeRoofConnections?.[ownId] !== 'merge-plane') {
+      // A gable's end meeting a neighbor merges into its roof unless the
+      // user chose a standalone shell (one shell, with no gable face stopped
+      // against the neighbor's eave); a shed merges only on request.
+      const choice = config.volumeRoofConnections?.[ownId];
+      const ownType = planesByVolumeId.get(ownId).roofType;
+      if (choice !== 'merge-plane' && !(choice === undefined && ownType === 'gable')) {
         return;
       }
       // Independent story counts put the two roofs on different plates. A
@@ -2382,6 +2454,9 @@ function adjacentSidesByVolume(volumes, plates) {
         wall: acrossX ? [neighbor.minZ, neighbor.maxZ] : [neighbor.minX, neighbor.maxX],
         // the neighbor's wall backs an eave end only if it reaches up to this roof's plate
         backs: plate(neighborId) >= plate(id) - 1e-6,
+        // a lower neighbor stops below this roof's eave, which runs on over it
+        below: plate(neighborId) < plate(id) - 1e-6,
+        neighborId,
       });
     };
     link(adjacency.volumeAId, adjacency.sideA, adjacency.volumeBId);
@@ -2398,11 +2473,15 @@ function adjacentSidesByVolume(volumes, plates) {
  */
 function volumeEaveSetup(volumeId, roofType, orientation, config, mergedSides, adjacency, bounds) {
   const eaves = resolveVolumeEaves(volumeId, config);
-  const zeroSides = new Set([...(adjacency?.keys() ?? []), ...(mergedSides ?? [])]);
+  // only neighbors reaching up to this roof share the side: over a lower one the eave runs on
+  const sharing = new Map([...(adjacency ?? new Map())]
+    .map(([side, links]) => [side, links.filter((link) => !link.below)])
+    .filter(([, links]) => links.length));
+  const zeroSides = new Set([...sharing.keys(), ...(mergedSides ?? [])]);
   const { overhang, roles } = sideOverhangs(roofType, orientation, eaves, zeroSides);
   const backing = {};
   const partial = {};
-  adjacency?.forEach((links, side) => {
+  sharing.forEach((links, side) => {
     const covered = links.filter((link) => link.backs);
     if (covered.length) {
       backing[side] = [Math.min(...covered.map((link) => link.wall[0])), Math.max(...covered.map((link) => link.wall[1]))];
@@ -2468,10 +2547,13 @@ function buildRoofSetups(roofVolumes, config, connections, adjacentSides, roofTy
 }
 
 /** Eave depth/slope of the roofs a merged gable's ends abut, keyed by end. */
-function eaveAbutments(volumeConnections, setups) {
+function eaveAbutments(volumeConnections, setups, plates, ownId) {
   const abut = {};
   Object.values(volumeConnections ?? {}).forEach((resolution) => {
-    if (resolution.gableEnd && resolution.neighborId) {
+    // only an eave at the same height continues the merging roof's; a higher
+    // one (a taller neighbor's) leaves this eave to run on to the wall
+    const level = !plates || Math.abs((plates[resolution.neighborId] ?? 0) - (plates[ownId] ?? 0)) < 1e-6;
+    if (resolution.gableEnd && resolution.neighborId && level) {
       const depth = setups.get(resolution.neighborId)?.overhang?.[resolution.neighborSide] ?? 0;
       if (depth > 1e-9) {
         abut[resolution.gableEnd] = { depth, slope: resolution.facingSlope };

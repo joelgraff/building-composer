@@ -148,6 +148,12 @@ roof, open sides, support, and materials. Selecting a structure also selects
 the volume it stands on, which the volume controls then edit. Pick targets
 are editor-only and left out of the GLB export.
 
+**Roofs meeting their neighbors.** A gable's end meeting a neighbor's roof
+merges into it by default (its ridge runs into the neighbor's slope with
+valleys), unless set to a standalone shell. A roof over a lower neighbor keeps
+its eave along the shared side, cut only where the lower roof passes through
+it.
+
 **Roof shell connections.** Every roof must form a closed shell: boundaries
 that do not connect to another roof face receive fascia, gable-end, or vertical
 return faces. A volume can opt in (per-volume **Roof connection: Merge into
@@ -223,6 +229,13 @@ come out of the clip for every roof type). The rules that follow:
 - A flush front wall carries its host wall up through the eave: the eave is
   cut away across it and capped either side, unless the host is open on that
   side (then the eave runs on as a beam).
+- A hip porch projecting from a wall is a hipped shed: level along the wall,
+  sloping from its front and ends; an end standing against a wall runs level
+  into it, so no hip drains toward the house. A porch roof rising through the
+  host eave is flagged (usually kept below it). A porch roof that rises through the host
+  eave meets the host roof in valleys (the eave is cut only where the porch
+  roof is above it); only walls rising past the host's wall top notch the
+  eave.
 - A standing structure replaces the host roof inside its footprint (one convex
   piece per host face); its walls run down to the host wall top there, and
   knee walls close the attic around it.

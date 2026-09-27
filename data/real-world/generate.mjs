@@ -92,7 +92,7 @@ const houses = {
     structures: [
       {
         at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 7.3, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8,
-        roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: ['front', 'left', 'right'],
+        roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: ['front', 'left', 'right'],
         // around the right-hand corner and back along the side to the projection
         wrap: { end: 'right', length: 3.1 },
       },
@@ -155,8 +155,9 @@ const houses = {
         at: [0, 0], kind: 'dormer', hostSide: 'maxZ', width: 7, wallHeight: 1.4, setback: 0.4, roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 1 },
       },
       {
-        at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 2.2, setback: -1.2, depth: 1.2, baseHeight: 'ground', wallHeight: 2.5,
-        roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 8 }, openSides: ['front', 'left', 'right'],
+        // kept below the eave, as builders do
+        at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 2.2, setback: -1.2, depth: 1.2, baseHeight: 'ground', wallHeight: 2.2,
+        roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 5 }, openSides: ['front', 'left', 'right'],
       },
     ],
     refused: [
@@ -198,8 +199,9 @@ const houses = {
     structures: [-2.4, 2.4].map((offset) => ({
       at: [0, 0], kind: 'dormer', hostSide: 'maxZ', offset, width: 1.5, wallHeight: 1.3, setback: 1, roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 12 },
     })).concat([{
-      at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 2, setback: -1.2, depth: 1.2, baseHeight: 'ground', wallHeight: 2.3,
-      roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 12 }, openSides: ['front', 'left', 'right'],
+      // kept below the eave, as builders do
+      at: [0, 0], kind: 'porch', hostSide: 'maxZ', width: 2, setback: -1.2, depth: 1.2, baseHeight: 'ground', wallHeight: 2.1,
+      roofType: 'gable', roofShape: { mode: 'slope', pitchRise: 8 }, openSides: ['front', 'left', 'right'],
     }]),
     gaps: [
       'The entry is often an enclosed vestibule or just a hood; here it is an open stoop.',

@@ -82,7 +82,7 @@
         "right"
       ],
       "inset": 0,
-      "roofType": "hip",
+      "roofType": "shed",
       "ridge": "perpendicular",
       "roofShape": {
         "mode": "slope",

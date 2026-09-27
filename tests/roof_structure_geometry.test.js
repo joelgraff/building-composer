@@ -390,7 +390,7 @@ describe('porches', () => {
     assertWatertight(result, 'tucked');
   });
 
-  it('an open porch has no walls on its open sides, a header under each open eave, and caps on the broken eave', () => {
+  it('an open porch has no walls on its open sides and a header under each open eave; its roof meets the host eave without breaking it', () => {
     const result = build([projecting({ roofShape: { mode: 'slope', pitchRise: 4 }, openSides: ['front', 'left', 'right'] })], twoStory);
     const { resolved } = result.roofStructures[0];
     const inPlane = (k, value) => (tri) => tri.every((v) => Math.abs(v[k] - value) < 1e-6);
@@ -404,7 +404,8 @@ describe('porches', () => {
     const header = partOf(result, 'roof').filter((tri) => inPlane(2, -7.4)(tri) && tri.every((v) => Math.abs(v[0]) <= 1.8 + 1e-6));
     assert.ok(Math.abs(totalArea(header) - 3.6 * ((4 / 12) * 0.3 + 0.1524)) < 1e-6, `header area ${totalArea(header)}`);
     assert.ok(header.flat().every((v) => v[1] <= resolved.plateY + 1e-6));
-    assert.equal(partOf(result, 'eave-caps').length, 4, 'two caps, one each side');
+    // only its roof rises past the eave: the host eave is cut where the porch roof is above it, not notched and capped
+    assert.equal(partOf(result, 'eave-caps').length, 0, 'no caps');
     assertWatertight(result, 'open', [[0, -1.8], [0, 1.8], [2, -7.4]]);
   });
 

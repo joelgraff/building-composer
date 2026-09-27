@@ -445,15 +445,11 @@ function syncSelectedRoofZoneControls(layout) {
   syncRoofShapeFields(roofType);
   roofConnectionField.style.display = canMerge ? '' : 'none';
   if (canMerge) {
-    // Default to "standalone" only the first time this volume becomes
-    // mergeable; once the user (or a prior render) has set a value, leave it
-    // alone. Resetting it on every render here previously overwrote the
-    // user's "merge-plane" choice on the very next rebuild.
-    if (modelConfig.volumeRoofConnections[volume.id] === undefined) {
-      modelConfig.volumeRoofConnections[volume.id] = 'standalone';
-    }
-    roofConnectionSelect.value = modelConfig.volumeRoofConnections[volume.id];
+    // Unset, a gable's end merges into its neighbor (see resolveRoofConnections)
+    // and a shed stays standalone; show that without saving it as a choice.
+    roofConnectionSelect.value = modelConfig.volumeRoofConnections[volume.id] ?? (roofType === 'gable' ? 'merge-plane' : 'standalone');
   }
+
 }
 
 function volumeShapeTarget() {
