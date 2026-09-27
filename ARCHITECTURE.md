@@ -137,7 +137,9 @@ synchronizes the property controls. Roof structures are picked the same way on
 their own meshes (the nearest of a volume or structure wins), and edited in the
 **Roof structures** panel: add from presets onto the selected volume, see each
 structure's validation inline, and edit the selected one's placement, base,
-roof, open sides, support, and materials.
+roof, open sides, support, and materials. Selecting a structure also selects
+the volume it stands on, which the volume controls then edit. Pick targets
+are editor-only and left out of the GLB export.
 
 **Roof shell connections.** Every roof must form a closed shell: boundaries
 that do not connect to another roof face receive fascia, gable-end, or vertical
@@ -201,6 +203,9 @@ same lines as one closed shell (valleys, ridge ends, and wall-on-roof seams
 come out of the clip for every roof type). The rules that follow:
 
 - A dormer stands on one roof face and its roof never passes the host ridge.
+  It faces down its slope, square to the host ridge (its own ridge always
+  runs into the roof): if the host ridge turns, a dormer on what becomes a
+  gable end faces the slope at that end instead.
 - A structure rising through the roof (`mount: 'through'`: a cupola,
   belvedere, or rooftop pavilion) does neither: it may straddle the ridge, its
   wall height is measured from the highest point of the roof under it, and it
@@ -214,6 +219,12 @@ come out of the clip for every roof type). The rules that follow:
   piece per host face); its walls run down to the host wall top there, and
   knee walls close the attic around it.
 - A structure can stand on another; hosts are resolved first.
+- On a straight-skeleton hip (one hip over several volumes) each volume's
+  descriptor is approximate: the planes of its outside sides and each face's
+  region in plan. Dormers (within one face's region) and structures rising
+  through the roof can stand there; porches cannot.
+- Structures refer to volumes by id, so footprints are assumed fixed once
+  structures are placed; editing the footprint can renumber its volumes.
 
 The porch arrangements are provisional: they were developed without real
 buildings to model against, and are expected to be revisited with actual cases.

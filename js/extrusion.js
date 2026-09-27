@@ -14,7 +14,7 @@ import {
   roofProfile, roofPeak, DECK_THICKNESS, structureFacade,
 } from './roof-structures.js';
 import {
-  computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
+  computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, makeEavePlane, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
 } from './roof-planes.js';
 
 export { computeVolumeEavePlanes, evalZoneHeight };
@@ -1117,9 +1117,9 @@ function createRoofGeometry(footprint, config) {
       return createVolumeRoofAssembly(config.volumes, config);
     }
     if (config.roofType === 'hip' && config.volumes && config.volumes.length > 1 && straightSkeletonBuilder) {
-      const topologyGeometry = createStraightSkeletonHipGeometry(footprint, config);
-      if (topologyGeometry) {
-        return { geometry: topologyGeometry, zones: [] };
+      const topology = createStraightSkeletonHipGeometry(footprint, config);
+      if (topology) {
+        return { geometry: topology.geometry, zones: skeletonHipZones(config.volumes, topology.faces, topology.pitchRatio) };
       }
     }
     if (config.roofType === 'hip'
@@ -1154,12 +1154,19 @@ function createStraightSkeletonHipGeometry(footprint, config) {
 
   const pitchRatio = (config.roofPitchRise ?? 6) / (config.roofPitchRun ?? 12);
   const positions = [];
+  // each skeleton face rises at the pitch from one footprint edge: the two of
+  // its corners at height zero
+  const faces = [];
 
   skeleton.polygons.forEach((polygon) => {
     const points = polygon.map((index) => {
       const [x, z, time] = skeleton.vertices[index];
       return { x, z, height: time * pitchRatio };
     });
+    const base = points.filter((point) => point.height < 1e-9);
+    if (base.length === 2) {
+      faces.push({ edge: base.map((point) => [point.x, point.z]), polygon: points.map((point) => [point.x, point.height, point.z]) });
+    }
     const triangles = THREE.ShapeUtils.triangulateShape(
       points.map((point) => new THREE.Vector2(point.x, point.z)),
       []
@@ -1178,7 +1185,60 @@ function createStraightSkeletonHipGeometry(footprint, config) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.computeVertexNormals();
-  return geometry;
+  return { geometry, faces, pitchRatio };
+}
+
+/**
+ * Zone descriptors for the volumes under a straight-skeleton hip roof (one
+ * continuous hip over the whole footprint). Each skeleton face is a plane
+ * rising at the pitch from one footprint edge, so a volume's planes are those
+ * of its sides on the footprint's outline, and `faceRegions[side]` is where
+ * each one is the roof (its skeleton faces, in plan). Inside a volume the
+ * roof is not the min of its own planes near a shared side or a valley, so
+ * these are marked `skeleton` rather than `exact`: a dormer or cupola, which
+ * only meets the face it stands on, can use one; a porch, which replaces the
+ * roof over its footprint, cannot.
+ */
+function skeletonHipZones(volumes, faces, pitchRatio) {
+  return (volumes ?? []).map((volume) => {
+    const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
+    const planes = [];
+    const faceRegions = {};
+    ['minX', 'maxX', 'minZ', 'maxZ'].forEach((side) => {
+      const k = side === 'minX' || side === 'maxX' ? 0 : 1;
+      const [lo, hi] = k === 0 ? [bounds.minZ, bounds.maxZ] : [bounds.minX, bounds.maxX];
+      const onSide = faces.filter(({ edge }) => edge.every((point) => Math.abs(point[k] - bounds[side]) < 1e-6)
+        && Math.min(Math.max(edge[0][1 - k], edge[1][1 - k]), hi) - Math.max(Math.min(edge[0][1 - k], edge[1][1 - k]), lo) > 1e-6);
+      if (onSide.length) {
+        planes.push({ ...makeEavePlane(bounds, side, pitchRatio) });
+        faceRegions[side] = onSide.map(({ polygon }) => polygon.map(([x, , z]) => [x, z]));
+      }
+    });
+    // the highest point of the roof over this volume
+    const inside = [
+      (v) => v[0] - bounds.minX, (v) => bounds.maxX - v[0], (v) => v[2] - bounds.minZ, (v) => bounds.maxZ - v[2],
+    ];
+    const roofHeight = Math.max(0, ...faces.flatMap(({ polygon }) => inside.reduce((piece, distance) => clipPolygon(piece, distance), polygon).map((v) => v[1])));
+    return {
+      volumeId: volume.id,
+      roofType: 'hip',
+      bounds,
+      roofBounds: bounds,
+      ridgeAxis: volume.ridgeAxis,
+      roofHeight,
+      planes,
+      faceRegions,
+      skeletonFaces: faces.map(({ polygon }) => polygon),
+      slabThickness: 0,
+      // the skeleton roof is built without eave trim
+      overhang: {},
+      eaves: {},
+      exact: false,
+      skeleton: true,
+      baseY: 0,
+      wallTopY: 0,
+    };
+  });
 }
 
 /**

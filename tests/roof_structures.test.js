@@ -402,6 +402,19 @@ describe('resolveRoofStructure', () => {
     assert.deepEqual(dormer({ hostSide: 'minX', width: 4 }, hipHost).errors.map((e) => e.code), ['crosses-face']);
   });
 
+  it('turns a dormer on a gable end to the slope at the same end, with its ridge into the roof', () => {
+    const turned = dormer({ hostSide: 'minX', offset: 2 });
+    assert.deepEqual(turned.errors, []);
+    assert.deepEqual(turned.warnings.map((w) => w.code), ['side-turned']);
+    assert.equal(turned.resolved.hostSide, 'minZ');
+    Object.entries({ minX: 0.8, maxX: 3.2, minZ: -4.1, maxZ: 0 }).forEach(([key, value]) => near(turned.resolved.bounds[key], value, key));
+    const zHost = zoneFor({ roofType: 'gable', roofDirection: 'z' });
+    assert.equal(dormer({ hostSide: 'maxZ' }, zHost).resolved.hostSide, 'maxX');
+    // a dormer's ridge runs into the roof whatever the record says; a porch's may run along it
+    assert.equal(dormer({ ridge: 'parallel' }).resolved.ridgeAxis, 'z');
+    assert.equal(dormer({ kind: 'porch', ridge: 'parallel' }).resolved.ridgeAxis, 'x');
+  });
+
   it('stands a structure on a flat roof at the slab top', () => {
     const { resolved, errors } = dormer({ depth: 3, roofType: 'flat' }, flatHost);
     assert.deepEqual(errors, []);
@@ -418,7 +431,10 @@ describe('resolveRoofStructure', () => {
 
   it('reports what makes a structure unplaceable', () => {
     const code = (fields, host) => dormer(fields, host).errors.map((e) => e.code);
-    assert.deepEqual(code({ hostSide: 'minX' }), ['side-not-sloped'], 'a gable end');
+    const shedHost = zoneFor({ roofType: 'shed', roofDirection: 'x' });
+    const [shedSlope] = shedHost.planes.map((plane) => plane.side);
+    const shedHigh = { minZ: 'maxZ', maxZ: 'minZ' }[shedSlope];
+    assert.deepEqual(code({ hostSide: shedHigh }, shedHost), ['side-not-sloped'], 'a shed\'s high side (and the rake a quarter turn from it)');
     assert.deepEqual(code({ offset: 9.5 }), ['outside-host']);
     assert.deepEqual(code({ setback: -1 }), ['needs-base']);
     assert.deepEqual(code({ setback: 6 }), ['outside-face']);

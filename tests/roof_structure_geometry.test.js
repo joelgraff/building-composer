@@ -216,8 +216,8 @@ describe('roof dormers', () => {
   });
 
   it('builds nothing for an invalid structure and reports why', () => {
-    const result = build([{ hostVolumeId: 'volume-0', hostSide: 'minX' }]);
-    assert.deepEqual(result.roofStructures[0].errors.map((e) => e.code), ['side-not-sloped']);
+    const result = build([{ hostVolumeId: 'volume-0', hostSide: 'minZ', offset: 9.5 }]);
+    assert.deepEqual(result.roofStructures[0].errors.map((e) => e.code), ['outside-host']);
     assert.equal(trianglesOf(result.building, isStructure).length, 0);
     const without = planArea(trianglesOf(build([]).building, isHostRoof));
     assert.ok(Math.abs(planArea(trianglesOf(result.building, isHostRoof)) - without) < 1e-9, 'host roof untouched');
@@ -432,11 +432,13 @@ describe('porches', () => {
     assert.ok(mainRoof(plain) - mainRoof(result) > 1, 'part of the main roof is removed under the porch roof');
   });
 
-  it('a porch on a gable end is allowed; a dormer there is not', () => {
+  it('a porch on a gable end faces it; a dormer there turns to the slope at that end', () => {
     const result = onWing();
     assert.deepEqual(result.roofStructures[0].errors, [], 'the wing\'s rear side is a gable end');
-    const dormer = onWing({ baseHeight: null, depth: null });
-    assert.deepEqual(dormer.roofStructures[0].errors.map((e) => e.code), ['side-not-sloped']);
+    assert.equal(result.roofStructures[0].resolved.hostSide, 'maxZ');
+    const [dormer] = onWing({ baseHeight: null, depth: null, width: 2.4, wallHeight: 1.2, roofType: 'gable' }).roofStructures;
+    assert.deepEqual(dormer.warnings.map((w) => w.code), ['side-turned']);
+    assert.equal(dormer.resolved.hostSide, 'maxX');
   });
 
   it('a porch spanning its host\'s ridge removes the roof on both slopes with no wall across the ridge', () => {

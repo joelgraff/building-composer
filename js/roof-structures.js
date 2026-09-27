@@ -381,7 +381,35 @@ const error = (code, message) => ({ code, message });
  * pieces (on the ridge, or where a hip meets it).
  */
 function highestHostRoof(host, bounds) {
+  if (host.skeletonFaces) {
+    // the skeleton faces themselves (x, height, z), clipped to the rectangle
+    const within = [
+      (v) => v[0] - Math.max(bounds.minX, host.bounds.minX), (v) => Math.min(bounds.maxX, host.bounds.maxX) - v[0],
+      (v) => v[2] - Math.max(bounds.minZ, host.bounds.minZ), (v) => Math.min(bounds.maxZ, host.bounds.maxZ) - v[2],
+    ];
+    const heights = host.skeletonFaces.flatMap((face) => within.reduce((piece, distance) => clipPolygon(piece, distance), face).map((v) => v[1]));
+    return host.baseY + Math.max(0, ...heights);
+  }
   return host.baseY + roofPeak(hostRoofFaces(host), clipToHostWalls(bounds, host));
+}
+
+/** Whether a plan point is inside a polygon (even-odd). */
+function insidePolygon([x, z], polygon) {
+  let inside = false;
+  polygon.forEach(([x1, z1], i) => {
+    const [x2, z2] = polygon[(i + 1) % polygon.length];
+    if ((z1 > z) !== (z2 > z) && x < x1 + ((z - z1) * (x2 - x1)) / (z2 - z1)) {
+      inside = !inside;
+    }
+  });
+  return inside;
+}
+
+/** Whether a plan point is on one of a skeleton face region's polygons (or its edge). */
+function onFaceRegion(point, region) {
+  const nudge = 1e-6;
+  return region.some((polygon) => insidePolygon(point, polygon)
+    || [[nudge, 0], [-nudge, 0], [0, nudge], [0, -nudge]].some(([dx, dz]) => insidePolygon([point[0] + dx, point[1] + dz], polygon)));
 }
 
 /**
@@ -470,6 +498,9 @@ function clipToHostWalls(bounds, host) {
   );
 }
 
+/** Each side and the one a quarter turn from it (the same end of the other axis). */
+const TURNED_SIDE = Object.freeze({ minX: 'minZ', minZ: 'minX', maxX: 'maxZ', maxZ: 'maxX' });
+
 /** The host roof plane a structure on `side` rises out of (flat roofs: the slab top). */
 function hostFacePlane(host, side) {
   if (!host.planes?.length) {
@@ -507,8 +538,13 @@ export function resolveRoofStructure(structure, host, config = {}) {
   if (!host) {
     return fail('host-missing', `Host volume ${structure.hostVolumeId} does not exist or has no analytic roof.`);
   }
-  if (!host.exact) {
-    return fail('host-inexact', `Host volume ${host.volumeId} has a merged roof whose surface is not planar enough to host a structure.`);
+  // A continuous (straight-skeleton) hip over several volumes is planar on
+  // each face but not the min of one volume's planes everywhere, so it hosts
+  // only what meets a single face (a dormer) or stands on it (a cupola).
+  if (!host.exact && !(host.skeleton && structure.baseHeight === null && !structure.fill)) {
+    return fail('host-inexact', host.skeleton
+      ? `${host.volumeId}'s roof is one continuous hip over several volumes; only dormers and structures rising through it can stand on it.`
+      : `Host volume ${host.volumeId} has a merged roof whose surface is not planar enough to host a structure.`);
   }
   if (!(structure.width > GEOMETRY_EPSILON) || !(structure.wallHeight > GEOMETRY_EPSILON)
     || (structure.depth !== null && !(structure.depth > GEOMETRY_EPSILON))) {
@@ -524,6 +560,13 @@ export function resolveRoofStructure(structure, host, config = {}) {
   }
   if (through && (structure.inset ?? 0) > GEOMETRY_EPSILON) {
     return fail('inset-not-supported', 'A structure rising through the roof cannot have an inset.');
+  }
+  // A dormer faces down its slope, so if the host ridge turns (a gable
+  // end where the slope was) it follows to the slope turned the same way,
+  // at the same offset along that wall.
+  if (!standing && !through && !hostFacePlane(host, structure.hostSide) && hostFacePlane(host, TURNED_SIDE[structure.hostSide])) {
+    warnings.push(error('side-turned', `${host.volumeId}'s ${structure.hostSide} side is not a roof slope; the dormer faces its ${TURNED_SIDE[structure.hostSide]} slope instead.`));
+    structure = { ...structure, hostSide: TURNED_SIDE[structure.hostSide] };
   }
   const face = hostFacePlane(host, structure.hostSide);
   if (!face && !standing && !through) {
@@ -614,7 +657,8 @@ export function resolveRoofStructure(structure, host, config = {}) {
 
   // The structure's own roof.
   const { roofType } = structure;
-  const ridgeAxis = roofType === 'shed' || structure.ridge === 'parallel' ? frame.along : frame.inward;
+  // a dormer's ridge always runs into the roof, square to the host ridge
+  const ridgeAxis = roofType === 'shed' || (structure.ridge === 'parallel' && (standing || through)) ? frame.along : frame.inward;
   const roofHighEdge = roofType === 'shed' ? `${frame.inward}-${frame.sign > 0 ? 'max' : 'min'}` : undefined;
   const acrossExtent = ridgeAxis === 'x' ? bounds.maxZ - bounds.minZ : bounds.maxX - bounds.minX;
   const span = roofType === 'shed' ? inward[1] - inward[0] : acrossExtent / 2;
@@ -686,6 +730,11 @@ export function resolveRoofStructure(structure, host, config = {}) {
   [...within, ...aboveHost].forEach((distance) => {
     hostContact = clipPolygon(hostContact, distance);
   });
+  // on a skeleton hip the face is the roof only over its own region
+  if (host.skeleton && face && !through
+    && !hostContact.every((point) => onFaceRegion(point, host.faceRegions?.[structure.hostSide] ?? []))) {
+    return fail('crosses-face', `The structure runs off ${host.volumeId}'s ${structure.hostSide} roof face into a hip or valley.`);
+  }
   // The host roof the structure removes: where the host roof lies under the
   // structure's roof. Host roof height is a min of planes, so this is a union
   // of convex pieces, one per host face: the face's own region (where it is

@@ -6,6 +6,7 @@ import {
 } from './extrusion.js';
 import { normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS } from './roof-structures.js';
 import { STRUCTURE_UI_PRESETS, newRoofStructure, structureLabel } from './structure-ui.js';
+import { TWO_SLOPE_ROOF_TYPES } from './roof-planes.js';
 import {
   computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades,
 } from './facade.js';
@@ -372,20 +373,36 @@ function renderElementSelector(layout) {
     '<option value="building-defaults">Building defaults</option>',
     ...layout.volumes.map((volume) => `<option value="${volume.id}">Massing + roof zone: ${volume.id.replace('-', ' ')}</option>`),
   ];
+  const structure = selectedStructureId ? structureRecord(selectedStructureId) : null;
+  if (selectedStructureId && !structure) {
+    selectedStructureId = null;
+  }
+  // with a structure selected, the volume settings are those of the volume it stands on
+  const hostVolumeId = structure ? structureHostVolumeId(structure) : null;
+  if (hostVolumeId && layout.volumes.some((volume) => volume.id === hostVolumeId)) {
+    selectedElementId = hostVolumeId;
+  }
   if (!options.some((option) => option.includes(`value="${selectedElementId}"`))) {
     selectedElementId = 'building-defaults';
   }
   elementSelect.innerHTML = options.join('');
   elementSelect.value = selectedElementId;
-  const structure = selectedStructureId ? structureRecord(selectedStructureId) : null;
-  if (selectedStructureId && !structure) {
-    selectedStructureId = null;
-  }
   selectedElementLabel.textContent = structure
-    ? `Roof structure: ${structureLabel(structure)}`
+    ? `Roof structure: ${structureLabel(structure)} (volume settings: ${selectedElementId === 'building-defaults' ? 'building defaults' : selectedElementId.replace('-', ' ')})`
     : selectedElementId === 'building-defaults'
       ? 'Building defaults'
       : `Volume: ${selectedElementId.replace('-', ' ')}`;
+}
+
+/** The volume a structure stands on, through any structures it is stacked on. */
+function structureHostVolumeId(structure) {
+  const seen = new Set();
+  let current = structure;
+  while (current?.hostStructureId && !seen.has(current.id)) {
+    seen.add(current.id);
+    current = structureRecord(current.hostStructureId);
+  }
+  return current?.hostVolumeId ?? null;
 }
 
 function selectedVolume(layout) {
@@ -404,9 +421,11 @@ function syncSelectedRoofZoneControls(layout) {
     ? modelConfig.volumeRidgeDirections[volume.id] ?? (volume.ridgeAxis === 'x' ? 'z-min' : 'x-min')
     : modelConfig.roofDirection;
   const roofType = volume ? modelConfig.volumeRoofTypes[volume.id] ?? modelConfig.roofType : modelConfig.roofType;
+  // a mansard or gambrel neighbor has its own ends and is never merged into
+  const mergeable = (neighbor) => neighbor && !TWO_SLOPE_ROOF_TYPES.includes(modelConfig.volumeRoofTypes[neighbor.id] ?? modelConfig.roofType);
   const canMerge = volume && (
-    (roofType === 'shed' && adjacentVolumeForHighEdge(volume, layout.volumes, roofDirectionSelect.value))
-    || (roofType === 'gable' && gableEndTouchesNeighbor(volume, layout.volumes))
+    (roofType === 'shed' && mergeable(adjacentVolumeForHighEdge(volume, layout.volumes, roofDirectionSelect.value)))
+    || (roofType === 'gable' && gableEndNeighbors(volume, layout.volumes).some(mergeable))
   );
   if (volume && layout.volumes.length > 1) {
     syncVolumeRoofShapeInputs(volume);
@@ -451,14 +470,17 @@ function syncVolumeRoofShapeInputs(volume) {
   updateRoofPitchDisplay(pitchRise);
 }
 
-function gableEndTouchesNeighbor(volume, volumes) {
+/** The volumes touching a gable volume's ends. */
+function gableEndNeighbors(volume, volumes) {
   const direction = modelConfig.volumeRidgeDirections[volume.id];
   const ridgeAxis = direction ? roofAxisForDirection(direction) : volume.ridgeAxis;
   const endSides = ridgeAxis === 'x' ? ['minX', 'maxX'] : ['minZ', 'maxZ'];
-  return findVolumeAdjacencies(volumes).some((adjacency) => (
-    (adjacency.volumeAId === volume.id && endSides.includes(adjacency.sideA))
-    || (adjacency.volumeBId === volume.id && endSides.includes(adjacency.sideB))
-  ));
+  return findVolumeAdjacencies(volumes).flatMap((adjacency) => {
+    if (adjacency.volumeAId === volume.id && endSides.includes(adjacency.sideA)) {
+      return [adjacency.volumeBId];
+    }
+    return adjacency.volumeBId === volume.id && endSides.includes(adjacency.sideB) ? [adjacency.volumeAId] : [];
+  }).map((id) => volumes.find((candidate) => candidate.id === id)).filter(Boolean);
 }
 
 function adjacentVolumeForHighEdge(volume, volumes, highEdge) {
@@ -827,6 +849,7 @@ function addVolumePickTargets(layout, foundationHeight) {
     );
     target.position.set((volume.minX + volume.maxX) / 2, height / 2 + 0.04, (volume.minZ + volume.maxZ) / 2);
     target.userData.volumeId = volume.id;
+    target.userData.editorOnly = true;
     group.add(target);
     return target;
   });
@@ -1100,6 +1123,8 @@ volumeControlsBox.addEventListener('input', (event) => {
 
 elementSelect.addEventListener('change', () => {
   selectedElementId = elementSelect.value;
+  // choosing another element leaves the structure it was showing
+  selectedStructureId = null;
   if (loadedFootprint) {
     loadFootprint(loadedFootprint);
   }
@@ -1375,7 +1400,8 @@ function structureEditorHtml(structure) {
     parts.push(numberField('Recessed front (inset)', 'inset', structure.inset));
   }
   parts.push(selectField('Roof', 'roofType', STRUCTURE_ROOF_OPTIONS, structure.roofType));
-  if (structure.roofType === 'gable' || structure.roofType === 'hip') {
+  // a dormer's ridge always runs into the roof
+  if ((through || standing) && (structure.roofType === 'gable' || structure.roofType === 'hip')) {
     parts.push(selectField('Ridge', 'ridge', [['perpendicular', 'Runs into the roof'], ['parallel', 'Runs along the side']], structure.ridge));
   }
   if (!['flat', 'none'].includes(structure.roofType)) {
