@@ -872,6 +872,27 @@ A second review of the renders added:
 10. **Foundation height as a setting.** Done with item 5.
 11. **Refusals that say what fits.** Done. When a structure is refused for crossing a hip or valley, rising above the ridge, or running past its face or wall, `resolveRoofStructure` retries it narrower about its center (5 cm steps) and failing that with lower walls, and adds the first that fits to the error (`fix: { width }` or `{ wallHeight }`) and its message ("It fits at 1.70 m wide (0.70 m narrower)."). Tests in `tests/roof_structures.test.js`.
 
+## Footprints from the Dixon project, and angled walls
+
+Real buildings come from the Dixon Godot project (dixon_dem): its building editor (B) exports the selected building with X to `exports/composer/<id>.json` (`format: 'dixon-footprint'`: the traced outline in game meters, ground height, and the editor's fields). Load footprint imports it (`js/import.js`): the outline is turned square to the building's main axes, walls within 5 degrees of them (or within 15 cm of square on a short wall) are squared, wall lines traced within 30 cm of each other are made one (an OSM trace is no more accurate), tracing jogs under 15 cm are dropped, and walls further off square are kept as angled walls. Storeys, roof, and material fill the settings; the placement (id, rotation, center, ground) is saved in the `.bld` for the trip back to the game (not built yet).
+
+Angled walls (a clipped street corner, a wedge-shaped lot, a church apse), stage 1, done:
+
+- Massing (`js/angled-walls.js`): the footprint is squared out to its rectilinear hull (each run of angled walls replaced by the corner outside it) and cut into volumes as before; each volume keeps the angled walls crossing it (`cuts`) and its real plan (`outline`). A footprint whose hull corner reaches past another part of the building is refused, saying so (`angledWallProblem`).
+- Roofs (`js/cut-roofs.js`): a cut volume's roof is the min of its rectangle's planes (less those of sides cut away entirely) and one facet per angled wall that takes an eave: every angled wall on a hip or mansard; one nearer the ridge on a gable or gambrel (a clipped corner); one on a shed's low side. Otherwise the roof runs on to the wall, which rises to meet it (a skewed gable end). Eave trim runs round the overhang, edge by edge. Continuous hips over several volumes use the straight skeleton, now for angled walls too (general offsets, face planes, and heights); where the library fails on a symmetric outline, each volume gets its own hip. A roof cut by angled walls doesn't merge with its neighbors; its walls and eaves are clipped outside them.
+- Walls and facades: per-volume walls follow the outline; an angled wall run belongs to the volume it cuts, with the role its roof gives it.
+- A cut volume's outline is broken where a neighbor's wall begins, so the stretch of a partly shared side that is outside gets its eave.
+- Volume split 'auto': when only one cut leaves the largest block whole with a shallow projection along its side (at most 3 m, and a quarter of its length, deep), that cut wins over the no-slivers rule. A long house with a shallow front projection is one long gable, not two crossing ones; the nine round-1 houses are unchanged. Near-square blocks can still come out as crossing gables: their ridge direction is the thing to set.
+- Found on the way: `roofProfile` dropped a bend where two pairs of planes cross at the same point (both copies looked collinear with each other), which left gaps in gambrel trim.
+- Tests: `tests/angled_walls.test.js`, `tests/import.test.js`. Of the 707 OSM footprints in dixon_dem, 699 import (39 with angled walls); all build, and all but one close up (a near-round 9-sided building leaves a 1 mm sliver).
+
+Still to do, when a real building needs it:
+
+- Stage 2: roof structures (porches, bays, dormers, hoods) on angled walls. They are placed by rectangle side (`hostSide`) today.
+- Wings turned at an angle to the main block (a church transept, the Dixon church 440071966): the wing is one volume cut by angled walls, so its roof runs along the main block's axes. It needs volumes with their own axes.
+- The trip back to the game: write the composed building out in game space from its `placement`.
+- Found while testing (predates this work): a gable over three stacked bands (building 1393801286 squared off) leaves gaps at its rake ends.
+
 ## Immediate next implementation step
 
 - Facade modifiers (Tasks 6–7): windows, doors, trim, and railings, placed on the footprint's wall runs and on roof structures' wall runs (within their visible pieces) and railing runs.

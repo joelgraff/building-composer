@@ -8,7 +8,7 @@ import { normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS } from './
 import { STRUCTURE_UI_PRESETS, newRoofStructure, structureLabel } from './structure-ui.js';
 import { TWO_SLOPE_ROOF_TYPES } from './roof-planes.js';
 import {
-  computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades,
+  computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades, angledWallProblem,
 } from './facade.js';
 import { exportGlb } from './export.js';
 import { importDixonFootprint } from './import.js';
@@ -680,6 +680,11 @@ async function loadFootprint(footprintData, preserveView = true) {
   }
 
   const normalized = normalizeFootprint(vertices, { expectedWinding: windingPreference });
+  const angledProblem = angledWallProblem(normalized);
+  if (angledProblem) {
+    setStatus(angledProblem, 'error');
+    return;
+  }
   updateRoofControlAvailability(normalized);
   const layout = computeFacadeLayout(normalized, {
     volumeSplit: modelConfig.volumeSplit,
@@ -1015,7 +1020,7 @@ function handleFileInput(event) {
         setStatus([
           `Building ${imported.placement.id} imported from ${imported.placement.source}, turned ${angle.toFixed(1)} degrees square to the axes.`,
           ...imported.warnings, roofStructureIssues,
-        ].filter(Boolean).join(' '), imported.warnings.length || roofStructureIssues ? 'error' : 'default');
+        ].filter(Boolean).join(' '), roofStructureIssues ? 'error' : 'default');
         return;
       }
       loadFootprint(payload, false);

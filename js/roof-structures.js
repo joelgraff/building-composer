@@ -1527,17 +1527,28 @@ export function roofProfile(planes, a, b) {
       }
     });
   });
-  const points = [...new Set(ts)].sort((x, y) => x - y).map((t) => [t, heightAt(t)]);
+  // (several pairs of planes can cross at one point: keep it once)
+  const sorted = ts.sort((x, y) => x - y).filter((t, i, all) => i === 0 || t - all[i - 1] > 1e-9);
+  if (1 - sorted[sorted.length - 1] < 1e-9) {
+    sorted[sorted.length - 1] = 1;
+  }
+  const points = sorted.map((t) => [t, heightAt(t)]);
   // keep only the ends and real bends
-  return points.filter((point, i) => {
-    if (i === 0 || i === points.length - 1) {
-      return true;
+  const kept = [points[0]];
+  points.slice(1).forEach((point, i) => {
+    const next = points[i + 2];
+    if (!next) {
+      kept.push(point);
+      return;
     }
-    const [t0, h0] = points[i - 1];
-    const [t2, h2] = points[i + 1];
+    const [t0, h0] = kept[kept.length - 1];
+    const [t2, h2] = next;
     const expected = h0 + ((h2 - h0) * (point[0] - t0)) / (t2 - t0);
-    return Math.abs(point[1] - expected) > 1e-9;
+    if (Math.abs(point[1] - expected) > 1e-9) {
+      kept.push(point);
+    }
   });
+  return kept;
 }
 
 /**

@@ -1,4 +1,6 @@
 import { normalizeRoofStructures } from './roof-structures.js';
+import { hasAngledWalls, rectilinearHull, cutVolumes, cutDistance } from './angled-walls.js';
+import { cutRole } from './cut-roofs.js';
 
 /**
  * Facade subdivision helpers for Task 3.
@@ -156,6 +158,27 @@ export function decomposeIntoVolumes(footprint, { split = 'z' } = {}) {
   if (split === 'auto') {
     return pickVolumeSplit(footprint);
   }
+  if (hasAngledWalls(footprint)) {
+    // squared out to its rectilinear hull, then cut back by its angled walls
+    // (see js/angled-walls.js); the hull's volumes as they are if that fails
+    const { hull, cuts } = rectilinearHull(footprint);
+    const volumes = decomposeRectilinear(hull, split);
+    return cutVolumes(volumes, cuts, footprint) ?? volumes.map((volume) => ({ ...volume, uncut: true }));
+  }
+  return decomposeRectilinear(footprint, split);
+}
+
+/** Whether decomposeIntoVolumes could not follow a footprint's angled walls. */
+export function angledWallProblem(footprint) {
+  if (!hasAngledWalls(footprint)) {
+    return null;
+  }
+  return decomposeIntoVolumes(footprint).some((volume) => volume.uncut)
+    ? 'An angled wall reaches past another part of the building, so the footprint cannot be cut into volumes.'
+    : null;
+}
+
+function decomposeRectilinear(footprint, split) {
   if (split === 'x') {
     // cut the other way: decompose the footprint with x and z swapped, and swap back
     const swapped = decomposeInBands(footprint.map(([x, z]) => [z, x]));
@@ -180,17 +203,32 @@ function withVolumeShape(volume) {
 
 /**
  * The decomposition, of the two cut directions, that best matches how a
- * house is massed: the fewest volumes, then no thin slivers (the largest
- * smallest dimension of any volume); a tie keeps the Z bands. A wing
+ * house is massed: the fewest volumes; then, if only one cut leaves the
+ * largest block whole with a shallow projection along its side, that one;
+ * then no thin slivers (the largest smallest dimension of any volume); a tie
+ * keeps the Z bands. A wing
  * beside a gable-front upright, or a projection in the middle of a side,
  * comes out as its own volume with the main block whole, whichever way the
  * house faces.
  */
 function pickVolumeSplit(footprint) {
   const candidates = ['z', 'x'].map((split) => decomposeIntoVolumes(footprint, { split }));
+  const depth = (volume) => Math.min(volume.maxX - volume.minX, volume.maxZ - volume.minZ);
+  const length = (volume) => Math.max(volume.maxX - volume.minX, volume.maxZ - volume.minZ);
+  // a shallow projection along a side (at most 3 m, and a quarter of its
+  // length, deep) is no sliver: it leaves the main block whole
+  const projection = (volume) => depth(volume) <= PROJECTION_DEPTH && depth(volume) <= length(volume) / 4;
+  const largest = (volumes) => Math.max(...volumes.map((volume) => (volume.maxX - volume.minX) * (volume.maxZ - volume.minZ)));
+  const [z, x] = candidates;
+  if (z.length === x.length && z.length > 1) {
+    const keepsBlock = (own, other) => own.some(projection) && largest(own) > largest(other) + 1e-6;
+    if (keepsBlock(z, x) !== keepsBlock(x, z)) {
+      return keepsBlock(z, x) ? z : x;
+    }
+  }
   const score = (volumes) => [
     -volumes.length,
-    Math.min(...volumes.map((volume) => Math.min(volume.maxX - volume.minX, volume.maxZ - volume.minZ))),
+    Math.min(...volumes.map(depth)),
   ];
   const better = (a, b) => {
     const [sa, sb] = [score(a), score(b)];
@@ -203,6 +241,9 @@ function pickVolumeSplit(footprint) {
   };
   return better(candidates[1], candidates[0]) ? candidates[1] : candidates[0];
 }
+
+/** How deep a projection along a side may be and still leave the main block whole (see pickVolumeSplit). */
+const PROJECTION_DEPTH = 3;
 
 /** Row-run decomposition: bands between the footprint's z coordinates, merged where their x-runs match. */
 function decomposeInBands(footprint) {
@@ -412,6 +453,12 @@ export function classifyEdgeRole(edge, volumes, config = {}) {
     }
   }
 
+  // an angled wall belongs to the volume it cuts
+  const onCut = (candidate) => [edge.start, edge.end].every((point) => Math.abs(cutDistance(candidate, point)) < 1e-6);
+  const cutVolume = orientation === 'diagonal' ? volumes.find((candidate) => candidate.cuts?.some(onCut)) : null;
+  if (cutVolume) {
+    bestVol = cutVolume;
+  }
   const vol = bestVol ?? volumes[0];
   const roofType = (vol && config.volumeRoofTypes?.[vol.id]) ?? config.roofType ?? 'flat';
   const ridgeDirectionOverride = vol ? config.volumeRidgeDirections?.[vol.id] : undefined;
@@ -455,6 +502,14 @@ export function classifyEdgeRole(edge, volumes, config = {}) {
         role = 'rake';
       }
     }
+    pitchRise = role === 'eave' ? defaultPitchRise : 0;
+  }
+
+  if (cutVolume && roofType !== 'flat') {
+    // as its roof treats it (see cutRole in js/cut-roofs.js)
+    const cut = cutVolume.cuts.find(onCut);
+    const highEdgeForCut = roofType === 'shed' ? highEdge : undefined;
+    role = cutRole(cut, roofType, { ridgeAxis, roofHighEdge: highEdgeForCut, bounds: cutVolume }) === 'eave' ? 'eave' : 'rake';
     pitchRise = role === 'eave' ? defaultPitchRise : 0;
   }
 

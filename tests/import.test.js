@@ -63,10 +63,32 @@ describe('squaring up a traced footprint', () => {
     assert.equal(computeFacadeLayout(result.footprint, { volumeSplit: 'auto' }).volumes.length, 2);
   });
 
-  it('refuses a footprint that is not right-angled, saying why', () => {
-    const result = squareFootprint([[0, 0], [10, 0], [12, 8], [0, 8]]);
-    assert.match(result.error, /degrees off square/);
-    assert.match(importDixonFootprint({ ...DIXON, footprint: [[0, 0], [10, 0], [12, 8], [0, 8]] }).error, /^Building 115768678:/);
+  it('keeps a wall well off square as an angled wall, squaring the rest', () => {
+    // a clipped corner, the whole outline traced 2 degrees off the grid
+    const traced = [[0, 0], [10, 0.1], [10, 6], [8, 8], [0, 8]].map((point) => rotate(point, 0.035));
+    const result = squareFootprint(traced);
+    assert.ok(!result.error, result.error);
+    assert.equal(result.angled, 1);
+    assert.equal(result.footprint.length, 5);
+    const angled = result.footprint.filter((corner, i) => {
+      const next = result.footprint[(i + 1) % result.footprint.length];
+      return Math.abs(corner[0] - next[0]) > 1e-9 && Math.abs(corner[1] - next[1]) > 1e-9;
+    });
+    assert.equal(angled.length, 1, 'one wall off the axes');
+  });
+
+  it('squares a short wall a few centimeters off, and puts one wall line traced twice on one line', () => {
+    // a 1.1 m return 5.2 degrees off square (10 cm), and its wall line traced again 2 cm off beyond the wing
+    const traced = [[0, 0], [10, 0], [10.1, 1.1], [16, 1.1], [16, 6], [10.07, 6], [10.07, 8], [0, 8]];
+    const result = squareFootprint(traced);
+    assert.equal(result.angled, 0);
+    const xs = [...new Set(result.footprint.map(([x]) => x))];
+    assert.equal(xs.length, 3, 'x at the two ends and one line through the wing\'s side');
+  });
+
+  it('refuses a footprint the angled walls cannot be followed on, saying why', () => {
+    const u = [[0, 0], [10, 0], [10, 10], [6, 10], [6, 4], [4, 4], [4, 10], [0, 10], [0, 6], [2, 2]];
+    assert.match(importDixonFootprint({ ...DIXON, footprint: u }).error, /^Building 115768678: An angled wall reaches past/);
     assert.match(importDixonFootprint({ footprint: [] }).error, /Not a footprint/);
   });
 });

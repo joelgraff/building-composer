@@ -14,8 +14,9 @@ import {
   roofProfile, roofPeak, structureFacade, roofWalkFacade, zoneSolids, zoneRoofHeight, facadeWallRun, edgeFrame,
 } from './roof-structures.js';
 import {
-  computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, makeEavePlane, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
+  computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, makeEavePlane, makeEdgePlane, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
 } from './roof-planes.js';
+import { buildCutRoof } from './cut-roofs.js';
 
 export { computeVolumeEavePlanes, evalZoneHeight };
 
@@ -99,12 +100,12 @@ export function createBuildingFromFootprint(footprint, config = {}) {
     volumes.forEach((volume) => {
       const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
       const floor = volumeFoundationHeight(volume.id, levelConfig);
-      const volumeWalls = new THREE.Mesh(createBoxWallGeometry(bounds, foundationHeight + totalHeight - floor), materials.wall);
+      const volumeWalls = new THREE.Mesh(createBoxWallGeometry(bounds, foundationHeight + totalHeight - floor, volume.outline), materials.wall);
       volumeWalls.position.y = floor;
       volumeWalls.userData = { volumeId: volume.id, bodyPart: 'walls' };
       group.add(volumeWalls);
       if (floor > 1e-9) {
-        const volumeFoundation = new THREE.Mesh(createBoxWallGeometry(bounds, floor), materials.foundation);
+        const volumeFoundation = new THREE.Mesh(createBoxWallGeometry(bounds, floor, volume.outline), materials.foundation);
         volumeFoundation.userData = { volumeId: volume.id };
         group.add(volumeFoundation);
       }
@@ -1208,14 +1209,14 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
     );
     const wallBounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
 
-    const walls = new THREE.Mesh(createBoxWallGeometry(wallBounds, totalHeight), materials.wall);
+    const walls = new THREE.Mesh(createBoxWallGeometry(wallBounds, totalHeight, volume.outline), materials.wall);
     walls.position.y = volumeFoundation;
     walls.userData = { volumeId: volume.id, bodyPart: 'walls' };
     group.add(walls);
 
     // a volume on a slab at grade (a garage) has no foundation wall
     if (volumeFoundation > 1e-9) {
-      const foundation = new THREE.Mesh(createBoxWallGeometry(wallBounds, volumeFoundation), materials.foundation);
+      const foundation = new THREE.Mesh(createBoxWallGeometry(wallBounds, volumeFoundation, volume.outline), materials.foundation);
       foundation.userData = { volumeId: volume.id };
       group.add(foundation);
     }
@@ -1254,6 +1255,21 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
         roofType: roofTypeForVolume,
         neighborSolids: neighborSolidsForEnds(volume, unsloped, roofVolumes, config, adjacentSides, (id) => volumePlateHeights[id] ?? 0),
       });
+    }
+    if (volume.outline) {
+      // cut by angled walls (see js/cut-roofs.js)
+      const cut = createCutVolumeRoof(volume, roofTypeForVolume, config, { setup, roofConfig, sharedEdge: sharedEdgeTest(volume, roofVolumes) });
+      const roof = new THREE.Mesh(flatShaded(clipInsideNeighbor(cut.geometry, volumeConnections)), materials.roof);
+      roof.position.y = volumeFoundation + totalHeight + ROOF_LIFT;
+      roofZones.push(...cut.zones.map((zone) => ({
+        ...zone, baseY: roof.position.y, wallTopY: volumeFoundation + totalHeight, foundationTopY: volumeFoundation,
+      })));
+      roof.userData = {
+        volumeId: volume.id, roofType: roofTypeForVolume, roofDirection: roofDirectionForVolume, roofHeight: roofHeightForVolume,
+        roofPitch: { rise: params.pitchRise, run: params.pitchRun, degrees: roofPitchDegrees(params.pitchRise, params.pitchRun) },
+      };
+      group.add(roof);
+      return;
     }
     const roofGeometry = isTwoSlope(roofTypeForVolume)
       ? createTwoSlopeRoofGeometry(bounds, roofConfig)
@@ -1297,9 +1313,12 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
   const zonesById = new Map(roofZones.map((zone) => [zone.volumeId, zone]));
   group.children.filter((child) => child.isMesh && child.userData?.roofType && child.userData.volumeId).forEach((roof) => {
     // and where a gable merging into it runs up through its eave
+    const own = roofVolumes.find((volume) => volume.id === roof.userData.volumeId);
     const lower = new Set([
       ...[...(adjacentSides.get(roof.userData.volumeId)?.values() ?? [])].flat().filter((link) => link.below).map((link) => link.neighborId),
       ...mergingNeighbors(roof.userData.volumeId, connections),
+      // a cut roof's walls and eaves stop at its neighbors (see createVolumeRoofAssembly)
+      ...(own?.outline ? neighborIds(own, roofVolumes) : []),
     ]);
     if (!lower.size) {
       return;
@@ -1427,12 +1446,11 @@ function halfSpanForBounds(bounds, roofDirection) {
   return Math.max(0.01, span / 2);
 }
 
-function createBoxWallGeometry(bounds, depth) {
+/** A volume's walls: its rectangle, or its outline where angled walls cut it, extruded up `depth`. */
+function createBoxWallGeometry(bounds, depth, outline) {
   const shape = new THREE.Shape();
-  shape.moveTo(bounds.minX, -bounds.minZ);
-  shape.lineTo(bounds.maxX, -bounds.minZ);
-  shape.lineTo(bounds.maxX, -bounds.maxZ);
-  shape.lineTo(bounds.minX, -bounds.maxZ);
+  const corners = outline ?? [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]];
+  corners.forEach(([x, z], i) => (i === 0 ? shape.moveTo(x, -z) : shape.lineTo(x, -z)));
   shape.closePath();
   const geometry = new THREE.ExtrudeGeometry(shape, {
     depth, bevelEnabled: false, steps: 1, curveSegments: 1,
@@ -1502,6 +1520,10 @@ function createRoofGeometry(footprint, config) {
   const rectangleZone = (roofType, roofConfig) => [roofZoneDescriptor(rectangleVolumeId, {
     wallBounds: bounds, roofBounds: bounds, roofType, roofConfig, setup: rectangleSetup,
   })];
+  const cutVolume = config.volumes?.length === 1 && config.volumes[0].outline ? config.volumes[0] : null;
+  if (cutVolume) {
+    return createCutVolumeRoof(cutVolume, config.roofType, config);
+  }
   if (bounds && config.roofType === 'flat') {
     return { geometry: createFlatRoofGeometry(bounds, rectangleSetup.overhang), zones: rectangleZone('flat', config) };
   }
@@ -1549,6 +1571,10 @@ function createRoofGeometry(footprint, config) {
     if (config.roofType === 'hip'
       && config.volumes
       && config.volumes.length > 1) {
+      // (the skeleton library fails on some symmetric angled outlines: each volume its own hip then)
+      if (config.volumes.some((volume) => volume.outline)) {
+        return createVolumeRoofAssembly(config.volumes, config);
+      }
       return { geometry: createRoofFieldSurface(footprint, config), zones: [] };
     }
     if (config.volumes && config.volumes.length > 1) {
@@ -1566,6 +1592,46 @@ function createRoofGeometry(footprint, config) {
   });
   geometry.rotateX(-Math.PI / 2);
   return { geometry, zones: [] };
+}
+
+/** Whether a wall a-b of `volume` lies against another of `volumes` (a wall they share). */
+function sharedEdgeTest(volume, volumes) {
+  const shared = findVolumeAdjacencies(volumes).flatMap((adjacency) => [
+    adjacency.volumeAId === volume.id && { side: adjacency.sideA, min: adjacency.overlapMin, max: adjacency.overlapMax },
+    adjacency.volumeBId === volume.id && { side: adjacency.sideB, min: adjacency.overlapMin, max: adjacency.overlapMax },
+  ].filter(Boolean));
+  return (a, b) => shared.some(({ side, min, max }) => {
+    const [k, along] = side === 'minX' || side === 'maxX' ? [0, 1] : [1, 0];
+    return [a, b].every((point) => Math.abs(point[k] - volume[side]) < 1e-6
+      && point[along] >= min - 1e-6 && point[along] <= max + 1e-6);
+  });
+}
+
+/**
+ * The roof of a volume cut by angled walls (see js/cut-roofs.js), with the
+ * volume's own eave setup, and its zone: the cut's planes over its outline.
+ */
+function createCutVolumeRoof(volume, roofType, config, { setup: givenSetup, roofConfig: givenConfig, sharedEdge } = {}) {
+  const orientation = { ridgeAxis: config.roofDirection, roofHighEdge: roofType === 'shed' ? shedHighEdge(config) : config.roofHighEdge };
+  const setup = givenSetup ?? volumeEaveSetup(volume.id, roofType, orientation, config);
+  const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
+  let roofConfig = givenConfig ?? { ...config, overhang: setup.overhang, eaves: setup.eaves };
+  if (!givenConfig && roofType === 'hip') {
+    roofConfig = withHipWalk(roofConfig, volume.id, config);
+  } else if (!givenConfig && isTwoSlope(roofType)) {
+    roofConfig = withTwoSlope(roofConfig, volume.id, roofType, config, bounds, []);
+  }
+  if (roofType === 'shed') {
+    roofConfig = { ...roofConfig, roofHighEdge: givenConfig ? shedHighEdge(givenConfig) : orientation.roofHighEdge };
+  }
+  const { triangles, planes } = buildCutRoof(volume, roofType, { ...roofConfig, roofType }, { sharedEdge });
+  const zone = roofZoneDescriptor(volume.id, {
+    wallBounds: bounds, roofBounds: bounds, roofType, roofConfig, setup,
+  });
+  return {
+    geometry: trianglesToGeometry(triangles),
+    zones: [{ ...zone, planes, outline: volume.outline }],
+  };
 }
 
 function createStraightSkeletonHipGeometry(footprint, config) {
@@ -1683,7 +1749,9 @@ function snapSkeleton(skeleton, outline) {
     if (base.length !== 2) {
       return null;
     }
-    return Math.abs(base[0][1] - base[1][1]) < 1e-9 ? { axis: 1, value: base[0][1] } : { axis: 0, value: base[0][0] };
+    const [a, b] = base;
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    return { a, direction: [(b[0] - a[0]) / length, (b[1] - a[1]) / length] };
   });
   skeleton.polygons.forEach((indices, k) => {
     const line = baseLines[k];
@@ -1692,7 +1760,8 @@ function snapSkeleton(skeleton, outline) {
     }
     indices.forEach((index) => {
       if (skeleton.vertices[index][2] >= 1e-5) {
-        vertices[index][2] = Math.abs(vertices[index][line.axis] - line.value);
+        const [x, z] = vertices[index];
+        vertices[index][2] = Math.abs(line.direction[0] * (z - line.a[1]) - line.direction[1] * (x - line.a[0]));
       } else {
         vertices[index][2] = 0;
       }
@@ -1701,7 +1770,7 @@ function snapSkeleton(skeleton, outline) {
   return { ...skeleton, vertices };
 }
 
-/** A rectilinear footprint pushed out by `distance` on every side. */
+/** A footprint pushed out by `distance` on every side (its corners mitred, at any angle). */
 function offsetRectilinear(footprint, distance) {
   const area = footprint.reduce((sum, [x, z], i) => {
     const [nx, nz] = footprint[(i + 1) % footprint.length];
@@ -1717,8 +1786,9 @@ function offsetRectilinear(footprint, distance) {
     const previous = footprint[(i + footprint.length - 1) % footprint.length];
     const next = footprint[(i + 1) % footprint.length];
     const [n1, n2] = [normal(previous, point), normal(point, next)];
-    // at a right angle each normal moves one coordinate
-    return [point[0] + distance * (n1[0] + n2[0]), point[1] + distance * (n1[1] + n2[1])];
+    // where the two pushed-out edges meet (at a right angle each normal moves one coordinate)
+    const scale = distance / (1 + n1[0] * n2[0] + n1[1] * n2[1]);
+    return [point[0] + scale * (n1[0] + n2[0]), point[1] + scale * (n1[1] + n2[1])];
   });
 }
 
@@ -1747,6 +1817,11 @@ function skeletonEaveTrim(footprint, outline, eaveY, eaves) {
 
 /** The plane of a skeleton face rising from its (axis-aligned) base edge, at height `baseHeight` there, as an eave plane. */
 function skeletonFacePlane(edge, polygon, pitchRatio, baseHeight = 0) {
+  if (Math.abs(edge[0][1] - edge[1][1]) > 1e-9 && Math.abs(edge[0][0] - edge[1][0]) > 1e-9) {
+    // an angled wall's face
+    const inside = [polygon.reduce((sum, v) => sum + v[0], 0) / polygon.length, polygon.reduce((sum, v) => sum + v[2], 0) / polygon.length];
+    return { ...makeEdgePlane(edge[0], edge[1], pitchRatio, inside), offset: baseHeight };
+  }
   const alongX = Math.abs(edge[0][1] - edge[1][1]) < 1e-9;
   const [axis, k] = alongX ? ['z', 2] : ['x', 0];
   const constant = alongX ? edge[0][1] : edge[0][0];
@@ -1754,6 +1829,23 @@ function skeletonFacePlane(edge, polygon, pitchRatio, baseHeight = 0) {
   return {
     axis, sign: Math.sign(inward) || 1, constant, slope: pitchRatio, offset: baseHeight, side: `${inward > 0 ? 'min' : 'max'}${axis.toUpperCase()}`,
   };
+}
+
+/** Which way a plan polygon winds: 1 when inside is to the left of each edge (a positive shoelace sum), else -1. */
+function outlineSide(outline) {
+  return Math.sign(outline.reduce((sum, [x, z], i) => {
+    const [nx, nz] = outline[(i + 1) % outline.length];
+    return sum + x * nz - nx * z;
+  }, 0)) || 1;
+}
+
+/** A plan polygon clipped to a convex outline (a cut volume's). */
+function clipToOutline(polygon, outline) {
+  const turn = outlineSide(outline);
+  return outline.reduce((piece, a, i) => {
+    const b = outline[(i + 1) % outline.length];
+    return piece.length >= 3 ? clipPolygon(piece, ([x, z]) => turn * ((b[0] - a[0]) * (z - a[1]) - (b[1] - a[1]) * (x - a[0]))) : piece;
+  }, polygon);
 }
 
 /** A plan polygon clipped to a rectangle. */
@@ -1849,26 +1941,38 @@ function skeletonHipZones(volumes, {
         }
       }
     });
+    // an angled wall of this volume rises into its own face
+    faces.filter(({ edge }) => Math.abs(edge[0][0] - edge[1][0]) > 1e-9 && Math.abs(edge[0][1] - edge[1][1]) > 1e-9)
+      .filter(({ polygon }) => volume.outline && clipToOutline(polygon.map(([x, , z]) => [x, z]), volume.outline).length >= 3)
+      .forEach(({ edge, polygon }) => planes.push(skeletonFacePlane(edge, polygon, pitchRatio, -pitchRatio * overhang)));
     if (walk) {
       planes.push({ constantHeight: walk.height, tier: 'walk' });
     }
+    const clip = (polygon) => (volume.outline ? clipToOutline(polygon, volume.outline) : clipToBounds(polygon, bounds));
     // the exact roof over this volume: each skeleton face (and the walk) within it, in convex pieces
     const roofPieces = [
       ...faces.map(({ edge, polygon }) => ({ polygon, plane: skeletonFacePlane(edge, polygon, pitchRatio, -pitchRatio * overhang) })),
       ...walkFaces.map((polygon) => ({ polygon, plane: { constantHeight: walk.height, tier: 'walk' } })),
-    ].flatMap(({ polygon, plane }) => convexPieces(clipToBounds(polygon.map(([x, , z]) => [x, z]), bounds))
+    ].flatMap(({ polygon, plane }) => convexPieces(clip(polygon.map(([x, , z]) => [x, z])))
       .map((piece) => ({ polygon: piece, plane })));
     // the highest point of the roof over this volume
     const inside = [
       (v) => v[0] - bounds.minX, (v) => bounds.maxX - v[0], (v) => v[2] - bounds.minZ, (v) => bounds.maxZ - v[2],
     ];
     const allFaces = [...faces.map(({ polygon }) => polygon), ...walkFaces];
-    const roofHeight = Math.max(0, ...allFaces.flatMap((polygon) => inside.reduce((piece, distance) => clipPolygon(piece, distance), polygon).map((v) => v[1])));
+    const within = (polygon) => (volume.outline
+      ? volume.outline.reduce((piece, a, i) => {
+        const b = volume.outline[(i + 1) % volume.outline.length];
+        return clipPolygon(piece, (v) => outlineSide(volume.outline) * ((b[0] - a[0]) * (v[2] - a[1]) - (b[1] - a[1]) * (v[0] - a[0])));
+      }, polygon)
+      : inside.reduce((piece, distance) => clipPolygon(piece, distance), polygon));
+    const roofHeight = Math.max(0, ...allFaces.flatMap((polygon) => within(polygon).map((v) => v[1])));
     return {
       volumeId: volume.id,
       roofType: 'hip',
       bounds,
       roofBounds: bounds,
+      ...(volume.outline ? { outline: volume.outline } : {}),
       ridgeAxis: volume.ridgeAxis,
       roofHeight,
       planes,
@@ -1967,6 +2071,12 @@ function createVolumeRoofAssembly(volumes, config) {
         neighborSolids: neighborSolidsForEnds(volume, unsloped, roofVolumes, config, adjacentSides),
       });
     }
+    if (volume.outline) {
+      // cut by angled walls (see js/cut-roofs.js); its walls against other volumes stay open
+      const cut = createCutVolumeRoof(volume, roofType, config, { setup, roofConfig, sharedEdge: sharedEdgeTest(volume, roofVolumes) });
+      zones.push(...cut.zones);
+      return clipInsideNeighbor(cut.geometry, volumeConnections);
+    }
     const chunk = isTwoSlope(roofType)
       ? createTwoSlopeRoofGeometry(bounds, roofConfig)
       : roofType === 'flat'
@@ -1987,10 +2097,14 @@ function createVolumeRoofAssembly(volumes, config) {
     return clipInsideNeighbor(chunk, volumeConnections);
   });
   // a roof a gable merges into keeps its eave along the whole side; it is cut
-  // where it passes into the merging roof (whose valleys take over there)
+  // where it passes into the merging roof (whose valleys take over there);
+  // a cut roof's walls and eaves are cut where they pass into a neighbor
   const zonesById = new Map(zones.map((zone) => [zone.volumeId, zone]));
   const clipped = chunks.map((chunk, index) => {
-    const merging = mergingNeighbors(roofVolumes[index].id, connections);
+    const merging = [
+      ...mergingNeighbors(roofVolumes[index].id, connections),
+      ...(roofVolumes[index].outline ? neighborIds(roofVolumes[index], roofVolumes) : []),
+    ];
     if (!merging.length) {
       return chunk;
     }
@@ -2002,6 +2116,14 @@ function createVolumeRoofAssembly(volumes, config) {
     return trianglesToGeometry(triangles);
   });
   return { geometry: mergeFlatGeometries(clipped), zones };
+}
+
+/** The ids of the volumes that share a wall with `volume`. */
+function neighborIds(volume, volumes) {
+  return [...new Set(findVolumeAdjacencies(volumes).flatMap((adjacency) => [
+    adjacency.volumeAId === volume.id ? adjacency.volumeBId : null,
+    adjacency.volumeBId === volume.id ? adjacency.volumeAId : null,
+  ]).filter(Boolean))];
 }
 
 /** The volumes whose gable ends merge into `volumeId`'s roof (see resolveRoofConnections). */
@@ -2269,8 +2391,11 @@ export function resolveRoofConnections(volumes, config) {
       }
       const own = planesByVolumeId.get(ownId);
       const neighbor = planesByVolumeId.get(neighborId);
-      // mansard and gambrel roofs close their shared sides themselves (see createTwoSlopeRoofGeometry)
-      if (isTwoSlope(own.roofType) || isTwoSlope(neighbor.roofType)) {
+      // mansard and gambrel roofs close their shared sides themselves (see
+      // createTwoSlopeRoofGeometry), and a roof cut by angled walls stands
+      // alone (see js/cut-roofs.js)
+      const cutIds = new Set(volumes.filter((volume) => volume.outline).map((volume) => volume.id));
+      if (isTwoSlope(own.roofType) || isTwoSlope(neighbor.roofType) || cutIds.has(ownId) || cutIds.has(neighborId)) {
         return;
       }
       if (own.roofType === 'gable') {
@@ -2784,7 +2909,9 @@ function adjacentSidesByVolume(volumes, plates) {
         min: adjacency.overlapMin,
         max: adjacency.overlapMax,
         // the neighbor's whole wall face, which closes anything up against it
-        wall: acrossX ? [neighbor.minZ, neighbor.maxZ] : [neighbor.minX, neighbor.maxX],
+        wall: neighbor.outline
+          ? outlineWallAlong(neighbor.outline, acrossX ? 0 : 1, byId.get(id)[side])
+          : acrossX ? [neighbor.minZ, neighbor.maxZ] : [neighbor.minX, neighbor.maxX],
         // the neighbor's wall backs an eave end only if it reaches up to this roof's plate
         backs: plate(neighborId) >= plate(id) - 1e-6,
         // a lower neighbor stops below this roof's eave, which runs on over it
@@ -2796,6 +2923,19 @@ function adjacentSidesByVolume(volumes, plates) {
     link(adjacency.volumeBId, adjacency.sideB, adjacency.volumeAId);
   });
   return sides;
+}
+
+/**
+ * The extent of a cut volume's walls on the line where coordinate `k` (0 for
+ * x, 1 for z) is `value`, along the other axis: its rectangle less what its
+ * angled walls cut away.
+ */
+function outlineWallAlong(outline, k, value) {
+  const along = outline.flatMap((a, i) => {
+    const b = outline[(i + 1) % outline.length];
+    return Math.abs(a[k] - value) < 1e-6 && Math.abs(b[k] - value) < 1e-6 ? [a[1 - k], b[1 - k]] : [];
+  });
+  return along.length ? [Math.min(...along), Math.max(...along)] : [0, 0];
 }
 
 /**
