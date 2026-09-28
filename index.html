@@ -259,6 +259,49 @@
         width: auto;
       }
 
+      .field-group {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(17, 32, 51, 0.08);
+      }
+
+      .field-group:first-of-type {
+        margin-top: 10px;
+        padding-top: 0;
+        border-top: 0;
+      }
+
+      .field-group-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+
+      .slider-field {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .slider-field input[type="range"] {
+        flex: 1;
+        width: auto;
+        padding: 0;
+        accent-color: var(--accent);
+      }
+
+      .slider-field input.slider-value {
+        flex: 0 0 auto;
+        width: 4.6em;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        font-size: 0.85rem;
+        padding: 6px 8px;
+      }
+
       .status {
         margin-top: 18px;
         background: rgba(50, 107, 245, 0.08);

@@ -4,8 +4,11 @@ import { validateFootprint, normalizeFootprint, computeFootprintMetrics } from '
 import {
   createBuildingFromFootprint, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS,
 } from './extrusion.js';
-import { normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS } from './roof-structures.js';
+import {
+  normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS, structureFrame, resolveRoofStructure,
+} from './roof-structures.js';
 import { STRUCTURE_UI_PRESETS, newRoofStructure, structureLabel } from './structure-ui.js';
+import { sideOverhangs, resolveVolumeEaves } from './eaves.js';
 import {
   computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades,
 } from './facade.js';
@@ -127,6 +130,14 @@ const pointer = new THREE.Vector2();
 let pickTargets = [];
 let activeLayout = null;
 let activeFoundationHeight = 0;
+// The roof-building step's own per-volume zone descriptors (resolved ridge
+// axis, roof type, bounds): what a roof structure actually validates its
+// host side against. Kept distinct from `activeLayout.roofZones`, the
+// facade layer's own roof-graph zones (used for the edge-role summary
+// panel) — for a volume with no ridge-direction override, that one falls
+// back to the footprint's geometric default ridge axis, which can differ
+// from the building's actual configured roof direction.
+let activeRoofZones = [];
 let hoveredVolumeId = null;
 let pointerDown = null;
 // roof structures: the one being edited, what the last build made of each, and their meshes (for picking)
@@ -663,7 +674,9 @@ async function loadFootprint(footprintData, preserveView = true) {
   updateFacadeSummary(layout);
   setStatus(`Valid footprint loaded (${windingPreference})`, 'default');
 
-  const { building, foundationHeight, roofStructures, structureFacades } = createBuildingFromFootprint(normalized, {
+  const {
+    building, foundationHeight, roofStructures, structureFacades, roofZones: builtRoofZones,
+  } = createBuildingFromFootprint(normalized, {
     storyCount: modelConfig.storyCount,
     storyHeight: modelConfig.storyHeight,
     panelsPerRun: modelConfig.panelsPerRun,
@@ -713,6 +726,7 @@ async function loadFootprint(footprintData, preserveView = true) {
     updateFacadeSummary(activeLayout);
   }
   activeFoundationHeight = foundationHeight;
+  activeRoofZones = builtRoofZones ?? [];
   activeStructureEntries = roofStructures;
   structureMeshes = [];
   building.traverse((child) => {
@@ -1279,6 +1293,249 @@ function structureRecord(id) {
   return modelConfig.roofStructures.find((structure) => structure.id === id) ?? null;
 }
 
+/**
+ * Whether a preset's structure needs a sloped host side to rise from: the
+ * resolver only checks for one when the structure neither stands on its own
+ * base (a porch) nor rises through the roof (a cupola) — everything else
+ * (`mount: 'join'` and no `baseHeight`, the dormer family's default) joins
+ * whatever roof face is under `hostSide`, and there has to be one. Built by
+ * actually normalizing the preset rather than reading its raw fields, so a
+ * kind's own defaults (e.g. cupola's `mount: 'through'`, unset by the UI
+ * preset itself) are resolved the same way the builder resolves them.
+ */
+function presetNeedsSlopedSide(presetKey) {
+  const preset = STRUCTURE_UI_PRESETS.find((candidate) => candidate.key === presetKey);
+  if (!preset || preset.onStructure) {
+    return false;
+  }
+  const probe = newRoofStructure(presetKey, { hostVolumeId: 'probe', hostSide: 'minX' }, []);
+  return Boolean(probe) && probe.baseHeight === null && probe.mount !== 'through';
+}
+
+/**
+ * Which of a volume's four sides a roof structure that needs a slope (see
+ * `presetNeedsSlopedSide`) can actually be hosted on. Checked by resolving a
+ * minimal probe structure against the volume's own built roof zone
+ * (`activeRoofZones`, not the facade layer's roof-graph zones — see that
+ * variable's comment) and reading off whether the resolver's `side-not-
+ * sloped` check specifically rejected it, the same way `maxValidInset`
+ * settles a question that isn't worth re-deriving by hand: a gable's or
+ * hip's sloped face and a shed's low side pass; a gable end, a shed's high
+ * edge, or its rake sides don't. A flat roof has no slope anywhere but takes
+ * an explicit depth instead (see the "Add" button's flat-roof fallback
+ * below), so every side counts there too. `true` for every side when the
+ * host's roof isn't known yet (nothing built to check against), so nothing
+ * is disabled from a guess.
+ */
+function eligibleHostSides(hostVolume) {
+  const allSides = {
+    minZ: true, maxZ: true, minX: true, maxX: true,
+  };
+  const zone = activeRoofZones.find((candidate) => candidate.volumeId === hostVolume?.id);
+  if (!zone || zone.roofType === 'flat') {
+    return allSides;
+  }
+  const config = { roofPitchRise: modelConfig.roofPitchRise, roofPitchRun: modelConfig.roofPitchRun };
+  const result = {};
+  Object.keys(allSides).forEach((side) => {
+    const probe = normalizeRoofStructures([{ hostVolumeId: hostVolume.id, hostSide: side, kind: 'dormer' }])[0];
+    const { errors } = resolveRoofStructure(probe, zone, config);
+    result[side] = !errors.some((error) => error.code === 'side-not-sloped');
+  });
+  return result;
+}
+
+/** A generous fallback range (meters) for a structure whose host geometry isn't resolved yet. */
+const FALLBACK_PLACEMENT_RANGE = 4;
+
+/**
+ * A hair's width (meters) kept inside the computed edge so a slider dragged
+ * to its extreme still resolves: the resolver rejects a structure whose edge
+ * lands exactly on the host wall run or ridge (it must end strictly before
+ * it), and well clear of the resolver's own epsilon (1e-4 m).
+ */
+const PLACEMENT_EDGE_MARGIN = 0.02;
+
+/**
+ * How far the structure's own roof overhangs past its wall footprint on
+ * whichever pair of sides `offset` slides it toward (its own eave or rake,
+ * whichever those sides are, given its roof type and ridge orientation).
+ * Left unaccounted for, a slider dragged to the edge of the host wall run
+ * still leaves the structure's own roof overhang projecting past it, through
+ * the host's gable end. Mirrors the overhang the builder itself computes
+ * (see structureEaveSetup in js/extrusion.js) without needing a resolved
+ * structure, since it depends only on roof type and orientation, not offset.
+ */
+function structureAlongOverhang(structure, frame) {
+  if (structure.roofType === 'none' || structure.roofType === 'flat') {
+    return 0;
+  }
+  const ridgeAxis = structure.roofType === 'shed' || structure.ridge === 'parallel' ? frame.along : frame.inward;
+  const roofHighEdge = structure.roofType === 'shed' ? `${frame.inward}-${frame.sign > 0 ? 'max' : 'min'}` : undefined;
+  const eaves = resolveVolumeEaves(structure.id, {
+    roofEaveDepth: modelConfig.roofEaveDepth,
+    roofRakeDepth: modelConfig.roofRakeDepth,
+    roofFasciaDepth: modelConfig.roofFasciaDepth,
+    volumeEaves: { [structure.id]: structure.eaves },
+  });
+  const { overhang } = sideOverhangs(structure.roofType, { ridgeAxis, roofHighEdge }, eaves);
+  const [alongMinKey, alongMaxKey] = frame.along === 'x' ? ['minX', 'maxX'] : ['minZ', 'maxZ'];
+  return Math.max(overhang[alongMinKey] ?? 0, overhang[alongMaxKey] ?? 0);
+}
+
+/** The smallest a structure's width, depth, or wall/railing height can be dragged to (meters). */
+const MIN_STRUCTURE_SIZE = 0.3;
+
+/**
+ * The valid range (meters) for a structure's `offset`, `setback`, `width`,
+ * `depth`, and `wallHeight`, so no slider's travel can push the structure's
+ * own footprint or roof overhang past its host roof plane's edges, or its
+ * plate above the host ridge. Each bound is computed holding every *other*
+ * field at its current value — e.g. width's max leaves room for the current
+ * offset, offset's max leaves room for the current width — the same way
+ * offset and setback already worked; dragging one and then another lets each
+ * catch up to the last, rather than trying to solve every field at once.
+ *
+ * - `offset`: the host wall run less the structure's width and its own roof
+ *   overhang on that side (else the overhang alone can poke through the
+ *   host's gable end at the extreme of the slider).
+ * - `setback`: the distance from the host wall to the ridge (or, for a shed
+ *   roof, the far wall) less the structure's depth (an auto depth is treated
+ *   as 0, since the resolver stretches it to the ridge on its own), and, for
+ *   a dormer rising out of a gable/hip host, how far it can move toward the
+ *   ridge before its own plate rises above it (the resolver rejects that
+ *   outright rather than lowering it). Negative setback (projecting past the
+ *   wall) stays available only when the structure already has a base to
+ *   stand on.
+ * - `width`: the host wall run less twice the current offset and roof
+ *   overhang, so it can't widen past either end of the host wall.
+ * - `depth`: the distance from the host wall to the ridge (or far wall) less
+ *   the current setback.
+ * - `wallHeight`: for a dormer, how tall its wall can stand at the current
+ *   setback before its plate reaches the host ridge; unconstrained by the
+ *   ridge for a structure with its own base (a porch) or rising through the
+ *   roof (a cupola), which don't answer to it.
+ * - `inset`: the deepest the recess can go before either reaching the back
+ *   of the structure, or (on a sloped host) running back under the host
+ *   roof still standing beyond where the structure's own footprint cut it
+ *   away — a shape too irregular to invert into a formula, so it's found by
+ *   bisecting against the real resolver instead (see `maxValidInset`).
+ */
+
+/**
+ * The deepest `inset` the real resolver still accepts for this structure, by
+ * bisection: resolving a hypothetical copy of the record is cheap pure
+ * geometry (no meshes), and settling for "found by trying values" here beats
+ * reverse-engineering `resolveRoofStructure`'s host-roof-containment check
+ * (see its `inset-too-deep` case) into a closed-form bound.
+ */
+function maxValidInset(structure, host, ceiling) {
+  if (!(ceiling > 0)) {
+    return 0;
+  }
+  const config = { roofPitchRise: modelConfig.roofPitchRise, roofPitchRun: modelConfig.roofPitchRun };
+  const valid = (inset) => resolveRoofStructure({ ...structure, inset }, host, config).errors.length === 0;
+  if (valid(ceiling)) {
+    return ceiling;
+  }
+  let lo = 0;
+  let hi = ceiling;
+  for (let i = 0; i < 24; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (valid(mid)) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+function structurePlacementLimits(structure) {
+  const fallback = {
+    offsetMin: -FALLBACK_PLACEMENT_RANGE,
+    offsetMax: FALLBACK_PLACEMENT_RANGE,
+    setbackMin: structure.baseHeight === null ? 0 : -FALLBACK_PLACEMENT_RANGE,
+    setbackMax: FALLBACK_PLACEMENT_RANGE,
+    widthMin: MIN_STRUCTURE_SIZE,
+    widthMax: FALLBACK_PLACEMENT_RANGE * 2,
+    depthMin: MIN_STRUCTURE_SIZE,
+    depthMax: FALLBACK_PLACEMENT_RANGE * 2,
+    wallHeightMin: MIN_STRUCTURE_SIZE,
+    wallHeightMax: FALLBACK_PLACEMENT_RANGE,
+    insetMin: 0,
+    insetMax: FALLBACK_PLACEMENT_RANGE,
+  };
+  const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
+  const host = entry?.host;
+  const frame = host ? structureFrame(structure.hostSide) : null;
+  if (!host || !frame) {
+    return fallback;
+  }
+  const [alongMinKey, alongMaxKey] = frame.along === 'x' ? ['minX', 'maxX'] : ['minZ', 'maxZ'];
+  const [inwardMinKey, inwardMaxKey] = frame.inward === 'x' ? ['minX', 'maxX'] : ['minZ', 'maxZ'];
+
+  const alongSpan = host.bounds[alongMaxKey] - host.bounds[alongMinKey];
+  // A dormer rising from the roof needs this margin: past the host's along
+  // bound, on that same wall run, stands the gable end (a wall the full
+  // height of the roof), and an unclamped overhang would run into it. A
+  // structure with its own base (a porch) or rising through the roof
+  // doesn't answer to that: past the host's corner there's open air, not
+  // another wall, so its eave is free to run past the corner the way a real
+  // porch roof would, and its footprint can run flush to the corner too.
+  const isDormer = structure.baseHeight === null && structure.mount !== 'through';
+  const overhang = isDormer ? structureAlongOverhang(structure, frame) : 0;
+  const halfTravel = Math.max(0, alongSpan / 2 - (structure.width ?? 0) / 2 - overhang - PLACEMENT_EDGE_MARGIN);
+  // Width's own bound holds *at offset 0* (as wide as the host wall run
+  // allows if centered) rather than the current offset: were it narrowed by
+  // the current offset instead, dragging offset would visibly rescale the
+  // width slider's whole track under an untouched value, making it look
+  // like width itself was changing. offset already can't exceed what the
+  // current width leaves room for (above); editing width instead re-clamps
+  // offset to fit afterward (see applyStructureFieldEdit), so the coupling
+  // only ever moves the slider you're not currently holding.
+  const widthMax = Math.max(MIN_STRUCTURE_SIZE, alongSpan - 2 * overhang - 2 * PLACEMENT_EDGE_MARGIN);
+
+  const inwardSpan = host.bounds[inwardMaxKey] - host.bounds[inwardMinKey];
+  const usableInward = host.roofType === 'shed' ? inwardSpan : inwardSpan / 2;
+  const depth = structure.depth === null ? 0 : (structure.depth ?? 0);
+  const planSetbackMax = Math.max(0, usableInward - depth - PLACEMENT_EDGE_MARGIN);
+  // Same reasoning as width above: depth's bound holds at setback 0, not the
+  // current setback, so dragging setback doesn't rescale the depth slider.
+  const depthMax = Math.max(MIN_STRUCTURE_SIZE, usableInward - PLACEMENT_EDGE_MARGIN);
+
+  // A dormer's plate rises with the host roof pitch as it moves toward the
+  // ridge; past this setback its wall top would clear the ridge outright.
+  const pitchSlope = host.roofHeight > 0 ? host.roofHeight / usableInward : 0;
+  const plateSetbackMax = isDormer && pitchSlope > 0
+    ? Math.max(0, (host.roofHeight - (structure.wallHeight ?? 0)) / pitchSlope - PLACEMENT_EDGE_MARGIN)
+    : Infinity;
+  // And again: wall height's bound holds at setback 0 (the tallest it could
+  // stand right at the wall line), not the current setback.
+  const wallHeightMax = isDormer && pitchSlope > 0
+    ? Math.max(MIN_STRUCTURE_SIZE, host.roofHeight - PLACEMENT_EDGE_MARGIN)
+    : fallback.wallHeightMax;
+
+  const effectiveDepth = entry?.resolved
+    ? Math.abs(entry.resolved.back - entry.resolved.front)
+    : (structure.depth ?? depthMax);
+  const insetMax = maxValidInset(structure, host, Math.max(0, effectiveDepth - PLACEMENT_EDGE_MARGIN));
+
+  return {
+    offsetMin: -halfTravel,
+    offsetMax: halfTravel,
+    setbackMin: structure.baseHeight === null ? 0 : -Math.max(usableInward, FALLBACK_PLACEMENT_RANGE),
+    setbackMax: Math.min(planSetbackMax, plateSetbackMax),
+    widthMin: MIN_STRUCTURE_SIZE,
+    widthMax,
+    depthMin: MIN_STRUCTURE_SIZE,
+    depthMax,
+    wallHeightMin: MIN_STRUCTURE_SIZE,
+    wallHeightMax,
+    insetMin: 0,
+    insetMax,
+  };
+}
+
 function escapeHtml(text) {
   return String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -1295,6 +1552,42 @@ function numberField(label, field, value, { length = true, step = 0.1, disabled 
   const shown = length ? lengthText(value) : (value ?? '');
   return `<div class="field"><label>${escapeHtml(label)}${length ? ` (${unitLabel()})` : ''}</label>`
     + `<input type="number" data-field="${field}" step="${step}" value="${shown}"${disabled ? ' disabled' : ''}${placeholder ? ` placeholder="${placeholder}"` : ''} /></div>`;
+}
+
+/**
+ * A range slider paired with a live numeric readout, for a length field whose
+ * valid travel is bounded (e.g. a roof structure's offset/setback). `min` and
+ * `max` are in meters; the slider itself works in display units so its step
+ * matches what the readout shows. Firing on `input` (not just `change`) lets
+ * the caller update the model continuously while the slider is dragged.
+ */
+/**
+ * A range slider paired with a number box at its end showing the same value,
+ * either of which can drive the field: drag the slider for continuous
+ * feedback, or type an exact figure in the box. Both share `data-field` and
+ * the same min/max, so whichever one fires still runs through the normal
+ * field-edit path (which also clamps offset/setback to these limits, since a
+ * typed value bypasses the slider's own inherent clamping).
+ */
+function sliderField(label, field, value, min, max, { disabled = false } = {}) {
+  const factor = unitFactor();
+  const displayMin = Number((min * factor).toFixed(2));
+  const displayMax = Number((max * factor).toFixed(2));
+  const shown = Number.isFinite(value) ? Number((value * factor).toFixed(2)) : displayMax;
+  const clamped = Math.min(Math.max(shown, displayMin), displayMax);
+  const disabledAttr = disabled ? ' disabled' : '';
+  // step="any": with a min that isn't a clean multiple of a fixed step, a
+  // numeric step snaps every value a little off what was actually set.
+  return `<div class="field"><label>${escapeHtml(label)} (${unitLabel()})</label>`
+    + `<div class="slider-field">`
+    + `<input type="range" data-field="${field}" min="${displayMin}" max="${displayMax}" step="any" value="${clamped}"${disabledAttr} />`
+    + `<input type="number" class="slider-value" data-field="${field}" min="${displayMin}" max="${displayMax}" step="0.01" value="${clamped.toFixed(2)}"${disabledAttr} />`
+    + `</div></div>`;
+}
+
+/** A labeled group of fields, visually set off from the ones around it. Omitted entirely when empty (a group whose fields are all conditionally hidden). */
+function fieldGroup(label, parts) {
+  return parts.length ? `<div class="field-group"><div class="field-group-label">${escapeHtml(label)}</div>${parts.join('')}</div>` : '';
 }
 
 function selectField(label, field, options, value) {
@@ -1325,6 +1618,22 @@ function renderStructurePanel() {
     ? `Add on ${selected?.id ?? 'the selected porch'}`
     : `Add to ${hostVolume ? hostVolume.id.replace('-', ' ') : 'the building'}`;
 
+  // Disable a facing option the preset couldn't rise from (a gable end, a
+  // shed's high or rake side): with nothing to override it, default onto a
+  // side that works instead of onto whatever the dropdown last held.
+  if (!structureSideSelect.disabled && hostVolume) {
+    const eligible = presetNeedsSlopedSide(structurePresetSelect.value) ? eligibleHostSides(hostVolume) : null;
+    [...structureSideSelect.options].forEach((option) => {
+      option.disabled = Boolean(eligible) && !eligible[option.value];
+    });
+    if (structureSideSelect.selectedOptions[0]?.disabled) {
+      const firstEligible = [...structureSideSelect.options].find((option) => !option.disabled);
+      if (firstEligible) {
+        structureSideSelect.value = firstEligible.value;
+      }
+    }
+  }
+
   structureList.innerHTML = modelConfig.roofStructures.length
     ? modelConfig.roofStructures.map((structure) => {
       const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
@@ -1337,6 +1646,19 @@ function renderStructurePanel() {
     }).join('')
     : '<div style="color:var(--muted);">No roof structures. Pick one above and add it to the selected volume.</div>';
 
+  // Rewriting the editor's HTML on every tick of a slider drag would tear out
+  // the range input the pointer is captured on and stall the drag. While a
+  // drag tick is in flight (see structureLiveDragging), leave the DOM alone
+  // and just refresh the live numeric readout next to it; the full editor
+  // (and any field whose visibility depends on the value being dragged)
+  // catches up once the drag ends and `change` re-renders it normally.
+  if (structureLiveDragging && document.activeElement?.type === 'range' && structureEditor.contains(document.activeElement)) {
+    const readout = document.activeElement.parentElement?.querySelector('.slider-value');
+    if (readout) {
+      readout.value = Number(document.activeElement.value).toFixed(2);
+    }
+    return;
+  }
   structureEditor.innerHTML = selected ? structureEditorHtml(selected) : '';
 }
 
@@ -1345,56 +1667,70 @@ function structureEditorHtml(structure) {
   const roofless = structure.roofType === 'none';
   const standing = structure.baseHeight !== null;
   const baseMode = structure.baseHeight === null ? 'roof' : structure.baseHeight === 'ground' ? 'ground' : 'height';
-  const parts = [
-    `<div style="margin:10px 0 8px; font-weight:700;">Editing ${escapeHtml(structure.id)}</div>`,
-    selectField('Facing', 'hostSide', SIDE_OPTIONS, structure.hostSide),
-  ];
+  const limits = structurePlacementLimits(structure);
+
+  const placement = [selectField('Facing', 'hostSide', SIDE_OPTIONS, structure.hostSide)];
   if (!standing) {
     // a porch stands on its base; only a structure without one joins or rises through the roof
-    parts.push(selectField('Meets the roof', 'mount', [['join', 'Joins one slope (a dormer)'], ['through', 'Rises through it (a cupola)']], structure.mount));
+    placement.push(selectField('Meets the roof', 'mount', [['join', 'Joins one slope (a dormer)'], ['through', 'Rises through it (a cupola)']], structure.mount));
   }
   if (through) {
-    parts.push(checkField('Fill the flat roof top', 'fill', structure.fill));
+    placement.push(checkField('Fill the flat roof top', 'fill', structure.fill));
   }
+
+  const footprint = [];
   if (structure.fill && through) {
-    parts.push(numberField('Margin', 'fillMargin', structure.fillMargin));
+    footprint.push(numberField('Margin', 'fillMargin', structure.fillMargin));
   } else {
-    parts.push(numberField('Offset along the side', 'offset', structure.offset));
-    parts.push(numberField('Width', 'width', structure.width));
-    parts.push(checkField('Centered across the roof', 'setbackCenter', structure.setback === 'center'));
-    parts.push(numberField('Setback from the wall (negative projects)', 'setback', structure.setback === 'center' ? null : structure.setback, { disabled: structure.setback === 'center' }));
-    parts.push(checkField('Depth runs back to the roof', 'depthAuto', structure.depth === null));
-    parts.push(numberField('Depth', 'depth', structure.depth, { disabled: structure.depth === null }));
-  }
-  parts.push(numberField(roofless ? 'Railing height' : 'Wall height', 'wallHeight', structure.wallHeight));
-  if (!through) {
-    parts.push(selectField('Base', 'baseMode', [['roof', 'Rises out of the roof (a dormer)'], ['ground', 'Stands on the ground (a porch)'], ['height', 'Stands at a height above the host plate (a porch)']], baseMode));
-    if (baseMode === 'height') {
-      parts.push(numberField('Base height above the host plate', 'baseHeight', structure.baseHeight));
+    footprint.push(sliderField('Offset along the side', 'offset', structure.offset, limits.offsetMin, limits.offsetMax));
+    footprint.push(sliderField('Width', 'width', structure.width, limits.widthMin, limits.widthMax));
+    footprint.push(checkField('Centered across the roof', 'setbackCenter', structure.setback === 'center'));
+    if (structure.setback !== 'center') {
+      footprint.push(sliderField('Setback from the wall (negative projects)', 'setback', structure.setback, limits.setbackMin, limits.setbackMax));
     }
-    parts.push(numberField('Recessed front (inset)', 'inset', structure.inset));
+    footprint.push(checkField('Depth runs back to the roof', 'depthAuto', structure.depth === null));
+    footprint.push(sliderField('Depth', 'depth', structure.depth, limits.depthMin, limits.depthMax, { disabled: structure.depth === null }));
   }
-  parts.push(selectField('Roof', 'roofType', STRUCTURE_ROOF_OPTIONS, structure.roofType));
+
+  const height = [sliderField(roofless ? 'Railing height' : 'Wall height', 'wallHeight', structure.wallHeight, limits.wallHeightMin, limits.wallHeightMax)];
+  if (!through) {
+    height.push(selectField('Base', 'baseMode', [['roof', 'Rises out of the roof (a dormer)'], ['ground', 'Stands on the ground (a porch)'], ['height', 'Stands at a height above the host plate (a porch)']], baseMode));
+    if (baseMode === 'height') {
+      height.push(numberField('Base height above the host plate', 'baseHeight', structure.baseHeight));
+    }
+    height.push(sliderField('Recessed front (inset)', 'inset', structure.inset, limits.insetMin, limits.insetMax));
+  }
+
+  const roof = [selectField('Roof', 'roofType', STRUCTURE_ROOF_OPTIONS, structure.roofType)];
   if (structure.roofType === 'gable' || structure.roofType === 'hip') {
-    parts.push(selectField('Ridge', 'ridge', [['perpendicular', 'Runs into the roof'], ['parallel', 'Runs along the side']], structure.ridge));
+    roof.push(selectField('Ridge', 'ridge', [['perpendicular', 'Runs into the roof'], ['parallel', 'Runs along the side']], structure.ridge));
   }
   if (!['flat', 'none'].includes(structure.roofType)) {
-    parts.push(numberField('Roof pitch (rise per 12; empty for the building\'s)', 'pitch', structure.roofShape?.mode === 'slope' ? structure.roofShape.pitchRise : null, { length: false, step: 1, placeholder: 'building' }));
+    roof.push(numberField('Roof pitch (rise per 12; empty for the building\'s)', 'pitch', structure.roofShape?.mode === 'slope' ? structure.roofShape.pitchRise : null, { length: false, step: 1, placeholder: 'building' }));
   }
   if (!through && !standing) {
-    parts.push(selectField('At the ridge', 'join', [['auto', 'Lower the roof only if it would pass the ridge'], ['snap-ridge', 'Always meet the ridge']], structure.join));
+    roof.push(selectField('At the ridge', 'join', [['auto', 'Lower the roof only if it would pass the ridge'], ['snap-ridge', 'Always meet the ridge']], structure.join));
   }
   if (Number.isFinite(structure.setback) && structure.setback < 0) {
-    parts.push(selectField('Held up by', 'support', STRUCTURE_SUPPORTS.map((key) => [key, key === 'auto' ? 'Automatic' : `${key[0].toUpperCase()}${key.slice(1)}`]), structure.support));
+    roof.push(selectField('Held up by', 'support', STRUCTURE_SUPPORTS.map((key) => [key, key === 'auto' ? 'Automatic' : `${key[0].toUpperCase()}${key.slice(1)}`]), structure.support));
   }
-  parts.push('<div class="field"><label>Open sides</label>'
-    + STRUCTURE_WALLS.map((wall) => checkField(wall, `open:${wall}`, structure.openSides.includes(wall))).join('') + '</div>');
-  parts.push(selectField('Wall material', 'wallMaterial', MATERIAL_OPTIONS, structure.materials?.wall ?? ''));
+
+  const openings = ['<div class="field"><label>Open sides</label>'
+    + STRUCTURE_WALLS.map((wall) => checkField(wall, `open:${wall}`, structure.openSides.includes(wall))).join('') + '</div>'];
+
+  const materials = [selectField('Wall material', 'wallMaterial', MATERIAL_OPTIONS, structure.materials?.wall ?? '')];
   if (!roofless) {
-    parts.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
+    materials.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
   }
-  parts.push('<div class="actions"><button data-action="delete">Delete</button></div>');
-  return parts.join('');
+
+  return `<div style="margin:10px 0 8px; font-weight:700;">Editing ${escapeHtml(structure.id)}</div>`
+    + fieldGroup('Placement', placement)
+    + fieldGroup('Footprint', footprint)
+    + fieldGroup('Height', height)
+    + fieldGroup('Roof', roof)
+    + fieldGroup('Openings', openings)
+    + fieldGroup('Materials', materials)
+    + '<div class="actions"><button data-action="delete">Delete</button></div>';
 }
 
 function rebuildWithStructures(structures) {
@@ -1421,6 +1757,13 @@ structureAddBtn.addEventListener('click', () => {
   if (!record) {
     setStatus('Select the porch to stand it on first.', 'error');
     return;
+  }
+  // A dormer's depth defaults to "auto" (stretch to the host ridge), which
+  // only resolves on a sloped roof; a flat host has no ridge to reach, so it
+  // would otherwise add a structure that can never build (and, until fixed,
+  // never render). Give it an explicit depth instead.
+  if (record.depth === null && (modelConfig.volumeRoofTypes?.[hostVolume.id] ?? modelConfig.roofType) === 'flat') {
+    record.depth = 2.4;
   }
   selectedStructureId = record.id;
   rebuildWithStructures([...modelConfig.roofStructures, record]);
@@ -1457,14 +1800,18 @@ structureEditor.addEventListener('click', (event) => {
   rebuildWithStructures(modelConfig.roofStructures.filter((structure) => !doomed.has(structure.id)));
 });
 
-structureEditor.addEventListener('change', (event) => {
-  const input = event.target.closest('[data-field]');
+/** Applies one structure-editor field's current value to its record and rebuilds. Shared by `change` (every field) and `input` (sliders, for continuous updates while dragging). */
+function applyStructureFieldEdit(input) {
   const record = structureRecord(selectedStructureId);
   if (!input || !record) {
     return;
   }
   const edited = { ...record, materials: { ...record.materials } };
   const length = () => (Number(input.value) || 0) / unitFactor();
+  // Offset/setback also reach the model from the paired number box, which
+  // (unlike the slider) doesn't inherently keep its value in range, so clamp
+  // both to the same limits the slider's own travel is bounded to.
+  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
   const field = input.dataset.field;
   if (field.startsWith('open:')) {
     const wall = field.slice(5);
@@ -1475,21 +1822,80 @@ structureEditor.addEventListener('change', (event) => {
       case 'mount': edited.mount = input.value; break;
       case 'fill': edited.fill = input.checked; break;
       case 'fillMargin': edited.fillMargin = Math.max(0, length()); break;
-      case 'offset': edited.offset = length(); break;
-      case 'width': edited.width = Math.max(0.1, length()); break;
+      case 'offset': {
+        const limits = structurePlacementLimits(record);
+        edited.offset = clamp(length(), limits.offsetMin, limits.offsetMax);
+        break;
+      }
+      // Width/depth/wallHeight's own slider bounds hold at offset/setback 0
+      // (see structurePlacementLimits), so growing one of them can leave the
+      // *other* slider's current value no longer valid; re-clamp it here,
+      // against the just-edited size, rather than shrinking the size
+      // slider's own range to account for a position it isn't showing.
+      case 'width': {
+        const limits = structurePlacementLimits(record);
+        edited.width = clamp(length(), limits.widthMin, limits.widthMax);
+        const offsetLimits = structurePlacementLimits({ ...record, width: edited.width });
+        edited.offset = clamp(record.offset, offsetLimits.offsetMin, offsetLimits.offsetMax);
+        break;
+      }
       case 'setbackCenter':
         edited.setback = input.checked ? 'center' : 0;
         if (input.checked && record.depth === null) {
           edited.depth = record.width;
         }
         break;
-      case 'setback': edited.setback = length(); break;
-      case 'depthAuto': edited.depth = input.checked ? null : 2.4; break;
-      case 'depth': edited.depth = Math.max(0.1, length()); break;
-      case 'wallHeight': edited.wallHeight = Math.max(0.1, length()); break;
-      case 'baseMode': edited.baseHeight = { roof: null, ground: 'ground', height: 0 }[input.value]; break;
+      case 'setback': {
+        const limits = structurePlacementLimits(record);
+        edited.setback = clamp(length(), limits.setbackMin, limits.setbackMax);
+        break;
+      }
+      case 'depthAuto': {
+        const limits = structurePlacementLimits(record);
+        edited.depth = input.checked ? null : clamp(2.4, limits.depthMin, limits.depthMax);
+        break;
+      }
+      case 'depth': {
+        const limits = structurePlacementLimits(record);
+        edited.depth = clamp(length(), limits.depthMin, limits.depthMax);
+        const setbackLimits = structurePlacementLimits({ ...record, depth: edited.depth });
+        if (typeof record.setback === 'number') {
+          edited.setback = clamp(record.setback, setbackLimits.setbackMin, setbackLimits.setbackMax);
+        }
+        break;
+      }
+      case 'wallHeight': {
+        const limits = structurePlacementLimits(record);
+        edited.wallHeight = clamp(length(), limits.wallHeightMin, limits.wallHeightMax);
+        const setbackLimits = structurePlacementLimits({ ...record, wallHeight: edited.wallHeight });
+        if (typeof record.setback === 'number') {
+          edited.setback = clamp(record.setback, setbackLimits.setbackMin, setbackLimits.setbackMax);
+        }
+        break;
+      }
+      case 'baseMode': {
+        const wasDormer = record.baseHeight === null;
+        edited.baseHeight = { roof: null, ground: 'ground', height: 0 }[input.value];
+        const becomingPorch = wasDormer && edited.baseHeight !== null;
+        // A dormer's setback measures how far its front wall sits *in* from
+        // the host wall, toward the ridge; a porch's measures how far it
+        // projects *out* past it instead (see numberField's own label).
+        // Carrying a dormer's non-negative (inset, or flush) setback over
+        // when switching to a porch would plant it inside the building
+        // rather than out on the wall it's meant to stand against, so reset
+        // it to a typical projection instead.
+        if (becomingPorch && typeof record.setback === 'number' && record.setback >= 0) {
+          const limits = structurePlacementLimits({ ...record, baseHeight: edited.baseHeight });
+          edited.setback = clamp(-2.4, limits.setbackMin, limits.setbackMax);
+        }
+        break;
+      }
       case 'baseHeight': edited.baseHeight = length(); break;
-      case 'inset': edited.inset = Math.max(0, length()); break;
+      case 'inset': {
+        const limits = structurePlacementLimits(record);
+        edited.inset = clamp(length(), limits.insetMin, limits.insetMax);
+        break;
+      }
       case 'roofType': edited.roofType = input.value; break;
       case 'ridge': edited.ridge = input.value; break;
       case 'pitch': edited.roofShape = input.value === '' ? null : { mode: 'slope', pitchRise: Math.max(0, Number(input.value) || 0) }; break;
@@ -1501,6 +1907,26 @@ structureEditor.addEventListener('change', (event) => {
     }
   }
   rebuildWithStructures(modelConfig.roofStructures.map((structure) => (structure.id === record.id ? edited : structure)));
+}
+
+structureEditor.addEventListener('change', (event) => {
+  applyStructureFieldEdit(event.target.closest('[data-field]'));
+});
+
+// Sliders (offset/setback) fire `input` continuously while dragged, so the
+// dormer's position updates live instead of only once the mouse is released.
+let structureLiveDragging = false;
+structureEditor.addEventListener('input', (event) => {
+  const input = event.target.closest('input[type="range"][data-field]');
+  if (!input) {
+    return;
+  }
+  structureLiveDragging = true;
+  try {
+    applyStructureFieldEdit(input);
+  } finally {
+    structureLiveDragging = false;
+  }
 });
 
 function resizeRenderer() {
