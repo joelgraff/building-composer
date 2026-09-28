@@ -955,11 +955,8 @@ function renderStructureCue(structureId, color, parent) {
   parent.add(helper);
 }
 
-function handleFileInput(event) {
-  const [file] = event.target.files;
-  if (!file) {
-    return;
-  }
+/** Clears everything tied to the last footprint, before another is opened. */
+function resetForNewFootprint() {
   modelConfig.volumeStoryOverrides = {};
   modelConfig.volumeKneeWalls = {};
   modelConfig.volumeFoundationHeights = {};
@@ -971,66 +968,107 @@ function handleFileInput(event) {
   modelConfig.volumeEaves = {};
   modelConfig.edgePitchOverrides = {};
   modelConfig.roofStructures = [];
+  modelConfig.placement = undefined;
   // a new footprint: cut it to follow its massing (a .bld sets its own)
   modelConfig.volumeSplit = 'auto';
   volumeSplitSelect.value = 'auto';
   selectedElementId = 'building-defaults';
   selectedStructureId = null;
+}
 
+/**
+ * Opens a parsed file: a project (.bld), a footprint exported from the
+ * Dixon project (see js/import.js), or a plain footprint (an array of [x, z]).
+ */
+function openPayload(payload) {
+  resetForNewFootprint();
+  if (payload && payload.format === 'building-composer') {
+    const result = deserializeBuildingState(payload);
+    if (result.valid) {
+      Object.assign(modelConfig, result.state);
+      storyCountInput.value = modelConfig.storyCount;
+      wallMaterialSelect.value = modelConfig.wallMaterial;
+      roofTypeSelect.value = modelConfig.roofType;
+      roofDirectionSelect.value = modelConfig.roofDirection;
+      roofPitchRiseInput.value = modelConfig.roofPitchRise;
+      roofHeightModeSelect.value = modelConfig.roofHeightMode;
+      volumeSplitSelect.value = modelConfig.volumeSplit;
+      syncUnitLabels();
+      syncLengthInputs();
+      updateRoofPitchDisplay();
+      loadFootprint(result.state.footprint, false);
+      const notes = [...result.warnings, roofStructureIssues].filter(Boolean);
+      setStatus(notes.length
+        ? `Project (.bld) loaded. ${notes.join(' ')}`
+        : 'Project (.bld) loaded successfully.', roofStructureIssues ? 'error' : 'default');
+      return;
+    }
+  }
+  if (payload && payload.format === 'dixon-footprint') {
+    const imported = importDixonFootprint(payload);
+    if (imported.error) {
+      setStatus(imported.error, 'error');
+      return;
+    }
+    Object.assign(modelConfig, imported.settings, { placement: imported.placement });
+    storyCountInput.value = modelConfig.storyCount;
+    wallMaterialSelect.value = modelConfig.wallMaterial;
+    roofTypeSelect.value = modelConfig.roofType;
+    syncLengthInputs();
+    updateRoofPitchDisplay();
+    loadFootprint(imported.footprint, false);
+    const angle = (imported.placement.rotation * 180) / Math.PI;
+    setStatus([
+      `Building ${imported.placement.id} imported from ${imported.placement.source}, turned ${angle.toFixed(1)} degrees square to the axes.`,
+      ...imported.warnings, roofStructureIssues,
+    ].filter(Boolean).join(' '), roofStructureIssues ? 'error' : 'default');
+    return;
+  }
+  loadFootprint(payload, false);
+}
+
+function handleFileInput(event) {
+  const [file] = event.target.files;
+  if (!file) {
+    return;
+  }
   const reader = new FileReader();
   reader.onload = () => {
+    let payload;
     try {
-      const payload = JSON.parse(reader.result);
-      if (payload && payload.format === 'building-composer') {
-        const result = deserializeBuildingState(payload);
-        if (result.valid) {
-          Object.assign(modelConfig, result.state);
-          storyCountInput.value = modelConfig.storyCount;
-          wallMaterialSelect.value = modelConfig.wallMaterial;
-          roofTypeSelect.value = modelConfig.roofType;
-          roofDirectionSelect.value = modelConfig.roofDirection;
-          roofPitchRiseInput.value = modelConfig.roofPitchRise;
-          roofHeightModeSelect.value = modelConfig.roofHeightMode;
-          volumeSplitSelect.value = modelConfig.volumeSplit;
-          syncUnitLabels();
-          syncLengthInputs();
-          updateRoofPitchDisplay();
-          loadFootprint(result.state.footprint, false);
-          const notes = [...result.warnings, roofStructureIssues].filter(Boolean);
-          setStatus(notes.length
-            ? `Project (.bld) loaded. ${notes.join(' ')}`
-            : 'Project (.bld) loaded successfully.', roofStructureIssues ? 'error' : 'default');
-          return;
-        }
-      }
-      if (payload && payload.format === 'dixon-footprint') {
-        const imported = importDixonFootprint(payload);
-        if (imported.error) {
-          setStatus(imported.error, 'error');
-          return;
-        }
-        Object.assign(modelConfig, imported.settings, { placement: imported.placement });
-        storyCountInput.value = modelConfig.storyCount;
-        wallMaterialSelect.value = modelConfig.wallMaterial;
-        roofTypeSelect.value = modelConfig.roofType;
-        syncLengthInputs();
-        updateRoofPitchDisplay();
-        loadFootprint(imported.footprint, false);
-        const angle = (imported.placement.rotation * 180) / Math.PI;
-        setStatus([
-          `Building ${imported.placement.id} imported from ${imported.placement.source}, turned ${angle.toFixed(1)} degrees square to the axes.`,
-          ...imported.warnings, roofStructureIssues,
-        ].filter(Boolean).join(' '), roofStructureIssues ? 'error' : 'default');
-        return;
-      }
-      loadFootprint(payload, false);
+      payload = JSON.parse(reader.result);
     } catch (error) {
       setStatus('Unable to parse JSON footprint file.', 'error');
+      return;
     }
+    openPayload(payload);
   };
-
   reader.readAsText(file);
 }
+
+/**
+ * A file handed over in the page address, as `#import=<base64url JSON>`
+ * (the Dixon building editor's X opens Composer this way). The fragment is
+ * never sent to the server. Returns whether there was one.
+ */
+function openPayloadFromAddress() {
+  const match = /^#import=([A-Za-z0-9_-]+)$/.exec(window.location.hash);
+  if (!match) {
+    return false;
+  }
+  // the address is cleared, so a reload doesn't open the file again over any edits
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  try {
+    const base64 = match[1].replace(/-/g, '+').replace(/_/g, '/');
+    const bytes = Uint8Array.from(atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4)), (c) => c.charCodeAt(0));
+    openPayload(JSON.parse(new TextDecoder().decode(bytes)));
+  } catch (error) {
+    setStatus('The footprint in the page address could not be read.', 'error');
+  }
+  return true;
+}
+
+window.addEventListener('hashchange', openPayloadFromAddress);
 
 saveBtn.addEventListener('click', () => {
   if (!activeLayout || !loadedFootprint) {
@@ -1740,13 +1778,22 @@ window.addEventListener('resize', resizeRenderer);
 resizeRenderer();
 animate();
 
-loadSampleFootprint();
+// a footprint handed over in the address opens once the skeleton library
+// is ready (hips need it); otherwise the sample shows, rebuilt when it is
+const importing = /^#import=/.test(window.location.hash);
+if (!importing) {
+  loadSampleFootprint();
+}
 
 if (globalThis.SkeletonBuilder) {
   globalThis.SkeletonBuilder.init().then(() => {
     setStraightSkeletonBuilder(globalThis.SkeletonBuilder);
-    if (loadedFootprint) {
+    if (importing) {
+      openPayloadFromAddress();
+    } else if (loadedFootprint) {
       loadFootprint(loadedFootprint);
     }
   });
+} else if (importing) {
+  openPayloadFromAddress();
 }
