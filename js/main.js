@@ -11,8 +11,12 @@ import { STRUCTURE_UI_PRESETS, newRoofStructure, structureLabel, wallNames } fro
 import { TWO_SLOPE_ROOF_TYPES } from './roof-planes.js';
 import { sideOverhangs, resolveVolumeEaves } from './eaves.js';
 import {
-  computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades, angledWallProblem,
+  computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades, angledWallProblem, wallRunFrame,
 } from './facade.js';
+import {
+  normalizeOpenings, createOpening, resolveOpening, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
+} from './openings.js';
+import { normalizeTrim, TRIM_HEIGHT_RANGE, TRIM_PROJECTION_RANGE } from './trim.js';
 import { exportGlb } from './export.js';
 import { buildGameFile } from './game-export.js';
 import { importDixonFootprint } from './import.js';
@@ -58,10 +62,17 @@ const roofSupportNote = document.getElementById('roof-support-note');
 const roofZoneTarget = document.getElementById('roof-zone-target');
 const wallMaterialSelect = document.getElementById('wall-material');
 const storyMaterialsBox = document.getElementById('story-materials');
-const panelMaterialsBox = document.getElementById('panel-materials');
+const wallInfoPanel = document.getElementById('wall-info-panel');
+const wallInfoSummary = document.getElementById('wall-info-summary');
+const wallPanelMaterialsBox = document.getElementById('wall-panel-materials');
+const wallOpeningsBox = document.getElementById('wall-openings-box');
+const openingEditor = document.getElementById('opening-editor');
 const volumeControlsBox = document.getElementById('volume-controls');
-const elementSelect = document.getElementById('element-select');
-const selectedElementLabel = document.getElementById('selected-element-label');
+const scopeCrumbs = document.getElementById('scope-crumbs');
+const facadeDefaultsPanel = document.getElementById('facade-defaults-panel');
+const trimPanel = document.getElementById('trim-panel');
+const trimControls = document.getElementById('trim-controls');
+const volumeConfigPanel = document.getElementById('volume-config-panel');
 const facadeSummaryBox = document.getElementById('facade-summary-box');
 const roofGraphSummary = document.getElementById('roof-graph-summary');
 const roofGraphEdges = document.getElementById('roof-graph-edges');
@@ -84,11 +95,12 @@ const roofWalkSize = document.getElementById('roof-walk-size');
 const structurePresetSelect = document.getElementById('structure-preset');
 const structureSideSelect = document.getElementById('structure-side');
 const structureAddBtn = document.getElementById('structure-add-btn');
-const structureList = document.getElementById('structure-list');
 const structureEditor = document.getElementById('structure-editor');
 
 const viewportCanvas = document.getElementById('viewport');
 const topViewCanvas = document.getElementById('top-view');
+const elevationViewCanvas = document.getElementById('elevation-view');
+const elevationLabel = document.getElementById('elevation-label');
 
 const renderer = new THREE.WebGLRenderer({ canvas: viewportCanvas, antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -99,6 +111,11 @@ const topRenderer = new THREE.WebGLRenderer({ canvas: topViewCanvas, antialias: 
 topRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 topRenderer.setClearColor(0xf3f5f7, 1);
 topRenderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const elevationRenderer = new THREE.WebGLRenderer({ canvas: elevationViewCanvas, antialias: true, alpha: true });
+elevationRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+elevationRenderer.setClearColor(0xf3f5f7, 1);
+elevationRenderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
 const hemiLight = new THREE.HemisphereLight(0xffffff, 0x586678, 1.3);
@@ -121,6 +138,10 @@ topCamera.lookAt(0, 0, 0);
 
 topCamera.rotation.order = 'YXZ';
 
+const elevationCamera = new THREE.OrthographicCamera(-22, 22, 20, -20, 0.1, 5000);
+elevationCamera.position.set(0, 3, 30);
+elevationCamera.lookAt(0, 3, 0);
+
 const controls = new OrbitControls(camera, viewportCanvas);
 controls.enableDamping = true;
 controls.target.set(0, 3, 0);
@@ -131,6 +152,12 @@ topControls.enablePan = true;
 topControls.enableZoom = true;
 topControls.target.set(0, 0, 0);
 
+const elevationControls = new OrbitControls(elevationCamera, elevationViewCanvas);
+elevationControls.enableRotate = false;
+elevationControls.enablePan = true;
+elevationControls.enableZoom = true;
+elevationControls.target.set(0, 3, 0);
+
 const group = new THREE.Group();
 scene.add(group);
 const hoverGroup = new THREE.Group();
@@ -138,6 +165,7 @@ scene.add(hoverGroup);
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let pickTargets = [];
+let wallPickTargets = [];
 let activeLayout = null;
 let activeFoundationHeight = 0;
 // The roof-building step's own per-volume zone descriptors (resolved ridge
@@ -149,24 +177,221 @@ let activeFoundationHeight = 0;
 // from the building's actual configured roof direction.
 let activeRoofZones = [];
 let hoveredVolumeId = null;
-let pointerDown = null;
 // roof structures: the one being edited, what the last build made of each, and their meshes (for picking)
 let selectedStructureId = null;
 let hoveredStructureId = null;
 let activeStructureEntries = [];
 let structureMeshes = [];
+// windows/doors: the one being edited, and what the last build made of each
+let selectedOpeningId = null;
+let activeOpeningEntries = [];
+// a wall run picked directly (in the orbit or plan view), overriding the
+// scope-implied wall the elevation would otherwise show (see elevationTarget)
+let selectedWallId = null;
+let hoveredWallId = null;
+// which wall the elevation view is currently framed on, so a reload that
+// keeps showing the same wall can preserve the user's own pan/zoom on it
+// the way the orbit and plan views already preserve theirs (see loadFootprint)
+let elevationTargetKey = null;
 
 let loadedFootprint = null;
 let activeBuildingSize = new THREE.Vector3(30, 0, 30);
 
+/**
+ * Sizes an orthographic camera's frustum to fit `contentWidth` × `contentHeight`
+ * (world units) inside a canvas of `canvasAspect` (width/height) without
+ * distorting it: the frustum's own aspect always matches the canvas's, and
+ * whichever content dimension would otherwise overflow sets the scale. This
+ * is what the old fixed-aspect top-view frustum skipped, which is why a wider
+ * window used to stretch the plan instead of just showing more margin.
+ */
+function fitOrthoFrustum(orthoCamera, contentWidth, contentHeight, canvasAspect, margin = 1.15) {
+  const safeAspect = Number.isFinite(canvasAspect) && canvasAspect > 0 ? canvasAspect : 1;
+  const contentAspect = contentWidth / Math.max(contentHeight, 1e-6);
+  let halfWidth;
+  let halfHeight;
+  if (contentAspect > safeAspect) {
+    halfWidth = (contentWidth * margin) / 2;
+    halfHeight = halfWidth / safeAspect;
+  } else {
+    halfHeight = (contentHeight * margin) / 2;
+    halfWidth = halfHeight * safeAspect;
+  }
+  orthoCamera.left = -halfWidth;
+  orthoCamera.right = halfWidth;
+  orthoCamera.top = halfHeight;
+  orthoCamera.bottom = -halfHeight;
+  orthoCamera.updateProjectionMatrix();
+}
+
+function canvasAspect(canvas) {
+  return canvas.clientWidth / Math.max(canvas.clientHeight, 1);
+}
+
 function updateTopCameraFrustum() {
-  const halfX = Math.max(15, activeBuildingSize.x * 0.7) / 2;
-  const halfZ = Math.max(15, activeBuildingSize.z * 0.7) / 2;
-  topCamera.left = -halfX;
-  topCamera.right = halfX;
-  topCamera.top = halfZ;
-  topCamera.bottom = -halfZ;
-  topCamera.updateProjectionMatrix();
+  const width = Math.max(15, activeBuildingSize.x * 1.15);
+  const depth = Math.max(15, activeBuildingSize.z * 1.15);
+  fitOrthoFrustum(topCamera, width, depth, canvasAspect(topViewCanvas));
+}
+
+/** The bounding box (in the footprint plane) of every mass together. */
+function overallBounds(volumes) {
+  return volumes.reduce((bounds, candidate) => ({
+    minX: Math.min(bounds.minX, candidate.minX),
+    maxX: Math.max(bounds.maxX, candidate.maxX),
+    minZ: Math.min(bounds.minZ, candidate.minZ),
+    maxZ: Math.max(bounds.maxZ, candidate.maxZ),
+  }), {
+    minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity,
+  });
+}
+
+/** Whether a mass's `side` sits on the whole building's own `side` (within a hair). */
+function touchesOverallSide(volume, volumes, side) {
+  return Math.abs(volume[side] - overallBounds(volumes)[side]) < 0.05;
+}
+
+/** The outward unit normal [nx, nz] of a mass's side, in the footprint plane. */
+function outwardNormalForSide(side) {
+  const frame = structureFrame(side);
+  const magnitude = -frame.sign;
+  return frame.inward === 'x' ? [magnitude, 0] : [0, magnitude];
+}
+
+/**
+ * A mass's whole wall on `side`, as a 2D segment — independent of any notch a
+ * neighboring mass cuts into it (see elevationTarget's wall-run branch below,
+ * which follows the actual footprint edge instead, for a wall picked directly).
+ */
+function volumeWallSegment(volume, side) {
+  const frame = structureFrame(side);
+  const fixed = volume[side];
+  const [minAlong, maxAlong] = frame.along === 'x' ? [volume.minX, volume.maxX] : [volume.minZ, volume.maxZ];
+  const start = frame.along === 'x' ? [minAlong, fixed] : [fixed, minAlong];
+  const end = frame.along === 'x' ? [maxAlong, fixed] : [fixed, maxAlong];
+  return {
+    start, end, length: maxAlong - minAlong, normal: outwardNormalForSide(side),
+  };
+}
+
+/** Which of a wall run's host mass's four sides it actually lies on (null if it can't be told, e.g. a notch). */
+function sideForWallRun(wallRun, layout) {
+  const volume = layout.volumes.find((candidate) => candidate.id === wallRun.volumeId);
+  if (!volume) {
+    return null;
+  }
+  const eps = 0.05;
+  if (wallRun.orientation === 'horizontal') {
+    if (Math.abs(wallRun.start[1] - volume.maxZ) < eps) return 'maxZ';
+    if (Math.abs(wallRun.start[1] - volume.minZ) < eps) return 'minZ';
+  } else {
+    if (Math.abs(wallRun.start[0] - volume.maxX) < eps) return 'maxX';
+    if (Math.abs(wallRun.start[0] - volume.minX) < eps) return 'minX';
+  }
+  return null;
+}
+
+/**
+ * The wall the elevation pane frames: a wall picked directly (selectedWallId)
+ * wins; otherwise it follows the sidebar's own scope — a selected structure's
+ * host wall, a selected mass's front wall, or, at the building level, the
+ * front wall of whichever mass actually fronts the building. `key` identifies
+ * the wall across reloads, so the same wall keeps its own pan/zoom instead of
+ * snapping back to a fresh frame on every edit (see updateElevationCamera).
+ */
+function elevationTarget(layout) {
+  if (selectedWallId) {
+    const run = findRun(selectedWallId, layout);
+    if (run?.runType === 'wall') {
+      const [sx, sz] = run.start;
+      const [ex, ez] = run.end;
+      const normal = [(ez - sz) / run.length, -(ex - sx) / run.length];
+      return {
+        key: `wall:${run.id}`,
+        start: run.start,
+        end: run.end,
+        length: run.length,
+        normal,
+        label: `${disambiguatedWallLabel(run, layout)} wall`,
+      };
+    }
+    if (run?.runType === 'structure-wall') {
+      const structure = structureRecord(run.structureId);
+      return {
+        key: `structure-wall:${run.id}`,
+        start: run.start,
+        end: run.end,
+        length: run.length,
+        normal: run.normal,
+        label: structure ? `${structureLabel(structure, modelConfig.frontSide, { withHost: false })}, ${run.wall}` : run.wall,
+      };
+    }
+    // a railing isn't a face to frame an elevation on; fall through to scope
+  }
+  if (selectedStructureId) {
+    const structure = structureRecord(selectedStructureId);
+    const hostVolumeId = structure && (structure.hostVolumeId ?? structureHostVolumeId(structure));
+    const volume = hostVolumeId && layout.volumes.find((candidate) => candidate.id === hostVolumeId);
+    if (structure && volume) {
+      return {
+        key: `structure:${structure.id}`,
+        ...volumeWallSegment(volume, structure.hostSide),
+        label: `${structureLabel(structure, modelConfig.frontSide, { withHost: false })} · host wall`,
+      };
+    }
+  }
+  const volume = layout.volumes.find((candidate) => candidate.id === selectedElementId)
+    ?? layout.volumes.find((candidate) => touchesOverallSide(candidate, layout.volumes, modelConfig.frontSide));
+  if (!volume) {
+    return null;
+  }
+  return {
+    key: `volume:${volume.id}`,
+    ...volumeWallSegment(volume, modelConfig.frontSide),
+    label: `${massName(volume, layout.volumes)} · front wall`,
+  };
+}
+
+/**
+ * Frames the elevation camera on elevationTarget's wall, from outside along
+ * its outward normal. The same wall (by `key`) keeps its own pan/zoom across
+ * a reload, the way the orbit and plan views already preserve theirs;
+ * switching to a different wall reframes from scratch.
+ */
+function updateElevationCamera(layout, previousZoom, previousTarget) {
+  const target = layout ? elevationTarget(layout) : null;
+  if (!target) {
+    elevationTargetKey = null;
+    elevationLabel.textContent = 'Elevation';
+    return;
+  }
+  elevationLabel.textContent = target.label;
+  const sameTarget = target.key === elevationTargetKey;
+  elevationTargetKey = target.key;
+  const height = Math.max(activeBuildingSize.y, 1);
+  const midX = (target.start[0] + target.end[0]) / 2;
+  const midZ = (target.start[1] + target.end[1]) / 2;
+  const midY = height / 2;
+  const focus = sameTarget ? previousTarget : new THREE.Vector3(midX, midY, midZ);
+  const [nx, nz] = target.normal;
+  const distance = Math.max(target.length, height) * 2 + 10;
+  elevationControls.target.copy(focus);
+  elevationCamera.position.set(focus.x + nx * distance, focus.y, focus.z + nz * distance);
+  elevationCamera.up.set(0, 1, 0);
+  elevationCamera.lookAt(focus);
+  fitOrthoFrustum(elevationCamera, target.length, height, canvasAspect(elevationViewCanvas));
+  // Fitting a narrow wall's frustum to the canvas aspect can end up much
+  // wider than the wall itself (e.g. a tall, narrow wing on a shallow
+  // canvas), and an ortho camera draws anything in that width regardless of
+  // depth — without a tight far clip, whatever else sits behind the wall
+  // (another wing, the far side of a courtyard) shows through the gap beside
+  // it. Clipping just past the wall's own plane keeps the view to the wall
+  // and anything projecting toward the camera from it (a porch, a bay).
+  const projectionAllowance = Math.max(target.length, height) + 10;
+  elevationCamera.near = Math.max(0.1, distance - projectionAllowance);
+  elevationCamera.far = distance + 1;
+  elevationCamera.zoom = sameTarget ? previousZoom : 1;
+  elevationCamera.updateProjectionMatrix();
 }
 
 let footprintLoadRequest = 0;
@@ -209,6 +434,9 @@ let modelConfig = {
   volumeEaves: {},
   edgePitchOverrides: {},
   roofStructures: [],
+  openings: [],
+  // water table, belt courses, cornice (see js/trim.js)
+  trim: normalizeTrim(),
   // where an imported footprint came from, to put the building back (see import.js)
   placement: undefined,
   // the side the building fronts: walls are named from it (see wallNames)
@@ -251,6 +479,7 @@ function syncLengthInputs() {
   roofHeightInput.value = (modelConfig.roofHeight * unitFactor()).toFixed(1);
   roofEaveDepthInput.value = (modelConfig.roofEaveDepth * unitFactor()).toFixed(1);
   syncEaveInputs(null);
+  renderTrimPanel();
 }
 
 function syncEaveInputs(volumeId) {
@@ -332,7 +561,8 @@ function syncRoofHeightFromPitch(footprint, volumes = []) {
     modelConfig.roofDirection,
     modelConfig.roofPitchRise,
     modelConfig.roofPitchRun,
-    volumes
+    volumes,
+    modelConfig.roofType
   );
   roofHeightInput.value = (modelConfig.roofHeight * unitFactor()).toFixed(1);
   roofPitchRiseInput.value = String(modelConfig.roofPitchRise);
@@ -345,7 +575,8 @@ function syncRoofPitchFromHeight(footprint, volumes = []) {
     modelConfig.roofDirection,
     modelConfig.roofHeight,
     modelConfig.roofPitchRun,
-    volumes
+    volumes,
+    modelConfig.roofType
   )));
   roofPitchRiseInput.value = derivedPitchRise.toFixed(2);
   updateRoofPitchDisplay(derivedPitchRise);
@@ -367,17 +598,17 @@ function updateFacadeSummary(layout) {
   }
 
   facadeValue.textContent = `${layout.facadePanels.length} facade panels · ${layout.stories.length} stories`;
-  const panelList = layout.facadePanels
-    .map((panel) => `Panel ${panel.index + 1}: ${formatLength(panel.length)}`)
-    .join('<br>');
   const structureRuns = layout.structureWallRuns?.length ?? 0;
   const railRuns = layout.railRuns?.length ?? 0;
   const structureSummary = structureRuns || railRuns
     ? `<br>Roof structure wall runs: ${structureRuns}<br>Railing runs: ${railRuns}`
     : '';
-  facadeSummaryBox.innerHTML = `Story height: ${formatLength(layout.storyHeight)}<br>Stories: ${layout.stories.length}<br>Facade panels: ${layout.facadePanels.length}${structureSummary}<br>${panelList}`;
+  // Which wall each panel belongs to, and picking one to edit, is the scope
+  // control's and the wall-info panel's job now (see renderWallInfoPanel) —
+  // this stays a plain count, not a per-panel dump.
+  facadeSummaryBox.innerHTML = `Story height: ${formatLength(layout.storyHeight)}<br>Stories: ${layout.stories.length}<br>Facade panels: ${layout.facadePanels.length}${structureSummary}`;
   renderMaterialControls(layout);
-  renderElementSelector(layout);
+  syncSelectionValidity(layout);
   renderVolumeControls(layout);
   syncSelectedRoofZoneControls(layout);
   renderRoofGraphSummary(layout);
@@ -404,31 +635,240 @@ function renderRoofGraphSummary(layout) {
   roofGraphEdges.innerHTML = edgeList;
 }
 
-function renderElementSelector(layout) {
-  const options = [
-    '<option value="building-defaults">Building defaults</option>',
-    ...layout.volumes.map((volume) => `<option value="${volume.id}">Massing + roof zone: ${volume.id.replace('-', ' ')}</option>`),
-  ];
+/**
+ * Keeps selectedElementId/selectedStructureId valid against the current
+ * layout (a footprint reload can renumber or drop volumes and structures),
+ * and shows only the panels that belong to the current scope: Building,
+ * a mass, or a structure standing on one (see renderScopeControl).
+ */
+function syncSelectionValidity(layout) {
   const structure = selectedStructureId ? structureRecord(selectedStructureId) : null;
   if (selectedStructureId && !structure) {
     selectedStructureId = null;
   }
-  // with a structure selected, the volume settings are those of the volume it stands on
+  // with a structure selected, its mass is the one whose fields would show
   const hostVolumeId = structure ? structureHostVolumeId(structure) : null;
   if (hostVolumeId && layout.volumes.some((volume) => volume.id === hostVolumeId)) {
     selectedElementId = hostVolumeId;
   }
-  if (!options.some((option) => option.includes(`value="${selectedElementId}"`))) {
+  if (selectedElementId !== 'building-defaults' && !layout.volumes.some((volume) => volume.id === selectedElementId)) {
     selectedElementId = 'building-defaults';
   }
-  elementSelect.innerHTML = options.join('');
-  elementSelect.value = selectedElementId;
-  selectedElementLabel.textContent = structure
-    ? `Roof structure: ${structureLabel(structure, modelConfig.frontSide)} (volume settings: ${selectedElementId === 'building-defaults' ? 'building defaults' : selectedElementId.replace('-', ' ')})`
-    : selectedElementId === 'building-defaults'
-      ? 'Building defaults'
-      : `Volume: ${selectedElementId.replace('-', ' ')}`;
+  // structureWallRuns/railRuns only exist once withStructureFacades has run
+  // (not yet on the plain layout this also validates against, mid-render);
+  // skip invalidating a structure-wall or railing selection against a layout
+  // that doesn't carry them yet, rather than wrongly clearing it here only
+  // for the later, fuller call to never get the chance to confirm it's fine.
+  const wallStillExists = layout.wallRuns.some((run) => run.id === selectedWallId)
+    || (!layout.structureWallRuns
+      ? Boolean(selectedWallId)
+      : layout.structureWallRuns.some((run) => run.id === selectedWallId) || (layout.railRuns ?? []).some((run) => run.id === selectedWallId));
+  if (selectedWallId && !wallStillExists) {
+    selectedWallId = null;
+  }
+  // a structure's own editor stands alone: the mass it stands on isn't shown alongside it
+  facadeDefaultsPanel.style.display = selectedElementId === 'building-defaults' && !selectedStructureId ? '' : 'none';
+  trimPanel.style.display = facadeDefaultsPanel.style.display;
+  volumeConfigPanel.style.display = selectedStructureId ? 'none' : '';
 }
+
+/** A mass's name for the scope control: its size, and which side of the building it sits on. */
+function massName(volume, allVolumes) {
+  const overall = allVolumes.reduce((bounds, candidate) => ({
+    minX: Math.min(bounds.minX, candidate.minX),
+    maxX: Math.max(bounds.maxX, candidate.maxX),
+    minZ: Math.min(bounds.minZ, candidate.minZ),
+    maxZ: Math.max(bounds.maxZ, candidate.maxZ),
+  }), {
+    minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity,
+  });
+  const eps = 0.05;
+  const touches = (side) => Math.abs(volume[side] - overall[side]) < eps;
+  // a volume spanning the whole building on an axis (front to back, or side
+  // to side) has nothing distinctive to say about that axis; naming it from
+  // just one axis is what tells two same-sized wings (e.g. a U's two legs)
+  // apart, since they differ on the axis the other one doesn't.
+  const zLabel = touches('minZ') && touches('maxZ') ? null : touches('maxZ') ? wallName('maxZ') : touches('minZ') ? wallName('minZ') : null;
+  const xLabel = touches('minX') && touches('maxX') ? null : touches('maxX') ? wallName('maxX') : touches('minX') ? wallName('minX') : null;
+  const labels = [zLabel, xLabel].filter(Boolean).sort((a) => (a === 'front' || a === 'back' ? -1 : 1));
+  const factor = unitFactor();
+  const width = Math.round(Math.min(volume.maxX - volume.minX, volume.maxZ - volume.minZ) * factor);
+  const length = Math.round(Math.max(volume.maxX - volume.minX, volume.maxZ - volume.minZ) * factor);
+  const size = `${width} × ${length} ${unitLabel()}`;
+  return labels.length ? `${size}, on the ${labels.join(' and ')}` : size;
+}
+
+/** A structure's rows in the scope control: its label, any build problem, and a delete button. */
+function structureRowHtml(structure) {
+  const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
+  const problem = entry?.errors?.[0] ?? entry?.warnings?.[0];
+  const note = problem
+    ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(nameSides(problem.message))}</span>`
+    : '';
+  return `<div class="structure-row-wrap scope-structure-wrap"><button class="structure-row scope-btn structure-btn${structure.id === selectedStructureId ? ' selected' : ''}" data-structure-id="${structure.id}">`
+    + `${escapeHtml(structureLabel(structure, modelConfig.frontSide, { withHost: false }))}${note}</button>`
+    + `<button class="structure-delete" data-delete-structure="${structure.id}" title="Delete ${escapeHtml(structure.id)}" aria-label="Delete ${escapeHtml(structure.id)}">×</button></div>`;
+}
+
+/**
+ * The scope control pinned at the top of the sidebar: Building, then each
+ * mass, then (once a mass is selected) the structures standing on it.
+ * Choosing an entry is the only way selectedElementId/selectedStructureId
+ * change from the sidebar; a 3D click sets the same state (see pickAtPointer).
+ */
+/** A wall or structure-run row for the scope control: a button plus its own hover/select styling. */
+function wallRowHtml(id, label) {
+  return `<button class="scope-btn wall-btn${id === selectedWallId ? ' selected' : ''}" data-wall-id="${id}">${escapeHtml(label)}</button>`;
+}
+
+/**
+ * A footprint wall run's label: its name from the front, marked "Inner"
+ * when it doesn't sit on the building's own outer edge on that side — an L
+ * or U's reentrant corner puts a second wall on, say, the left, facing into
+ * the notch rather than out from the building, and without this a courtyard
+ * wall and the building's actual left face would read as the same "Left
+ * side" (see touchesOverallSide, the same check massName uses for a mass's
+ * own name). A run a simple side name can't be told for (a skewed edge) falls
+ * back to its length.
+ */
+function footprintWallLabel(run, layout) {
+  const side = sideForWallRun(run, layout);
+  if (!side) {
+    return `Wall (${formatLength(run.length, 0)})`;
+  }
+  const name = wallName(side);
+  const label = `${name[0].toUpperCase()}${name.slice(1)}`;
+  const volume = layout.volumes.find((candidate) => candidate.id === run.volumeId);
+  const outer = !volume || touchesOverallSide(volume, layout.volumes, side);
+  return outer ? label : `Inner ${name}`;
+}
+
+/**
+ * Numbers any label that repeats in the list ("Inner back (1)", "Inner back
+ * (2)") — a wing narrower than the mass it attaches to splits that mass's
+ * far wall into two flanking stubs, both inner and both facing the same way,
+ * so front/back/left/right plus inner/outer still isn't always unique on its
+ * own. A label that appears once is left as it is.
+ */
+function dedupeLabels(labels) {
+  const counts = {};
+  labels.forEach((label) => {
+    counts[label] = (counts[label] ?? 0) + 1;
+  });
+  const seen = {};
+  return labels.map((label) => {
+    if (counts[label] <= 1) {
+      return label;
+    }
+    seen[label] = (seen[label] ?? 0) + 1;
+    return `${label} (${seen[label]})`;
+  });
+}
+
+/** A wall run's label, numbered against its own mass's other walls if another of them would otherwise read the same (see dedupeLabels). */
+function disambiguatedWallLabel(run, layout) {
+  const siblings = layout.wallRuns.filter((candidate) => candidate.volumeId === run.volumeId);
+  const labels = dedupeLabels(siblings.map((candidate) => footprintWallLabel(candidate, layout)));
+  const index = siblings.findIndex((candidate) => candidate.id === run.id);
+  return index >= 0 ? labels[index] : footprintWallLabel(run, layout);
+}
+
+function renderScopeControl(layout) {
+  const buildingRow = `<button class="scope-btn${selectedElementId === 'building-defaults' ? ' selected' : ''}" data-scope="building">Building</button>`;
+  const massRow = layout.volumes.map((volume) => `<button class="scope-btn${selectedElementId === volume.id ? ' selected' : ''}" data-scope="${volume.id}">${escapeHtml(massName(volume, layout.volumes))}</button>`).join('');
+  const mass = layout.volumes.find((volume) => volume.id === selectedElementId);
+  let wallsSection = '';
+  let structureRow = '';
+  if (mass) {
+    if (selectedStructureId) {
+      // the selected structure's own facade surfaces (withStructureFacades), not the house wall it stands on
+      const walls = (layout.structureWallRuns ?? []).filter((run) => run.structureId === selectedStructureId);
+      const rails = (layout.railRuns ?? []).filter((run) => run.structureId === selectedStructureId);
+      const rows = [
+        ...walls.map((run) => wallRowHtml(run.id, `${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`)),
+        ...rails.map((run) => wallRowHtml(run.id, `Railing, ${run.wall}`)),
+      ];
+      if (rows.length) {
+        wallsSection = `<div class="scope-section-label">Walls</div><div class="scope-row">${rows.join('')}</div>`;
+      }
+    } else {
+      const massWalls = layout.wallRuns.filter((run) => run.volumeId === mass.id);
+      if (massWalls.length) {
+        const rows = massWalls.map((run) => wallRowHtml(run.id, disambiguatedWallLabel(run, layout))).join('');
+        wallsSection = `<div class="scope-section-label">Walls</div><div class="scope-row">${rows}</div>`;
+      }
+    }
+    const onThisMass = modelConfig.roofStructures.filter((structure) => structureHostVolumeId(structure) === mass.id);
+    structureRow = `<div class="scope-section-label">Structures</div>${onThisMass.length
+      ? `<div class="scope-row">${onThisMass.map(structureRowHtml).join('')}</div>`
+      : '<div class="scope-empty">No roof structures on this mass yet.</div>'}`;
+  }
+  scopeCrumbs.innerHTML = `<div class="scope-row">${buildingRow}${massRow}</div>${wallsSection}${structureRow}`;
+}
+
+scopeCrumbs.addEventListener('click', (event) => {
+  const remove = event.target.closest('[data-delete-structure]');
+  if (remove) {
+    deleteStructure(remove.dataset.deleteStructure);
+    return;
+  }
+  const wallBtn = event.target.closest('[data-wall-id]');
+  if (wallBtn) {
+    selectedWallId = wallBtn.dataset.wallId === selectedWallId ? null : wallBtn.dataset.wallId;
+    if (loadedFootprint) {
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
+  const structureBtn = event.target.closest('[data-structure-id]');
+  if (structureBtn) {
+    selectedWallId = null;
+    selectedStructureId = structureBtn.dataset.structureId === selectedStructureId ? null : structureBtn.dataset.structureId;
+    if (loadedFootprint) {
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
+  const scopeBtn = event.target.closest('[data-scope]');
+  if (!scopeBtn) {
+    return;
+  }
+  selectedStructureId = null;
+  selectedWallId = null;
+  selectedElementId = scopeBtn.dataset.scope;
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
+
+// Hovering a scope-control row highlights it in the orbit/plan view with the
+// same cue a 3D hover already draws, so the sidebar and the model stay
+// visually linked in both directions.
+scopeCrumbs.addEventListener('pointerover', (event) => {
+  if (!activeLayout) {
+    return;
+  }
+  const wallBtn = event.target.closest('[data-wall-id]');
+  const structureBtn = event.target.closest('[data-structure-id]');
+  const scopeBtn = event.target.closest('[data-scope]');
+  if (!wallBtn && !structureBtn && !scopeBtn) {
+    return;
+  }
+  clearHoverCue();
+  if (wallBtn && wallBtn.dataset.wallId !== selectedWallId) {
+    renderWallCue(wallBtn.dataset.wallId, 0xf4b400, hoverGroup);
+  } else if (structureBtn && structureBtn.dataset.structureId !== selectedStructureId) {
+    renderStructureCue(structureBtn.dataset.structureId, 0xf4b400, hoverGroup);
+  } else if (scopeBtn && scopeBtn.dataset.scope !== 'building') {
+    const volume = activeLayout.volumes.find((candidate) => candidate.id === scopeBtn.dataset.scope);
+    if (volume && (volume.id !== selectedElementId || selectedStructureId)) {
+      renderVolumeCue(volume, activeFoundationHeight, 0xf4b400, 0.06, hoverGroup);
+    }
+  }
+});
+scopeCrumbs.addEventListener('pointerleave', () => {
+  clearHoverCue();
+});
 
 /** The volume a structure stands on, through any structures it is stacked on. */
 function structureHostVolumeId(structure) {
@@ -579,14 +1019,319 @@ function renderMaterialControls(layout) {
       </select>
     </div>
   `).join('');
-  panelMaterialsBox.innerHTML = layout.facadePanels.map((panel) => `
+}
+
+const WALL_ROLE_LABELS = {
+  eave: 'Eave', rake: 'Rake', 'high-plate': 'High plate', flat: 'Flat',
+};
+
+/**
+ * The selected wall's own panel: its name, length, stories, and roof-edge
+ * role, and its facade panels' materials — grouped under it ("Front, panel 2
+ * of 2") rather than one flat list of every panel in the building. Shown
+ * only for a footprint wall run; a structure's own wall or a railing doesn't
+ * have a story count or roof-edge role the same way (its elevation label
+ * already says what it is).
+ */
+function renderWallInfoPanel(layout) {
+  const run = layout ? findRun(selectedWallId, layout) : null;
+  if (!run || run.runType !== 'wall') {
+    wallInfoPanel.style.display = 'none';
+    wallInfoSummary.innerHTML = '';
+    wallPanelMaterialsBox.innerHTML = '';
+    wallOpeningsBox.innerHTML = '';
+    openingEditor.innerHTML = '';
+    // no wall (or a structure/rail run) is selected, so no window/door on a
+    // wall can be either — every place that clears selectedWallId funnels
+    // through this one render, rather than each needing its own reset
+    selectedOpeningId = null;
+    return;
+  }
+  wallInfoPanel.style.display = '';
+  const name = disambiguatedWallLabel(run, layout);
+  const volume = layout.volumes.find((candidate) => candidate.id === run.volumeId);
+  const storyCount = volume ? modelConfig.volumeStoryOverrides[volume.id] ?? modelConfig.storyCount : modelConfig.storyCount;
+  const roleLabel = WALL_ROLE_LABELS[run.role] ?? run.role;
+  wallInfoSummary.innerHTML = `<strong>${escapeHtml(name)} wall</strong><br>`
+    + `Length: ${formatLength(run.length)}<br>Stories: ${storyCount}<br>Roof edge: ${escapeHtml(roleLabel)}`;
+  const panels = layout.facadePanels.filter((panel) => panel.wallRunId === run.id);
+  wallPanelMaterialsBox.innerHTML = panels.map((panel) => `
     <div class="field">
-      <label for="${panel.id}-material">Panel ${panel.index + 1}</label>
+      <label for="${panel.id}-material">${escapeHtml(name)}, panel ${panel.positionInRun + 1} of ${panel.runPanelCount}</label>
       <select data-material-axis="panel" data-material-index="${panel.index}" id="${panel.id}-material">
         ${createMaterialOptions(panel.material)}
       </select>
     </div>
   `).join('');
+  renderOpeningsBox(run);
+}
+
+/** This wall's own windows/doors: an Add row, then each one's row (mirrors structureRowHtml). */
+function renderOpeningsBox(wallRun) {
+  const onThisWall = modelConfig.openings.filter((opening) => opening.hostWallRunId === wallRun.id);
+  if (selectedOpeningId && !onThisWall.some((opening) => opening.id === selectedOpeningId)) {
+    selectedOpeningId = null;
+  }
+  const addRow = '<div class="actions" style="margin:8px 0;">'
+    + '<button data-add-opening="window">Add window</button>'
+    + '<button data-add-opening="door">Add door</button>'
+    + '</div>';
+  const rows = onThisWall.length
+    ? onThisWall.map(openingRowHtml).join('')
+    : '<div class="scope-empty">No windows or doors on this wall yet.</div>';
+  wallOpeningsBox.innerHTML = addRow + rows;
+  const selected = selectedOpeningId ? openingRecord(selectedOpeningId) : null;
+  // Rewriting the editor's HTML on every tick of a slider drag would tear
+  // out the range input the pointer is captured on — see the identical
+  // structureLiveDragging guard around structureEditor's own render.
+  if (openingLiveDragging && document.activeElement?.type === 'range' && openingEditor.contains(document.activeElement)) {
+    const readout = document.activeElement.parentElement?.querySelector('.slider-value');
+    if (readout) {
+      readout.value = Number(document.activeElement.value).toFixed(2);
+    }
+    return;
+  }
+  openingEditor.innerHTML = selected ? openingEditorHtml(selected) : '';
+}
+
+/** A window/door's row in the wall-info panel: its kind, any build problem, and a delete button. */
+function openingRowHtml(opening) {
+  const entry = activeOpeningEntries.find((candidate) => candidate.id === opening.id);
+  const problem = entry?.errors?.[0] ?? entry?.warnings?.[0];
+  const note = problem
+    ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(problem.message)}</span>`
+    : '';
+  const label = opening.kind === 'window' ? 'Window' : 'Door';
+  return `<div class="structure-row-wrap"><button class="structure-row${opening.id === selectedOpeningId ? ' selected' : ''}" data-opening-id="${opening.id}">`
+    + `${escapeHtml(label)}${note}</button>`
+    + `<button class="structure-delete" data-delete-opening="${opening.id}" title="Delete ${escapeHtml(opening.id)}" aria-label="Delete ${escapeHtml(opening.id)}">×</button></div>`;
+}
+
+function openingRecord(id) {
+  return modelConfig.openings.find((opening) => opening.id === id) ?? null;
+}
+
+/**
+ * The valid range for an opening's offset/width/sillHeight/height, holding
+ * every other field at its current value — the same "compose predictably"
+ * rule structurePlacementLimits documents. Simpler than a roof structure's
+ * limits: an opening's host wall run always exists once a footprint is
+ * loaded (unlike a roof structure's host, which may never resolve), so
+ * there's no fallback-vs-built branch to carry — only a defensive fallback
+ * for the moment before any footprint has loaded at all.
+ */
+function openingPlacementLimits(opening) {
+  const host = activeLayout?.wallRuns.find((run) => run.id === opening.hostWallRunId);
+  if (!host) {
+    return {
+      offsetMin: -FALLBACK_PLACEMENT_RANGE,
+      offsetMax: FALLBACK_PLACEMENT_RANGE,
+      widthMin: MIN_OPENING_SIZE,
+      widthMax: FALLBACK_PLACEMENT_RANGE * 2,
+      heightMin: MIN_OPENING_SIZE,
+      heightMax: FALLBACK_PLACEMENT_RANGE,
+      sillHeightMin: 0,
+      sillHeightMax: FALLBACK_PLACEMENT_RANGE,
+    };
+  }
+  const wallHeight = volumeWallHeight(host.volumeId, modelConfig);
+  const halfWidth = opening.width / 2;
+  const halfTravel = Math.max(0, host.length / 2 - OPENING_EDGE_MARGIN - halfWidth);
+  // width's own bound holds at offset 0, the same reasoning structurePlacementLimits
+  // gives for a roof structure's width: otherwise dragging offset would
+  // visibly rescale the width slider's own track under an untouched value
+  const widthMax = Math.max(MIN_OPENING_SIZE, host.length - 2 * OPENING_EDGE_MARGIN);
+  const heightMax = Math.max(MIN_OPENING_SIZE, wallHeight - OPENING_EDGE_MARGIN - opening.sillHeight);
+  const sillHeightMax = opening.kind === 'door'
+    ? DOOR_SILL_MAX
+    : Math.max(0, wallHeight - OPENING_EDGE_MARGIN - opening.height);
+  return {
+    offsetMin: -halfTravel,
+    offsetMax: halfTravel,
+    widthMin: MIN_OPENING_SIZE,
+    widthMax,
+    heightMin: MIN_OPENING_SIZE,
+    heightMax,
+    sillHeightMin: 0,
+    sillHeightMax,
+  };
+}
+
+function openingEditorHtml(opening) {
+  const limits = openingPlacementLimits(opening);
+  const entry = activeOpeningEntries.find((candidate) => candidate.id === opening.id);
+  const buildError = entry?.errors?.[0];
+  const errorBanner = buildError
+    ? `<div class="structure-editor-error">Not built: ${escapeHtml(buildError.message)}</div>`
+    : '';
+  const placement = [
+    sliderField('Offset along the wall', 'offset', opening.offset, limits.offsetMin, limits.offsetMax),
+    sliderField('Width', 'width', opening.width, limits.widthMin, limits.widthMax),
+    sliderField('Height', 'height', opening.height, limits.heightMin, limits.heightMax),
+    sliderField(opening.kind === 'door' ? 'Threshold height' : 'Sill height', 'sillHeight', opening.sillHeight, limits.sillHeightMin, limits.sillHeightMax),
+  ];
+  const materials = [selectField('Frame material', 'frameMaterial', MATERIAL_OPTIONS, opening.materials?.frame ?? '')];
+  if (opening.kind === 'door') {
+    materials.push(selectField('Door material', 'panelMaterial', MATERIAL_OPTIONS, opening.materials?.panel ?? ''));
+  }
+  return `<div class="structure-editor-head"><span>Editing ${escapeHtml(opening.id)}</span></div>${errorBanner}`
+    + fieldGroup('Placement', placement)
+    + fieldGroup('Materials', materials);
+}
+
+function rebuildWithOpenings(openings) {
+  modelConfig.openings = normalizeOpenings(openings);
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+}
+
+/** Applies one opening-editor field's current value to its record and rebuilds — mirrors applyStructureFieldEdit. */
+function applyOpeningFieldEdit(input) {
+  const record = openingRecord(selectedOpeningId);
+  if (!input || !record) {
+    return;
+  }
+  const edited = { ...record, materials: { ...record.materials } };
+  const length = () => (Number(input.value) || 0) / unitFactor();
+  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+  switch (input.dataset.field) {
+    case 'offset': {
+      const limits = openingPlacementLimits(record);
+      edited.offset = clamp(length(), limits.offsetMin, limits.offsetMax);
+      break;
+    }
+    case 'width': {
+      const limits = openingPlacementLimits(record);
+      edited.width = clamp(length(), limits.widthMin, limits.widthMax);
+      const offsetLimits = openingPlacementLimits({ ...record, width: edited.width });
+      edited.offset = clamp(record.offset, offsetLimits.offsetMin, offsetLimits.offsetMax);
+      break;
+    }
+    case 'height': {
+      const limits = openingPlacementLimits(record);
+      edited.height = clamp(length(), limits.heightMin, limits.heightMax);
+      break;
+    }
+    case 'sillHeight': {
+      const limits = openingPlacementLimits(record);
+      edited.sillHeight = clamp(length(), limits.sillHeightMin, limits.sillHeightMax);
+      break;
+    }
+    case 'frameMaterial': edited.materials.frame = input.value || undefined; break;
+    case 'panelMaterial': edited.materials.panel = input.value || undefined; break;
+    default: return;
+  }
+  rebuildWithOpenings(modelConfig.openings.map((opening) => (opening.id === record.id ? edited : opening)));
+}
+
+/** Deletes a window or door. */
+function deleteOpening(id) {
+  if (selectedOpeningId === id) {
+    selectedOpeningId = null;
+  }
+  rebuildWithOpenings(modelConfig.openings.filter((opening) => opening.id !== id));
+}
+
+wallOpeningsBox.addEventListener('click', (event) => {
+  const addBtn = event.target.closest('[data-add-opening]');
+  if (addBtn) {
+    if (!activeLayout || !selectedWallId) {
+      return;
+    }
+    const record = createOpening(addBtn.dataset.addOpening, { hostWallRunId: selectedWallId }, modelConfig.openings);
+    selectedOpeningId = record.id;
+    rebuildWithOpenings([...modelConfig.openings, record]);
+    return;
+  }
+  const removeBtn = event.target.closest('[data-delete-opening]');
+  if (removeBtn) {
+    deleteOpening(removeBtn.dataset.deleteOpening);
+    return;
+  }
+  const rowBtn = event.target.closest('[data-opening-id]');
+  if (rowBtn) {
+    selectedOpeningId = rowBtn.dataset.openingId === selectedOpeningId ? null : rowBtn.dataset.openingId;
+    if (loadedFootprint) {
+      loadFootprint(loadedFootprint);
+    }
+  }
+});
+
+openingEditor.addEventListener('change', (event) => {
+  applyOpeningFieldEdit(event.target.closest('[data-field]'));
+});
+
+let openingLiveDragging = false;
+openingEditor.addEventListener('input', (event) => {
+  const input = event.target.closest('input[type="range"][data-field]');
+  if (!input) {
+    return;
+  }
+  openingLiveDragging = true;
+  try {
+    applyOpeningFieldEdit(input);
+  } finally {
+    openingLiveDragging = false;
+  }
+});
+
+/**
+ * The rectangle (on the wall's own face) a window/door's raw fields
+ * describe, whether or not it actually built — reconstructed straight from
+ * the record the same reason structureFootprintRect is: a failed opening has
+ * no resolved geometry to draw from.
+ */
+function openingFailureRect(opening, layout) {
+  const wallRun = layout.wallRuns.find((run) => run.id === opening.hostWallRunId);
+  if (!wallRun) {
+    return null;
+  }
+  const baseY = volumeFoundationHeight(wallRun.volumeId, modelConfig);
+  const halfWidth = Math.max(0.15, (opening.width ?? 1) / 2);
+  const midX = (wallRun.start[0] + wallRun.end[0]) / 2;
+  const midZ = (wallRun.start[1] + wallRun.end[1]) / 2;
+  const [dirX, dirZ] = wallRun.right;
+  const offset = Number.isFinite(opening.offset) ? opening.offset : 0;
+  const point = (u) => [midX + dirX * u, midZ + dirZ * u];
+  const sill = Math.max(0, Number.isFinite(opening.sillHeight) ? opening.sillHeight : 0);
+  const height = Math.max(0.15, opening.height ?? 1);
+  return {
+    start: point(offset - halfWidth), end: point(offset + halfWidth), normal: wallRun.normal, yMin: baseY + sill, yMax: baseY + sill + height,
+  };
+}
+
+/** A dashed outline on the wall's own face where a window/door that failed to build tried to go. */
+function renderOpeningFailureMarker(opening, layout, parent) {
+  const rect = openingFailureRect(opening, layout);
+  if (!rect) {
+    return;
+  }
+  const off = 0.03;
+  const [nx, nz] = rect.normal;
+  const corner = ([x, z], y) => new THREE.Vector3(x + nx * off, y, z + nz * off);
+  const points = [
+    corner(rect.start, rect.yMin), corner(rect.end, rect.yMin), corner(rect.end, rect.yMax), corner(rect.start, rect.yMax), corner(rect.start, rect.yMin),
+  ];
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineDashedMaterial({
+      color: 0xd64545, dashSize: 0.3, gapSize: 0.2, transparent: true, opacity: 0.9, depthTest: false,
+    })
+  );
+  line.computeLineDistances();
+  line.userData.editorOnly = true;
+  parent.add(line);
+}
+
+/** Every unbuilt window/door's attempted rectangle, drawn on its wall's own face (in both the orbit and elevation views — they share one scene). */
+function renderOpeningFailureMarkers(layout) {
+  modelConfig.openings.forEach((opening) => {
+    const entry = activeOpeningEntries.find((candidate) => candidate.id === opening.id);
+    if (entry?.errors?.length) {
+      renderOpeningFailureMarker(opening, layout, group);
+    }
+  });
 }
 
 function disposeObject3D(object) {
@@ -604,7 +1349,9 @@ function disposeObject3D(object) {
 
 function clearModel() {
   pickTargets = [];
+  wallPickTargets = [];
   hoveredVolumeId = null;
+  hoveredWallId = null;
   clearHoverCue();
   while (group.children.length > 0) {
     const child = group.children.pop();
@@ -691,9 +1438,7 @@ function renderFacadeGuides(layout, foundationHeight) {
     layout.wallRuns.forEach((wallRun) => {
       const [startX, startZ] = wallRun.start;
       const [endX, endZ] = wallRun.end;
-      const edgeLength = Math.hypot(endX - startX, endZ - startZ);
-      const normalX = (endZ - startZ) / edgeLength;
-      const normalZ = -(endX - startX) / edgeLength;
+      const [normalX, normalZ] = wallRun.normal;
       const points = [
         new THREE.Vector3(startX + normalX * faceOffset, y, startZ + normalZ * faceOffset),
         new THREE.Vector3(endX + normalX * faceOffset, y, endZ + normalZ * faceOffset),
@@ -732,6 +1477,8 @@ async function loadFootprint(footprintData, preserveView = true) {
   const previousCameraTarget = controls.target.clone();
   const previousTopZoom = topCamera.zoom;
   const previousTopTarget = topControls.target.clone();
+  const previousElevationZoom = elevationCamera.zoom;
+  const previousElevationTarget = elevationControls.target.clone();
   clearModel();
   loadedFootprint = Array.isArray(footprintData) ? footprintData : JSON.parse(JSON.stringify(footprintData));
 
@@ -782,7 +1529,7 @@ async function loadFootprint(footprintData, preserveView = true) {
   setStatus(`Valid footprint loaded (${windingPreference})`, 'default');
 
   const {
-    building, foundationHeight, roofStructures, structureFacades, roofWalks, roofZones: builtRoofZones,
+    building, foundationHeight, roofStructures, structureFacades, roofWalks, roofZones: builtRoofZones, openings: openingEntries,
   } = createBuildingFromFootprint(normalized, {
     storyCount: modelConfig.storyCount,
     storyHeight: modelConfig.storyHeight,
@@ -815,6 +1562,8 @@ async function loadFootprint(footprintData, preserveView = true) {
     rakeSoffit: modelConfig.rakeSoffit,
     roofHeightMode: modelConfig.roofHeightMode,
     roofStructures: modelConfig.roofStructures,
+    openings: modelConfig.openings,
+    trim: modelConfig.trim,
     roofBreakHeight: modelConfig.roofBreakHeight,
     roofLowerPitchRise: modelConfig.roofLowerPitchRise,
     roofUpperPitchRise: modelConfig.roofUpperPitchRise,
@@ -840,6 +1589,7 @@ async function loadFootprint(footprintData, preserveView = true) {
   activeFoundationHeight = foundationHeight;
   activeRoofZones = builtRoofZones ?? [];
   activeStructureEntries = roofStructures;
+  activeOpeningEntries = openingEntries ?? [];
   structureMeshes = [];
   building.traverse((child) => {
     if (child.isMesh && child.userData?.structureId) {
@@ -847,12 +1597,20 @@ async function loadFootprint(footprintData, preserveView = true) {
     }
   });
   addVolumePickTargets(layout, foundationHeight);
+  addWallPickTargets(layout);
   if (selectedStructureId) {
     renderStructureCue(selectedStructureId, 0x00a6b8, group);
   } else {
     renderSelectedVolumeHighlight(layout, foundationHeight);
   }
+  if (selectedWallId) {
+    renderWallCue(selectedWallId, 0x00a6b8, group);
+  }
   renderStructurePanel();
+  renderStructureFailureMarkers(activeLayout);
+  renderOpeningFailureMarkers(activeLayout);
+  renderScopeControl(activeLayout);
+  renderWallInfoPanel(activeLayout);
   if (normalized.length === 4) {
     renderFootprintPreview(normalized);
     renderFrontMarker(normalized);
@@ -879,6 +1637,8 @@ async function loadFootprint(footprintData, preserveView = true) {
   topControls.target.copy(preserveView ? previousTopTarget : center);
   topCamera.position.set(topControls.target.x, 30, topControls.target.z);
   topCamera.lookAt(topControls.target.x, 0, topControls.target.z);
+
+  updateElevationCamera(activeLayout, previousElevationZoom, previousElevationTarget);
 }
 
 async function loadSampleFootprint() {
@@ -902,6 +1662,12 @@ async function loadSampleFootprint() {
   volumeSplitSelect.value = 'auto';
   selectedElementId = 'building-defaults';
   selectedStructureId = null;
+  selectedWallId = null;
+  // a mass or wall run id can coincidentally match one from the previous
+  // footprint (they're positional, e.g. "volume-0"), which would otherwise
+  // make the elevation camera think it's still framed on the same wall and
+  // keep that wall's stale pan/zoom instead of framing the new one fresh
+  elevationTargetKey = null;
   const presetFiles = {
     sample: 'sample_footprint.json',
     u: 'footprint_u.json',
@@ -968,6 +1734,40 @@ function addVolumePickTargets(layout, foundationHeight) {
   });
 }
 
+/**
+ * A thin invisible pick target for each footprint wall run, sitting just
+ * outside the mass's own pick-target box so a click there resolves to the
+ * wall (the nearer hit) rather than the mass behind it. DoubleSide keeps a
+ * click from failing based on which way the rotation happens to face it,
+ * since the target is never actually drawn.
+ */
+function addWallPickTargets(layout) {
+  const thickness = 0.15;
+  wallPickTargets = layout.wallRuns.map((wallRun) => {
+    const height = volumeWallHeight(wallRun.volumeId, modelConfig) + volumeFoundationHeight(wallRun.volumeId, modelConfig);
+    const [sx, sz] = wallRun.start;
+    const [ex, ez] = wallRun.end;
+    const { length } = wallRun;
+    const [dirX, dirZ] = wallRun.right;
+    const [normalX, normalZ] = wallRun.normal;
+    const midX = (sx + ex) / 2;
+    const midZ = (sz + ez) / 2;
+    const offset = thickness / 2 + 0.03;
+    const target = new THREE.Mesh(
+      new THREE.BoxGeometry(length, height, thickness),
+      new THREE.MeshBasicMaterial({
+        transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide,
+      })
+    );
+    target.rotation.y = Math.atan2(-dirZ, dirX);
+    target.position.set(midX + normalX * offset, height / 2 + 0.04, midZ + normalZ * offset);
+    target.userData.wallId = wallRun.id;
+    target.userData.editorOnly = true;
+    group.add(target);
+    return target;
+  });
+}
+
 function clearHoverCue() {
   while (hoverGroup.children.length > 0) {
     const child = hoverGroup.children.pop();
@@ -976,32 +1776,200 @@ function clearHoverCue() {
   }
 }
 
-function updateHoveredVolume(event) {
-  if (!activeLayout || (pickTargets.length === 0 && structureMeshes.length === 0)) {
-    return;
+/**
+ * Raycasts at a client-coordinate point against the volumes and roof
+ * structures: what pointerup selects, and (from the last pointermove) what
+ * the hover cue shows. A click reads this fresh rather than trusting
+ * whatever the pointer was last hovering, so a press that never moved still
+ * picks whatever is actually under it.
+ */
+/**
+ * Raycasts at a client-coordinate point against the wall runs, volumes, and
+ * roof structures, from whichever view is asking — the orbit view by
+ * default, or the plan view (its own camera and canvas), so clicking a wall
+ * or a mass there selects the same thing the scope control would.
+ */
+function pickAtPointer(clientX, clientY, pickCamera = camera, pickCanvas = viewportCanvas) {
+  if (!activeLayout || (pickTargets.length === 0 && structureMeshes.length === 0 && wallPickTargets.length === 0)) {
+    return { volumeId: null, structureId: null, wallId: null };
   }
-  const rect = viewportCanvas.getBoundingClientRect();
-  pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
-  raycaster.setFromCamera(pointer, camera);
-  // the nearest of the volumes and the roof structures under the pointer
-  const hit = raycaster.intersectObjects([...pickTargets, ...structureMeshes], false)[0];
+  const rect = pickCanvas.getBoundingClientRect();
+  pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+  raycaster.setFromCamera(pointer, pickCamera);
+  // the nearest of the wall runs, volumes, and roof structures under the
+  // pointer; a wall run's target sits just outside its mass's own box, so
+  // from outside it wins the nearest-hit without needing any special-casing
+  const hit = raycaster.intersectObjects([...wallPickTargets, ...pickTargets, ...structureMeshes], false)[0];
   // a wraparound's side segment picks its porch
   const structureId = hit?.object.userData.recordId ?? hit?.object.userData.structureId ?? null;
-  const volumeId = structureId ? null : hit?.object.userData.volumeId ?? null;
-  if (volumeId === hoveredVolumeId && structureId === hoveredStructureId) {
+  const wallId = !structureId ? hit?.object.userData.wallId ?? null : null;
+  const volumeId = !structureId && !wallId ? hit?.object.userData.volumeId ?? null : null;
+  return { volumeId, structureId, wallId };
+}
+
+function updateHoveredVolume(event, pickCamera = camera, pickCanvas = viewportCanvas) {
+  const { volumeId, structureId, wallId } = pickAtPointer(event.clientX, event.clientY, pickCamera, pickCanvas);
+  if (volumeId === hoveredVolumeId && structureId === hoveredStructureId && wallId === hoveredWallId) {
     return;
   }
   hoveredVolumeId = volumeId;
   hoveredStructureId = structureId;
+  hoveredWallId = wallId;
   clearHoverCue();
   if (structureId && structureId !== selectedStructureId) {
     renderStructureCue(structureId, 0xf4b400, hoverGroup);
+  }
+  if (wallId && wallId !== selectedWallId) {
+    renderWallCue(wallId, 0xf4b400, hoverGroup);
   }
   const volume = activeLayout.volumes.find((candidate) => candidate.id === volumeId);
   if (volume && (volume.id !== selectedElementId || selectedStructureId)) {
     renderVolumeCue(volume, activeFoundationHeight, 0xf4b400, 0.06, hoverGroup);
   }
-  viewportCanvas.style.cursor = volume || structureId ? 'pointer' : 'default';
+  const pointerStyle = volume || structureId || wallId ? 'pointer' : 'default';
+  viewportCanvas.style.cursor = pointerStyle;
+  topViewCanvas.style.cursor = pointerStyle;
+}
+
+/** An outline around a wall run's face, as a selection or hover cue. */
+/**
+ * Any addressable run by id: a footprint wall run, a structure's own wall
+ * run, or a railing run (the surfaces withStructureFacades adds — see
+ * facade.js). Tagged with `runType` so callers (the cue renderer, the
+ * elevation target, the wall-info panel) know which shape its fields are in:
+ * a footprint or structure wall run's `start`/`end` are 2D ([x, z]); a
+ * railing's are 3D ([x, y, z]), since it doesn't sit at a fixed floor line.
+ */
+function findRun(id, layout) {
+  if (!id || !layout) {
+    return null;
+  }
+  const wall = layout.wallRuns.find((run) => run.id === id);
+  if (wall) {
+    return { ...wall, runType: 'wall' };
+  }
+  const structureWall = (layout.structureWallRuns ?? []).find((run) => run.id === id);
+  if (structureWall) {
+    return { ...structureWall, runType: 'structure-wall' };
+  }
+  const rail = (layout.railRuns ?? []).find((run) => run.id === id);
+  if (rail) {
+    return { ...rail, runType: 'rail' };
+  }
+  return null;
+}
+
+/** An outline around a run's face (a wall, a structure's own wall, or a railing), as a selection or hover cue. */
+function renderWallCue(wallId, color, parent) {
+  const run = findRun(wallId, activeLayout);
+  if (!run) {
+    return;
+  }
+  let start2D;
+  let end2D;
+  let yBase;
+  let yTop;
+  if (run.runType === 'rail') {
+    start2D = [run.start[0], run.start[2]];
+    end2D = [run.end[0], run.end[2]];
+    yBase = run.start[1];
+    yTop = yBase + run.height;
+  } else if (run.runType === 'structure-wall') {
+    start2D = run.start;
+    end2D = run.end;
+    yBase = run.baseY + (run.extent?.minV ?? 0);
+    yTop = run.baseY + (run.extent?.maxV ?? 3);
+  } else {
+    start2D = run.start;
+    end2D = run.end;
+    yBase = 0;
+    yTop = volumeWallHeight(run.volumeId, modelConfig) + volumeFoundationHeight(run.volumeId, modelConfig);
+  }
+  const [sx, sz] = start2D;
+  const [ex, ez] = end2D;
+  const { normal: [normalX, normalZ] } = wallRunFrame(start2D, end2D);
+  const off = 0.03;
+  const corner = (x, z, y) => new THREE.Vector3(x + normalX * off, y, z + normalZ * off);
+  const outline = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      corner(sx, sz, yBase), corner(ex, ez, yBase), corner(ex, ez, yTop), corner(sx, sz, yTop), corner(sx, sz, yBase),
+    ]),
+    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1, depthTest: false })
+  );
+  outline.userData.editorOnly = true;
+  parent.add(outline);
+}
+
+/**
+ * The plan rectangle a roof structure's raw fields describe, whether or not
+ * it actually built: along its host wall (offset ± half its width) and out
+ * from it (setback to setback + depth, in the host frame's inward
+ * direction). A structure that failed to build has no mesh and never gets
+ * as far as `resolveRoofStructure`'s own geometry, so this is worked out
+ * straight from the record instead, the same way structurePlacementLimits'
+ * fallback reasons about a host it hasn't resolved either. Approximate for a
+ * polygon (a tower) or wraparound (its own wall-length fields, not offset)
+ * — skipped rather than guessed at.
+ */
+function structureFootprintRect(structure, volumes) {
+  if (!structure.hostVolumeId || structure.wrap || structure.plan?.shape === 'polygon') {
+    return null;
+  }
+  const volume = volumes.find((candidate) => candidate.id === structure.hostVolumeId);
+  const frame = structureFrame(structure.hostSide);
+  if (!volume || !frame) {
+    return null;
+  }
+  const [minAlong, maxAlong] = frame.along === 'x' ? [volume.minX, volume.maxX] : [volume.minZ, volume.maxZ];
+  const alongCenter = (minAlong + maxAlong) / 2 + (Number.isFinite(structure.offset) ? structure.offset : 0);
+  const halfWidth = Math.max(0.15, (structure.width ?? 1) / 2);
+  const alongMin = alongCenter - halfWidth;
+  const alongMax = alongCenter + halfWidth;
+  const wallCoord = volume[structure.hostSide];
+  const setback = structure.setback === 'center' ? 0 : (Number.isFinite(structure.setback) ? structure.setback : 0);
+  const depth = Number.isFinite(structure.depth) ? structure.depth : 2.4;
+  const near = wallCoord + frame.sign * setback;
+  const far = near + frame.sign * depth;
+  const inwardMin = Math.min(near, far);
+  const inwardMax = Math.max(near, far);
+  return frame.along === 'x'
+    ? { minX: alongMin, maxX: alongMax, minZ: inwardMin, maxZ: inwardMax }
+    : { minZ: alongMin, maxZ: alongMax, minX: inwardMin, maxX: inwardMax };
+}
+
+/** A dashed outline at ground level over the footprint a structure that failed to build tried to occupy. */
+function renderStructureFailureMarker(structure, volumes, parent) {
+  const rect = structureFootprintRect(structure, volumes);
+  if (!rect) {
+    return;
+  }
+  const y = 0.05;
+  const points = [
+    new THREE.Vector3(rect.minX, y, rect.minZ),
+    new THREE.Vector3(rect.maxX, y, rect.minZ),
+    new THREE.Vector3(rect.maxX, y, rect.maxZ),
+    new THREE.Vector3(rect.minX, y, rect.maxZ),
+    new THREE.Vector3(rect.minX, y, rect.minZ),
+  ];
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineDashedMaterial({
+      color: 0xd64545, dashSize: 0.3, gapSize: 0.2, transparent: true, opacity: 0.9, depthTest: false,
+    })
+  );
+  line.computeLineDistances();
+  line.userData.editorOnly = true;
+  parent.add(line);
+}
+
+/** Every unbuilt structure's attempted footprint, drawn in the plan (and orbit — they share one scene). */
+function renderStructureFailureMarkers(layout) {
+  modelConfig.roofStructures.forEach((structure) => {
+    const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
+    if (entry?.errors?.length) {
+      renderStructureFailureMarker(structure, layout.volumes, group);
+    }
+  });
 }
 
 /** A box around a roof structure's visible meshes, as a selection or hover cue. */
@@ -1046,6 +2014,8 @@ function resetForNewFootprint() {
   volumeSplitSelect.value = 'auto';
   selectedElementId = 'building-defaults';
   selectedStructureId = null;
+  selectedWallId = null;
+  elevationTargetKey = null;
 }
 
 /**
@@ -1407,15 +2377,6 @@ volumeControlsBox.addEventListener('input', (event) => {
   }
 });
 
-elementSelect.addEventListener('change', () => {
-  selectedElementId = elementSelect.value;
-  // choosing another element leaves the structure it was showing
-  selectedStructureId = null;
-  if (loadedFootprint) {
-    loadFootprint(loadedFootprint);
-  }
-});
-
 roofHeightModeSelect.addEventListener('change', () => {
   modelConfig.roofHeightMode = roofHeightModeSelect.value;
   roofControlAuthority = modelConfig.roofHeightMode === 'height' ? 'height' : 'pitch';
@@ -1467,7 +2428,7 @@ function handleRegionMaterialChange(event) {
 }
 
 storyMaterialsBox.addEventListener('change', handleRegionMaterialChange);
-panelMaterialsBox.addEventListener('change', handleRegionMaterialChange);
+wallPanelMaterialsBox.addEventListener('change', handleRegionMaterialChange);
 
 sampleBtn.addEventListener('click', () => {
   loadSampleFootprint();
@@ -1498,37 +2459,81 @@ resetViewBtn.addEventListener('click', () => {
   controls.update();
 });
 
-viewportCanvas.addEventListener('pointermove', updateHoveredVolume);
-viewportCanvas.addEventListener('pointerleave', () => {
-  hoveredVolumeId = null;
-  hoveredStructureId = null;
-  clearHoverCue();
-  viewportCanvas.style.cursor = 'default';
-});
-viewportCanvas.addEventListener('pointerdown', (event) => {
-  pointerDown = { x: event.clientX, y: event.clientY };
-});
-viewportCanvas.addEventListener('pointerup', (event) => {
-  if (!pointerDown || Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) > 4) {
-    pointerDown = null;
-    return;
-  }
-  pointerDown = null;
-  if (hoveredStructureId) {
-    if (hoveredStructureId !== selectedStructureId) {
-      selectedStructureId = hoveredStructureId;
+/**
+ * Applies a pick result (from either the orbit or the plan view) to the
+ * selection state, exactly as a direct click there would.
+ */
+function applyPickSelection({ volumeId, structureId, wallId }) {
+  if (structureId) {
+    if (structureId !== selectedStructureId) {
+      selectedWallId = null;
+      selectedStructureId = structureId;
       loadFootprint(loadedFootprint);
     }
     return;
   }
-  if (!hoveredVolumeId || (hoveredVolumeId === selectedElementId && !selectedStructureId)) {
+  if (wallId) {
+    // a wall steers the elevation pane, and (like a structure) brings the
+    // scope control to the mass it belongs to
+    const toggledOff = wallId === selectedWallId;
+    selectedWallId = toggledOff ? null : wallId;
+    if (!toggledOff) {
+      const wallRun = activeLayout.wallRuns.find((run) => run.id === wallId);
+      if (wallRun?.volumeId) {
+        selectedStructureId = null;
+        selectedElementId = wallRun.volumeId;
+      }
+    }
+    loadFootprint(loadedFootprint);
+    return;
+  }
+  if (!volumeId) {
+    // empty ground: back out to building defaults
+    if (selectedElementId !== 'building-defaults' || selectedStructureId || selectedWallId) {
+      selectedElementId = 'building-defaults';
+      selectedStructureId = null;
+      selectedWallId = null;
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
+  if (volumeId === selectedElementId && !selectedStructureId) {
     return;
   }
   selectedStructureId = null;
-  selectedElementId = hoveredVolumeId;
-  elementSelect.value = selectedElementId;
+  selectedWallId = null;
+  selectedElementId = volumeId;
   loadFootprint(loadedFootprint);
-});
+}
+
+/** Wires up click-to-select and hover cues on a view's canvas, against its own camera. */
+function wireViewSelection(canvas, viewCamera) {
+  canvas.addEventListener('pointermove', (event) => updateHoveredVolume(event, viewCamera, canvas));
+  canvas.addEventListener('pointerleave', () => {
+    hoveredVolumeId = null;
+    hoveredStructureId = null;
+    hoveredWallId = null;
+    clearHoverCue();
+    canvas.style.cursor = 'default';
+  });
+  let localPointerDown = null;
+  canvas.addEventListener('pointerdown', (event) => {
+    localPointerDown = { x: event.clientX, y: event.clientY };
+  });
+  canvas.addEventListener('pointerup', (event) => {
+    if (!localPointerDown || Math.hypot(event.clientX - localPointerDown.x, event.clientY - localPointerDown.y) > 4) {
+      localPointerDown = null;
+      return;
+    }
+    localPointerDown = null;
+    // a fresh raycast at the click itself, not whatever pointermove last hovered
+    applyPickSelection(pickAtPointer(event.clientX, event.clientY, viewCamera, canvas));
+  });
+}
+
+wireViewSelection(viewportCanvas, camera);
+wireViewSelection(topViewCanvas, topCamera);
+wireViewSelection(elevationViewCanvas, elevationCamera);
 
 // --- Mansard, gambrel, and widow's walk settings --------------------------------
 
@@ -1645,7 +2650,7 @@ function nameSideControls() {
   });
 }
 const STRUCTURE_ROOF_OPTIONS = [['gable', 'Gable'], ['hip', 'Hip'], ['shed', 'Shed'], ['flat', 'Flat']];
-const MATERIAL_OPTIONS = [['', 'Building default'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['metal', 'Metal'], ['stone', 'Stone']];
+const MATERIAL_OPTIONS = [['', 'Building default'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['metal', 'Metal'], ['stone', 'Stone'], ['paint', 'Painted white']];
 
 function structureRecord(id) {
   return modelConfig.roofStructures.find((structure) => structure.id === id) ?? null;
@@ -2026,6 +3031,60 @@ function checkField(label, field, checked) {
   return `<label class="field-inline" style="margin-bottom:8px;"><input type="checkbox" data-field="${field}"${checked ? ' checked' : ''} />${escapeHtml(label)}</label>`;
 }
 
+/** The building's trim courses: which are on, their sizes, and the material they're all made of. */
+function renderTrimPanel() {
+  // (declared here, not at module level: syncLengthInputs renders this during startup, before later consts exist)
+  const TRIM_COURSES = [
+    ['waterTable', 'Water table', 'On the foundation'],
+    ['beltCourse', 'Belt courses', 'At each floor line'],
+    ['cornice', 'Cornice', 'Under the eaves'],
+  ];
+  const trim = normalizeTrim(modelConfig.trim);
+  const materialOptions = [['paint', 'Painted white'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['metal', 'Metal'], ['stone', 'Stone']];
+  const groups = TRIM_COURSES.map(([kind, label, where]) => {
+    const course = trim[kind];
+    const parts = [checkField(`${where}`, `${kind}.enabled`, course.enabled)];
+    if (course.enabled) {
+      parts.push(numberField('Height', `${kind}.height`, course.height, { step: 0.05 }));
+      parts.push(numberField('Projection', `${kind}.projection`, course.projection, { step: 0.05 }));
+      if (kind === 'cornice') {
+        parts.push(checkField('Dentils beneath', 'cornice.dentils', course.dentils));
+      }
+    }
+    return fieldGroup(label, parts);
+  });
+  trimControls.innerHTML = selectField('Trim material', 'material', materialOptions, trim.material) + groups.join('');
+}
+
+function applyTrimFieldEdit(input) {
+  const trim = normalizeTrim(modelConfig.trim);
+  const [kind, key] = input.dataset.field.split('.');
+  if (kind === 'material') {
+    trim.material = input.value;
+  } else if (key === 'enabled' || key === 'dentils') {
+    trim[kind][key] = input.checked;
+  } else {
+    const range = key === 'height' ? TRIM_HEIGHT_RANGE : TRIM_PROJECTION_RANGE;
+    const meters = Number(input.value) / unitFactor();
+    if (!Number.isFinite(meters) || input.value === '') {
+      renderTrimPanel();
+      return;
+    }
+    trim[kind][key] = Math.min(Math.max(meters, range[0]), range[1]);
+  }
+  modelConfig.trim = normalizeTrim(trim);
+  renderTrimPanel();
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+}
+
+trimControls.addEventListener('change', (event) => {
+  if (event.target.dataset?.field) {
+    applyTrimFieldEdit(event.target);
+  }
+});
+
 /** The "Add" menu, the list of the building's structures with how each built, and the selected one's editor. */
 function renderStructurePanel() {
   if (!structurePresetSelect.options.length) {
@@ -2062,18 +3121,8 @@ function renderStructurePanel() {
     }
   }
 
-  structureList.innerHTML = modelConfig.roofStructures.length
-    ? modelConfig.roofStructures.map((structure) => {
-      const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
-      const problem = entry?.errors?.[0] ?? entry?.warnings?.[0];
-      const note = problem
-        ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(nameSides(problem.message))}</span>`
-        : '';
-      return `<div class="structure-row-wrap"><button class="structure-row${structure.id === selectedStructureId ? ' selected' : ''}" data-structure-id="${structure.id}">`
-        + `${escapeHtml(structure.id)}: ${escapeHtml(structureLabel(structure, modelConfig.frontSide))}${note}</button>`
-        + `<button class="structure-delete" data-delete-structure="${structure.id}" title="Delete ${escapeHtml(structure.id)}" aria-label="Delete ${escapeHtml(structure.id)}">×</button></div>`;
-    }).join('')
-    : '<div style="color:var(--muted);">No roof structures. Pick one above and add it to the selected volume.</div>';
+  // The building's structures are listed and selected from the scope control
+  // (see renderScopeControl), grouped there under the mass each stands on.
 
   // Rewriting the editor's HTML on every tick of a slider drag would tear out
   // the range input the pointer is captured on and stall the drag. While a
@@ -2372,7 +3421,13 @@ function structureEditorHtml(structure) {
     materials.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
   }
 
-  return `<div class="structure-editor-head"><span>Editing ${escapeHtml(structure.id)}</span></div>`
+  const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
+  const buildError = entry?.errors?.[0];
+  const errorBanner = buildError
+    ? `<div class="structure-editor-error">Not built: ${escapeHtml(nameSides(buildError.message))}</div>`
+    : '';
+
+  return `<div class="structure-editor-head"><span>Editing ${escapeHtml(structure.id)}</span></div>${errorBanner}`
     + fieldGroup('Placement', placement)
     + fieldGroup('Footprint', footprint)
     + fieldGroup('Height', height)
@@ -2388,6 +3443,46 @@ function rebuildWithStructures(structures) {
   }
 }
 
+/**
+ * A new structure's offset along its host wall, moved clear of any sibling
+ * already on the same host volume and side: the default of 0 (see
+ * normalizeRoofStructure) would otherwise stack every same-preset addition
+ * on top of the first, guaranteeing the "overlaps" error a second dormer or
+ * porch on a wall would hit. A wraparound (its own wall-length fields) or a
+ * corner tower/turret (already offset to straddle the corner) don't use a
+ * plain offset the same way, so they're left alone.
+ */
+function nextFreeOffset(record, siblings, wallLength) {
+  if (record.wrap || record.plan?.shape === 'polygon') {
+    return record.offset;
+  }
+  const width = record.width ?? 1;
+  const gap = 0.3;
+  const halfWall = wallLength / 2;
+  const occupied = siblings
+    .filter((s) => s.id !== record.id && !s.hostStructureId && s.hostVolumeId === record.hostVolumeId && s.hostSide === record.hostSide)
+    .map((s) => ({ lo: s.offset - (s.width ?? 1) / 2 - gap, hi: s.offset + (s.width ?? 1) / 2 + gap }))
+    .sort((a, b) => a.lo - b.lo);
+  if (!occupied.length) {
+    return record.offset;
+  }
+  const overlapsAny = (range) => occupied.some((o) => range.lo < o.hi && o.lo < range.hi);
+  const fitsWall = (range) => range.lo >= -halfWall && range.hi <= halfWall;
+  const rangeAt = (offset) => ({ lo: offset - width / 2, hi: offset + width / 2 });
+  if (!overlapsAny(rangeAt(record.offset))) {
+    return record.offset;
+  }
+  for (const o of occupied) {
+    const candidate = o.hi + width / 2;
+    const range = rangeAt(candidate);
+    if (fitsWall(range) && !overlapsAny(range)) {
+      return candidate;
+    }
+  }
+  // no clear stretch fits: leave it where it was (the overlap error still flags it)
+  return record.offset;
+}
+
 structurePresetSelect.addEventListener('change', renderStructurePanel);
 
 structureAddBtn.addEventListener('click', () => {
@@ -2396,11 +3491,12 @@ structureAddBtn.addEventListener('click', () => {
     return;
   }
   const hostVolume = selectedVolume(activeLayout) ?? activeLayout.volumes[0];
+  const wallLength = ['minX', 'maxX'].includes(structureSideSelect.value) ? hostVolume.maxZ - hostVolume.minZ : hostVolume.maxX - hostVolume.minX;
   const record = newRoofStructure(structurePresetSelect.value, {
     hostVolumeId: hostVolume.id,
     hostSide: structureSideSelect.value,
     storyHeight: modelConfig.storyHeight,
-    wallLength: ['minX', 'maxX'].includes(structureSideSelect.value) ? hostVolume.maxZ - hostVolume.minZ : hostVolume.maxX - hostVolume.minX,
+    wallLength,
     wallTop: volumeWallHeight(hostVolume.id, modelConfig),
     hostStructure: selectedStructureId ? structureRecord(selectedStructureId) : undefined,
   }, modelConfig.roofStructures);
@@ -2415,24 +3511,9 @@ structureAddBtn.addEventListener('click', () => {
   if (record.depth === null && (modelConfig.volumeRoofTypes?.[hostVolume.id] ?? modelConfig.roofType) === 'flat') {
     record.depth = 2.4;
   }
+  record.offset = nextFreeOffset(record, modelConfig.roofStructures, wallLength);
   selectedStructureId = record.id;
   rebuildWithStructures([...modelConfig.roofStructures, record]);
-});
-
-structureList.addEventListener('click', (event) => {
-  const remove = event.target.closest('[data-delete-structure]');
-  if (remove) {
-    deleteStructure(remove.dataset.deleteStructure);
-    return;
-  }
-  const row = event.target.closest('[data-structure-id]');
-  if (!row) {
-    return;
-  }
-  selectedStructureId = row.dataset.structureId === selectedStructureId ? null : row.dataset.structureId;
-  if (loadedFootprint) {
-    loadFootprint(loadedFootprint);
-  }
 });
 
 /** Deletes a roof structure, with everything standing on it. */
@@ -2678,23 +3759,31 @@ function resizeRenderer() {
   const viewportHeight = viewportCanvas.clientHeight;
   const topWidth = topViewCanvas.clientWidth;
   const topHeight = topViewCanvas.clientHeight;
+  const elevationWidth = elevationViewCanvas.clientWidth;
+  const elevationHeight = elevationViewCanvas.clientHeight;
 
   renderer.setSize(viewportWidth, viewportHeight, false);
   topRenderer.setSize(topWidth, topHeight, false);
+  elevationRenderer.setSize(elevationWidth, elevationHeight, false);
 
   camera.aspect = viewportWidth / viewportHeight;
   camera.updateProjectionMatrix();
 
   updateTopCameraFrustum();
+  if (activeLayout) {
+    updateElevationCamera(activeLayout, elevationCamera.zoom, elevationControls.target.clone());
+  }
 }
 
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
   topControls.update();
+  elevationControls.update();
 
   renderer.render(scene, camera);
   topRenderer.render(scene, topCamera);
+  elevationRenderer.render(scene, elevationCamera);
 }
 
 window.addEventListener('resize', resizeRenderer);

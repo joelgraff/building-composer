@@ -97,7 +97,7 @@
 
       .metrics .metric:nth-child(1),
       .metrics .metric:nth-child(2),
-      .metrics .metric:nth-child(n + 5) {
+      .metrics .metric:nth-child(n + 6) {
         display: none;
       }
 
@@ -121,10 +121,94 @@
         font-size: 1.1rem;
       }
 
+      .scope-panel {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        background: var(--panel-alt);
+        padding-bottom: 12px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid rgba(17, 32, 51, 0.12);
+      }
+
+      .scope-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .scope-row:first-of-type {
+        margin-top: 10px;
+      }
+
+      .scope-btn {
+        appearance: none;
+        border: 1px solid rgba(17, 32, 51, 0.14);
+        background: #fff;
+        color: var(--text);
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+        line-height: 1.3;
+      }
+
+      .scope-btn:hover {
+        border-color: rgba(50, 107, 245, 0.4);
+      }
+
+      .scope-btn.selected {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .scope-btn.structure-btn.selected {
+        background: #00a6b8;
+        border-color: #00a6b8;
+      }
+
+      .scope-structure-wrap {
+        display: inline-flex;
+        align-items: stretch;
+        gap: 2px;
+      }
+
+      .scope-structure-wrap .structure-delete {
+        border-radius: 999px;
+        width: 1.8em;
+      }
+
+      .scope-empty {
+        font-size: 0.8rem;
+        color: var(--muted);
+        margin-top: 8px;
+      }
+
+      .scope-section-label {
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin-top: 10px;
+      }
+
+      .wall-btn {
+        border-color: rgba(0, 166, 184, 0.35);
+      }
+
+      .wall-btn.selected {
+        background: #00a6b8;
+        border-color: #00a6b8;
+      }
+
       .viewer {
         position: relative;
         display: grid;
-        grid-template-rows: 1fr 180px;
+        grid-template-rows: 1fr minmax(240px, 34%);
         min-height: 0;
       }
 
@@ -146,12 +230,41 @@
         inset: 0;
       }
 
-      .top-view-panel {
+      .plan-elevation-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        min-height: 0;
+      }
+
+      .plan-panel,
+      .elevation-panel {
         position: relative;
+        min-height: 0;
         background: linear-gradient(#f6f8fa, #edf2f7);
       }
 
-      #top-view {
+      .plan-panel {
+        border-right: 1px solid rgba(17, 32, 51, 0.08);
+      }
+
+      .pane-label {
+        position: absolute;
+        top: 6px;
+        left: 8px;
+        z-index: 1;
+        font-size: 0.7rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.7);
+        padding: 2px 6px;
+        border-radius: 4px;
+        pointer-events: none;
+      }
+
+      #top-view,
+      #elevation-view {
         position: absolute;
         inset: 0;
         border: 0;
@@ -252,6 +365,17 @@
         align-items: center;
         margin: 10px 0 8px;
         font-weight: 700;
+      }
+
+      .structure-editor-error {
+        background: rgba(214, 69, 69, 0.1);
+        border: 1px solid rgba(214, 69, 69, 0.3);
+        color: #c0392b;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        margin-bottom: 8px;
       }
 
       .structure-row.selected {
@@ -363,6 +487,10 @@
     <div class="layout">
       <aside class="sidebar">
         <h2>Building</h2>
+        <div class="scope-panel">
+          <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted);">Editing</div>
+          <div id="scope-crumbs"></div>
+        </div>
         <div class="metrics">
           <div class="metric">
             <div class="metric-label">Status</div>
@@ -434,7 +562,7 @@
           </div>
         </div>
 
-        <details class="advanced-panel">
+        <details class="advanced-panel" id="facade-defaults-panel">
           <summary>Facade defaults</summary>
         <div class="panel">
           <h3>Facade controls</h3>
@@ -471,13 +599,14 @@
         </div>
         </details>
 
-        <div class="panel">
-          <h3>Selected element</h3>
-          <div id="selected-element-label" style="font-size:0.9rem; font-weight:700; color:var(--text);">Building defaults</div>
-          <select id="element-select" hidden aria-hidden="true"></select>
-        </div>
+        <details class="advanced-panel" id="trim-panel">
+          <summary>Trim</summary>
+          <div class="panel">
+            <div id="trim-controls"></div>
+          </div>
+        </details>
 
-        <div class="panel">
+        <div class="panel" id="volume-config-panel">
           <h3>Volume Configuration</h3>
           <div id="roof-zone-target" style="font-size:0.8rem; line-height:1.4; color:var(--muted); margin-bottom:8px;"></div>
           <div id="roof-support-note" style="font-size:0.8rem; line-height:1.4; color:var(--muted); margin-bottom:10px;"></div>
@@ -601,11 +730,21 @@
           <div class="actions" style="margin-bottom:10px;">
             <button id="structure-add-btn">Add</button>
           </div>
-          <div id="structure-list" style="font-size:0.85rem; line-height:1.5;"></div>
           <div id="structure-editor"></div>
         </div>
 
-        <details class="advanced-panel" open>
+        <div class="panel" id="wall-info-panel" style="display:none;">
+          <h3>Selected wall</h3>
+          <div id="wall-info-summary" style="font-size:0.9rem; line-height:1.6; color:var(--text); margin-bottom:12px;"></div>
+          <div id="wall-panel-materials"></div>
+          <div class="field-group">
+            <div class="field-group-label">Windows &amp; doors</div>
+            <div id="wall-openings-box"></div>
+            <div id="opening-editor"></div>
+          </div>
+        </div>
+
+        <details class="advanced-panel">
           <summary>Roof graph & edge roles</summary>
           <div class="panel">
             <div id="roof-graph-summary" style="font-size:0.85rem; line-height:1.4; color:var(--text); margin-bottom:8px;">No roof graph computed.</div>
@@ -629,13 +768,6 @@
           </div>
         </details>
 
-        <details class="advanced-panel">
-          <summary>Facade panel materials</summary>
-          <div class="panel">
-            <div id="panel-materials"></div>
-          </div>
-        </details>
-
         <div class="status" id="status-box">
           Load a closed, CCW footprint to generate the base massing.
         </div>
@@ -645,8 +777,15 @@
         <div class="viewport-shell">
           <canvas id="viewport"></canvas>
         </div>
-        <div class="top-view-panel">
-          <canvas id="top-view"></canvas>
+        <div class="plan-elevation-row">
+          <div class="plan-panel">
+            <div class="pane-label">Plan</div>
+            <canvas id="top-view"></canvas>
+          </div>
+          <div class="elevation-panel">
+            <div class="pane-label" id="elevation-label">Elevation</div>
+            <canvas id="elevation-view"></canvas>
+          </div>
         </div>
       </main>
     </div>
@@ -661,6 +800,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=20"></script>
+    <script type="module" src="./js/main.js?v=29"></script>
   </body>
 </html>

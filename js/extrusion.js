@@ -3,8 +3,12 @@
  */
 
 import * as THREE from '../node_modules/three/build/three.module.js';
-import { createMaterials, MATERIAL_PALETTE, paletteMaterial } from './materials.js';
-import { roofAxisForDirection, findVolumeAdjacencies } from './facade.js';
+import { createMaterials, MATERIAL_PALETTE, paletteMaterial, glazingMaterial } from './materials.js';
+import { roofAxisForDirection, findVolumeAdjacencies, wallRunFrame } from './facade.js';
+import { resolveOpening, openingOutline, FRAME_DEPTH, PANE_RECESS } from './openings.js';
+import {
+  normalizeTrim, hasTrim, courseProfile, profileExtent, subtractIntervals, sweepCourse, dentilSize, dentilTriangles, floorLines,
+} from './trim.js';
 import {
   resolveVolumeEaves, sideOverhangs, buildGableTrim, buildHipTrim, buildShedTrim, buildPartialEaveStrips,
 } from './eaves.js';
@@ -196,14 +200,278 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   }, config, skeletonWalks.map((walk) => ({ ...walk, y: roof.position.y + walk.height })));
 }
 
+/** How far a window/door's whole appliqué (frame + pane) sits proud of the wall face, to avoid z-fighting. */
+const OPENING_OUTWARD_NUDGE = 0.01;
+
 /**
- * A built building with its roof structures (withRoofStructures) and its
- * widow's walks' facade surfaces (`roofWalks`): a continuous hip's
- * (`skeletonWalks`, already at their elevation) and each volume's own.
+ * A window or door's meshes: a thin frame ring (a THREE.Shape with the
+ * opening as its hole, extruded FRAME_DEPTH) plus a recessed pane (glazing
+ * for a window, an opaque panel for a door) — additive appliqué geometry on
+ * the wall's outer face, not a cut through it (see js/openings.js's doc
+ * comment for why). Built in the wall's own (u, v, depth) frame, then
+ * oriented into world space.
+ */
+function buildOpeningMeshes(resolved, materials, glazing) {
+  const { outer, inner } = openingOutline(resolved);
+  const frameShape = new THREE.Shape(outer.map(([u, v]) => new THREE.Vector2(u, v)));
+  frameShape.holes.push(new THREE.Path(inner.map(([u, v]) => new THREE.Vector2(u, v))));
+  const frameGeometry = new THREE.ExtrudeGeometry(frameShape, {
+    depth: FRAME_DEPTH, bevelEnabled: false, steps: 1, curveSegments: 1,
+  });
+  // Oriented below by a rotation.y that maps local +X to the wall's own
+  // "right" direction (needed to place an off-center opening on the correct
+  // side) — a wall's (right, worldUp, outward-normal) is a left-handed
+  // triple, so that same rotation necessarily maps local +Z to the *inward*
+  // direction, not outward. Shifting the extrusion to [-FRAME_DEPTH, 0]
+  // compensates: 0 stays at the wall face, and increasingly negative local Z
+  // (mapped to increasingly outward world space) is where the frame projects.
+  frameGeometry.translate(0, 0, -FRAME_DEPTH);
+  const frameMaterial = resolved.materials.frame ? paletteMaterial(resolved.materials.frame, 'wall') : materials.wall;
+  const frameMesh = new THREE.Mesh(frameGeometry, frameMaterial);
+  frameMesh.userData = { openingId: resolved.id, bodyPart: 'opening-frame' };
+
+  const paneGeometry = new THREE.PlaneGeometry(resolved.u1 - resolved.u0, resolved.v1 - resolved.v0);
+  const isWindow = resolved.kind === 'window';
+  const paneMaterial = isWindow ? glazing : paletteMaterial(resolved.materials.panel ?? 'wood', 'door');
+  const paneMesh = new THREE.Mesh(paneGeometry, paneMaterial);
+  paneMesh.position.set((resolved.u0 + resolved.u1) / 2, (resolved.v0 + resolved.v1) / 2, -(FRAME_DEPTH - PANE_RECESS));
+  paneMesh.userData = { openingId: resolved.id, bodyPart: 'opening-pane' };
+
+  const group = new THREE.Group();
+  group.add(frameMesh, paneMesh);
+
+  const {
+    start, end, normal, baseY, right,
+  } = resolved.frame;
+  const [dirX, dirZ] = right;
+  group.rotation.y = Math.atan2(-dirZ, dirX);
+  group.position.set(
+    (start[0] + end[0]) / 2 + normal[0] * OPENING_OUTWARD_NUDGE,
+    baseY,
+    (start[1] + end[1]) / 2 + normal[1] * OPENING_OUTWARD_NUDGE
+  );
+  group.userData = { openingId: resolved.id, bodyPart: 'opening' };
+  return group;
+}
+
+/**
+ * Adds windows and doors (config.openings) to a built building, each
+ * appliquéd onto its host footprint wall run — see js/openings.js. Mirrors
+ * withRoofStructures' own shape: returns `{ ...result, openings: entries }`,
+ * one entry per opening (built or not) so main.js can track build errors the
+ * same way it already does for roof structures.
+ */
+function withOpenings(result, config) {
+  const openings = config.openings ?? [];
+  if (openings.length === 0) {
+    return { ...result, openings: [] };
+  }
+  const wallRuns = config.facadeLayout?.wallRuns ?? [];
+  const { stories } = config.facadeLayout ?? {};
+  const materials = createMaterials(config);
+  const glazing = glazingMaterial();
+  const entries = openings.map((opening) => {
+    const wallRun = wallRuns.find((run) => run.id === opening.hostWallRunId);
+    const host = wallRun && {
+      ...wallRun,
+      wallHeight: volumeWallHeight(wallRun.volumeId, config),
+      baseY: volumeFoundationHeight(wallRun.volumeId, config),
+    };
+    const { resolved, errors, warnings } = resolveOpening(opening, host, { siblings: openings, stories });
+    if (resolved) {
+      result.building.add(buildOpeningMeshes(resolved, materials, glazing));
+    }
+    return {
+      id: opening.id, opening, host, resolved, errors, warnings,
+    };
+  });
+  return { ...result, openings: entries };
+}
+
+/** How far outside a wall face the cornice looks up for the soffit above it. */
+const SOFFIT_PROBE_OFFSET = 0.03;
+/** Clearance left between a cornice's top and the soffit, so the two don't z-fight. */
+const CORNICE_SOFFIT_GAP = 0.003;
+
+/** The building's own roof triangles (not its structures'), in the building's frame. */
+function mainRoofTriangles(building) {
+  const triangles = [];
+  const v = new THREE.Vector3();
+  building.children.filter((child) => child.isMesh && child.userData?.roofType).forEach((roof) => {
+    roof.updateMatrix();
+    const position = roof.geometry.getAttribute('position');
+    const index = roof.geometry.index;
+    const count = index ? index.count : position.count;
+    const point = (i) => {
+      v.fromBufferAttribute(position, index ? index.getX(i) : i).applyMatrix4(roof.matrix);
+      return [v.x, v.y, v.z];
+    };
+    for (let i = 0; i + 2 < count; i += 3) {
+      triangles.push([point(i), point(i + 1), point(i + 2)]);
+    }
+  });
+  return triangles;
+}
+
+/** The lowest roof surface straight above (x, z) that is higher than `floorY`, or Infinity. */
+function lowestSurfaceAbove(triangles, x, z, floorY) {
+  let best = Infinity;
+  triangles.forEach(([a, b, c]) => {
+    const det = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2]);
+    if (Math.abs(det) < 1e-12) {
+      return;
+    }
+    const l1 = ((x - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (z - a[2])) / det;
+    const l2 = ((b[0] - a[0]) * (z - a[2]) - (x - a[0]) * (b[2] - a[2])) / det;
+    if (l1 < -1e-9 || l2 < -1e-9 || l1 + l2 > 1 + 1e-9) {
+      return;
+    }
+    const y = a[1] + l1 * (b[1] - a[1]) + l2 * (c[1] - a[1]);
+    if (y > floorY && y < best) {
+      best = y;
+    }
+  });
+  return best;
+}
+
+/** A volume's stories, as volumeWallHeight counts them. */
+function volumeStories(volumeId, config) {
+  const count = (volumeId && config.volumeStoryOverrides?.[volumeId]) ?? config.storyCount ?? 1;
+  const own = volumeId ? config.volumeStoryHeights?.[volumeId] : undefined;
+  const height = own > 0 ? own : config.storyHeight ?? 3.2;
+  const ownKnee = volumeId ? config.volumeKneeWalls?.[volumeId] : undefined;
+  const knee = Number.isFinite(ownKnee) ? ownKnee : config.kneeWallHeight;
+  return { count, height, hasKneeWall: knee > 0 };
+}
+
+/**
+ * Where a cornice's top sits on each footprint wall run: just under the
+ * soffit (measured from the built roof, straight up from just outside the
+ * wall, so every roof type and eave style is followed as built), level all
+ * the way round among the runs that share a plate, and at the plate where
+ * nothing overhangs the wall.
+ */
+function corniceTops(runs, building) {
+  const triangles = mainRoofTriangles(building);
+  const measured = runs.map((run) => {
+    let lowest = Infinity;
+    [0.15, 0.5, 0.85].forEach((t) => {
+      const x = run.start[0] + (run.end[0] - run.start[0]) * t + run.normal[0] * SOFFIT_PROBE_OFFSET;
+      const z = run.start[1] + (run.end[1] - run.start[1]) * t + run.normal[1] * SOFFIT_PROBE_OFFSET;
+      lowest = Math.min(lowest, lowestSurfaceAbove(triangles, x, z, run.baseY + run.wallHeight * 0.5));
+    });
+    return lowest;
+  });
+  const plateKey = (run) => run.plateY.toFixed(4);
+  const byPlate = new Map();
+  runs.forEach((run, i) => byPlate.set(plateKey(run), Math.min(byPlate.get(plateKey(run)) ?? Infinity, measured[i])));
+  return runs.map((run) => Math.min(run.plateY, byPlate.get(plateKey(run)) - CORNICE_SOFFIT_GAP));
+}
+
+/**
+ * The parts of a wall run a course spanning [minY, maxY] (world heights)
+ * keeps once the run's windows and doors (their frames included) are taken
+ * out of it, as [from, to] meters from the run's start.
+ */
+function coursePieces(run, openingRects, minY, maxY) {
+  const cuts = openingRects
+    .filter((rect) => rect.minY < maxY - 1e-6 && rect.maxY > minY + 1e-6)
+    .map((rect) => [rect.from - 0.01, rect.to + 0.01]);
+  return subtractIntervals(run.length, cuts);
+}
+
+/**
+ * Adds the building's trim courses (config.trim, see js/trim.js) along its
+ * footprint wall runs: a water table on the foundation, a belt course at each
+ * floor line, and a cornice (with dentils) under the eaves. Courses break
+ * around windows and doors. Structure walls (porches, dormers, towers) carry
+ * none yet.
+ */
+function withTrim(result, config) {
+  const trim = config.trim && hasTrim(config.trim) ? normalizeTrim(config.trim) : null;
+  const wallRuns = config.facadeLayout?.wallRuns ?? [];
+  if (!trim || wallRuns.length < 3) {
+    return result;
+  }
+  const levelConfig = { ...config, foundationDepth: config.foundationDepth ?? 0.6 };
+  const runs = wallRuns.map((wallRun) => {
+    const baseY = volumeFoundationHeight(wallRun.volumeId, levelConfig);
+    const wallHeight = volumeWallHeight(wallRun.volumeId, config);
+    const length = Math.hypot(wallRun.end[0] - wallRun.start[0], wallRun.end[1] - wallRun.start[1]);
+    return {
+      id: wallRun.id, volumeId: wallRun.volumeId, start: wallRun.start, end: wallRun.end, normal: wallRun.normal, length, baseY, wallHeight, plateY: baseY + wallHeight,
+    };
+  });
+  const openingRects = new Map(runs.map((run) => [run.id, []]));
+  (result.openings ?? []).filter((entry) => entry.resolved && entry.host).forEach(({ resolved, host }) => {
+    const { outer } = openingOutline(resolved);
+    const us = outer.map(([u]) => u);
+    const vs = outer.map(([, v]) => v);
+    const length = openingRects.has(resolved.hostWallRunId) ? runs.find((run) => run.id === resolved.hostWallRunId).length : 0;
+    openingRects.get(resolved.hostWallRunId)?.push({
+      from: Math.min(...us) + length / 2, to: Math.max(...us) + length / 2, minY: host.baseY + Math.min(...vs), maxY: host.baseY + Math.max(...vs),
+    });
+  });
+  const ringFor = (anchorOf, extent) => runs.map((run, i) => {
+    const y = anchorOf(run, i);
+    if (!Number.isFinite(y)) {
+      return { ...run, y: null };
+    }
+    return { ...run, y, pieces: coursePieces(run, openingRects.get(run.id), y + extent.min, y + extent.max) };
+  });
+
+  const material = paletteMaterial(trim.material, 'trim');
+  const addMesh = (kind, triangles) => {
+    if (!triangles.length) {
+      return;
+    }
+    const mesh = new THREE.Mesh(trianglesToGeometry(triangles), material);
+    mesh.userData = { bodyPart: 'trim', trimKind: kind };
+    result.building.add(mesh);
+  };
+
+  if (trim.waterTable.enabled) {
+    const profile = courseProfile('waterTable', trim.waterTable);
+    // no foundation (a slab at grade), no water table
+    addMesh('waterTable', sweepCourse(ringFor((run) => (run.baseY > 0.01 ? run.baseY : null), profileExtent(profile)), profile));
+  }
+  if (trim.beltCourse.enabled) {
+    const profile = courseProfile('beltCourse', trim.beltCourse);
+    const extent = profileExtent(profile);
+    const linesByRun = runs.map((run) => {
+      const { count, height, hasKneeWall } = volumeStories(run.volumeId, config);
+      return floorLines(count, height, hasKneeWall).map((line) => run.baseY + line);
+    });
+    const levels = [...new Set(linesByRun.flat().map((y) => y.toFixed(6)))].map(Number);
+    const triangles = levels.flatMap((level) => sweepCourse(
+      ringFor((run, i) => linesByRun[i].find((y) => Math.abs(y - level) < 1e-5) ?? null, extent),
+      profile
+    ));
+    addMesh('beltCourse', triangles);
+  }
+  if (trim.cornice.enabled) {
+    const profile = courseProfile('cornice', trim.cornice);
+    const tops = corniceTops(runs, result.building);
+    addMesh('cornice', sweepCourse(ringFor((run, i) => tops[i], profileExtent(profile)), profile));
+    if (trim.cornice.dentils) {
+      const size = dentilSize(trim.cornice);
+      const bottoms = tops.map((top) => top - trim.cornice.height);
+      addMesh('dentils', dentilTriangles(ringFor((run, i) => bottoms[i], { min: -size.height, max: 0 }), size));
+    }
+  }
+  return result;
+}
+
+/**
+ * A built building with its roof structures (withRoofStructures), its
+ * windows and doors (withOpenings), its trim courses (withTrim), and its
+ * widow's walks' facade surfaces
+ * (`roofWalks`): a continuous hip's (`skeletonWalks`, already at their
+ * elevation) and each volume's own.
  */
 function withStructuresAndWalks(built, config, skeletonWalks = []) {
   const walks = [...skeletonWalks, ...built.roofZones.filter((zone) => !zone.skeleton).flatMap(zoneWalk)];
-  const result = withRoofStructures(built, config);
+  const result = withTrim(withOpenings(withRoofStructures(built, config), config), config);
   // railings stop at anything standing on the walk
   const standing = result.structureSolids ?? [];
   delete result.structureSolids;
@@ -1498,7 +1766,7 @@ function createBoxWallGeometry(bounds, depth, outline) {
   return geometry;
 }
 
-export function getRoofRun(footprint, roofDirection = 'z', volumes = []) {
+export function getRoofRun(footprint, roofDirection = 'z', volumes = [], roofType) {
   roofDirection = roofAxisForDirection(roofDirection);
   if (volumes.length > 1) {
     if (straightSkeletonBuilder) {
@@ -1513,18 +1781,26 @@ export function getRoofRun(footprint, roofDirection = 'z', volumes = []) {
   }
   const xValues = footprint.map(([x]) => x);
   const zValues = footprint.map(([, z]) => z);
-  const span = roofDirection === 'x'
-    ? Math.max(...zValues) - Math.min(...zValues)
-    : Math.max(...xValues) - Math.min(...xValues);
+  const xHalf = (Math.max(...xValues) - Math.min(...xValues)) / 2;
+  const zHalf = (Math.max(...zValues) - Math.min(...zValues)) / 2;
+  // A hip's four faces only share one pitch when its height is set by the
+  // shorter of the two spans (the one that actually controls the ridge/apex),
+  // whichever axis the ridge direction is configured to run along -- picking
+  // the span across the configured direction alone leaves the hip-end faces
+  // steeper or shallower than the configured pitch whenever that direction
+  // isn't already the footprint's longer axis.
+  const span = roofType === 'hip'
+    ? 2 * Math.min(xHalf, zHalf)
+    : (roofDirection === 'x' ? 2 * zHalf : 2 * xHalf);
   return Math.max(0.01, span / 2);
 }
 
-export function roofHeightFromPitch(footprint, roofDirection, pitchRise, pitchRun = 12, volumes = []) {
-  return (pitchRise / pitchRun) * getRoofRun(footprint, roofDirection, volumes);
+export function roofHeightFromPitch(footprint, roofDirection, pitchRise, pitchRun = 12, volumes = [], roofType) {
+  return (pitchRise / pitchRun) * getRoofRun(footprint, roofDirection, volumes, roofType);
 }
 
-export function roofPitchFromHeight(footprint, roofDirection, roofHeight, pitchRun = 12, volumes = []) {
-  return (roofHeight / getRoofRun(footprint, roofDirection, volumes)) * pitchRun;
+export function roofPitchFromHeight(footprint, roofDirection, roofHeight, pitchRun = 12, volumes = [], roofType) {
+  return (roofHeight / getRoofRun(footprint, roofDirection, volumes, roofType)) * pitchRun;
 }
 
 export function roofPitchDegrees(pitchRise, pitchRun = 12) {
@@ -1548,6 +1824,17 @@ function createRoofGeometry(footprint, config) {
     roofHighEdge,
   };
   const bounds = getRectangularBounds(footprint);
+  if (bounds && config.roofType === 'hip' && !(config.volumes?.length > 1)) {
+    // A hip's four faces only share one pitch when its ridge runs along the
+    // footprint's longer axis -- the configured alignment only picks a side,
+    // not a wrong axis, so a short-axis choice is corrected to the matching
+    // long-axis one rather than left to produce a mismatched pitch.
+    const longAxis = (bounds.maxZ - bounds.minZ) >= (bounds.maxX - bounds.minX) ? 'z' : 'x';
+    if (config.roofDirection !== longAxis) {
+      const side = String(config.roofHighEdge ?? '').endsWith('max') ? 'max' : 'min';
+      config = { ...config, roofDirection: longAxis, roofHighEdge: `${longAxis}-${side}` };
+    }
+  }
   const hasSlopedVolumeRoof = config.volumes?.some((volume) => {
     const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType;
     return roofType === 'gable' || roofType === 'hip' || roofType === 'shed' || isTwoSlope(roofType);
@@ -3638,9 +3925,7 @@ function addFacadePanels(group, footprint, layout, foundationHeight, config) {
     layout.facadePanels.forEach((facadePanel) => {
       const [startX, startZ] = facadePanel.start;
       const [endX, endZ] = facadePanel.end;
-      const edgeLength = Math.hypot(endX - startX, endZ - startZ);
-      const normalX = (endZ - startZ) / edgeLength;
-      const normalZ = -(endX - startX) / edgeLength;
+      const { normal: [normalX, normalZ] } = wallRunFrame(facadePanel.start, facadePanel.end);
       const offset = 0.035;
       const minY = foundationHeight + story.minY + 0.02;
       const maxY = foundationHeight + story.maxY - 0.02;

@@ -221,6 +221,7 @@ Roof-zone test fixtures:
 ### Phase 6 — Facade modifiers
 
 #### Task 6: Windows, doors, and parametric facade openings
+Status: First pass done (footprint walls; `js/openings.js`). Openings are frame-and-pane appliqué on the wall face, not cuts; structure walls are not yet hosts.
 
 Requirements:
 - Place windows and doors on facade panels using story + wall-run addressing.
@@ -229,6 +230,7 @@ Requirements:
 ### Phase 7 — Ornament and trim
 
 #### Task 7: Cornices, water tables, dentils
+Status: First pass done (`js/trim.js`). Building-wide water table, belt courses at floor lines, and a cornice with optional dentils, swept round the footprint walls with mitered corners and broken around windows and doors. The cornice top is measured from the built roof's soffit. Per-wall settings and trim on structure walls are not done yet.
 
 Requirements:
 - Add trim features as surface modifiers on the facade envelope.

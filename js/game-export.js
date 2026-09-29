@@ -14,10 +14,16 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 
 /** The game material for a wall of each Composer palette entry. */
 export const GAME_WALLS = Object.freeze({
-  brick: 'brick_red', wood: 'siding_white', stucco: 'siding_butter', metal: 'roof_metal', stone: 'limestone',
+  brick: 'brick_red', wood: 'siding_white', stucco: 'siding_butter', metal: 'roof_metal', stone: 'limestone', paint: 'siding_white',
 });
 /** ...and for a roof of each (a roof with no choice is shingled). */
 export const GAME_ROOFS = Object.freeze({ metal: 'roof_metal', wood: 'shingles_brown' });
+// Placeholder names, same as GAME_WALLS/GAME_ROOFS: confirm against the
+// Dixon game's actual material vocabulary before relying on this export.
+export const GAME_DOORS = Object.freeze({
+  brick: 'brick_red', wood: 'door_wood', stucco: 'siding_butter', metal: 'roof_metal', stone: 'limestone',
+});
+const GLASS = 'glass_clear';
 const SHINGLES = 'shingles_dark';
 const MEMBRANE = 'roof_membrane';
 const FOUNDATION = 'stone_foundation';
@@ -49,6 +55,12 @@ export function gameMaterial({ role, palette, part }, normal) {
       return palette === 'metal' ? GAME_ROOFS.metal : MEMBRANE;
     }
     return GAME_ROOFS[palette] ?? SHINGLES;
+  }
+  if (role === 'glass') {
+    return GLASS;
+  }
+  if (role === 'door') {
+    return GAME_DOORS[palette] ?? GAME_DOORS.wood;
   }
   return GAME_WALLS[palette] ?? GAME_WALLS.wood;
 }

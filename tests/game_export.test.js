@@ -88,4 +88,12 @@ describe('the file for the game', () => {
     assert.equal(gameMaterial({ role: 'roof' }, [0, -1, 0]), 'siding_white');
     assert.equal(gameMaterial({ role: 'roof', part: 'floor' }, [0, 1, 0]), 'trim_dark');
   });
+
+  it('maps a window/door opening: glazing regardless of palette, a door by its own palette', () => {
+    assert.equal(gameMaterial({ role: 'glass' }, [1, 0, 0]), 'glass_clear');
+    assert.equal(gameMaterial({ role: 'glass', palette: 'glass' }, [0, 1, 0]), 'glass_clear');
+    assert.equal(gameMaterial({ role: 'door', palette: 'wood' }, [1, 0, 0]), 'door_wood');
+    assert.equal(gameMaterial({ role: 'door', palette: 'brick' }, [1, 0, 0]), 'brick_red');
+    assert.equal(gameMaterial({ role: 'door' }, [1, 0, 0]), 'door_wood', 'no palette falls back to wood');
+  });
 });

@@ -98,3 +98,50 @@ describe('cutting a footprint into volumes that follow its massing', () => {
     assert.deepEqual(warnings, [], 'volume-1 exists in the Z bands');
   });
 });
+
+describe('windows and doors round-trip through save/load', () => {
+  const layout = computeFacadeLayout(sampleFootprint, {});
+
+  it('a saved project keeps its openings, addressed by wall run id', () => {
+    const modelConfig = { openings: [{ hostWallRunId: 'wall-run-0', kind: 'window', offset: 1 }] };
+    const saved = serializeBuildingState(layout, modelConfig);
+    assert.equal(saved.openings.length, 1);
+    const { state } = deserializeBuildingState(saved);
+    assert.equal(state.openings.length, 1);
+    assert.equal(state.openings[0].hostWallRunId, 'wall-run-0');
+    assert.equal(state.openings[0].offset, 1);
+  });
+
+  it('drops an opening whose host wall no longer exists, with a warning, rather than reattaching it', () => {
+    const file = {
+      format: 'building-composer',
+      version: 1,
+      footprint: sampleFootprint,
+      openings: [
+        { hostWallRunId: 'wall-run-0', kind: 'window' },
+        { hostWallRunId: 'wall-run-99', kind: 'door' },
+      ],
+    };
+    const { state, warnings } = deserializeBuildingState(file);
+    assert.equal(state.openings.length, 1);
+    assert.equal(state.openings[0].hostWallRunId, 'wall-run-0');
+    assert.ok(warnings.some((w) => w.includes('wall-run-99')));
+  });
+
+  it('keeps its trim courses, and an older file loads with every course off', () => {
+    const trim = { material: 'stone', cornice: { enabled: true, height: 0.4, projection: 0.25, dentils: true } };
+    const { state } = deserializeBuildingState(serializeBuildingState(layout, { trim }));
+    assert.equal(state.trim.material, 'stone');
+    assert.deepEqual(state.trim.cornice, { enabled: true, height: 0.4, projection: 0.25, dentils: true });
+    assert.equal(state.trim.waterTable.enabled, false);
+    const old = deserializeBuildingState({ format: 'building-composer', version: 1, footprint: sampleFootprint }).state;
+    assert.equal(['waterTable', 'beltCourse', 'cornice'].some((kind) => old.trim[kind].enabled), false);
+  });
+
+  it('an old file with no openings key loads with an empty list, not an error', () => {
+    const file = { format: 'building-composer', version: 1, footprint: sampleFootprint };
+    const { state, valid } = deserializeBuildingState(file);
+    assert.equal(valid, true);
+    assert.deepEqual(state.openings, []);
+  });
+});

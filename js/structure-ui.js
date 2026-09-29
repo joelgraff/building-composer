@@ -168,14 +168,23 @@ export function wallNames(front = 'maxZ') {
   };
 }
 
-export function structureLabel(structure, front = 'maxZ') {
+/**
+ * A structure's label: what kind of roof it makes, and where it stands. The
+ * host mass is left off (`withHost: false`) where it's already shown by
+ * context, such as the scope control listing structures grouped under it.
+ */
+export function structureLabel(structure, front = 'maxZ', { withHost = true } = {}) {
   const polygon = structure.baseHeight === 'ground' || structure.baseHeight === undefined ? 'Tower' : 'Turret';
   const plan = { canted: 'Canted bay', polygon }[structure.plan?.shape];
   const roof = plan ?? (['dormer', 'wall-dormer'].includes(structure.kind) && structure.roofType !== 'gable'
     ? `${structure.roofType[0].toUpperCase()}${structure.roofType.slice(1)} ${KIND_LABELS[structure.kind].toLowerCase()}`
     : KIND_LABELS[structure.kind] ?? structure.kind);
+  const side = wallNames(front)[structure.hostSide] ?? structure.hostSide;
+  if (!withHost) {
+    return structure.hostStructureId ? `${roof}, on ${structure.hostStructureId}` : `${roof}, ${side}`;
+  }
   const host = structure.hostStructureId
     ? `on ${structure.hostStructureId}`
-    : `${(structure.hostVolumeId ?? '').replace('-', ' ')}, ${wallNames(front)[structure.hostSide] ?? structure.hostSide}`;
+    : `${(structure.hostVolumeId ?? '').replace('-', ' ')}, ${side}`;
   return `${roof} · ${host}`;
 }

@@ -1,6 +1,8 @@
 import { normalizeRoofStructures } from './roof-structures.js';
 import { hasAngledWalls, rectilinearHull, cutVolumes, cutDistance } from './angled-walls.js';
 import { cutRole } from './cut-roofs.js';
+import { normalizeOpenings } from './openings.js';
+import { normalizeTrim } from './trim.js';
 
 /**
  * Facade subdivision helpers for Task 3.
@@ -82,6 +84,7 @@ export function computeFacadeLayout(footprint, config = {}) {
     const edgeData = roofGraph.edges[index];
     return {
       ...wallRun,
+      ...wallRunFrame(wallRun.start, wallRun.end),
       orientation: edgeData?.orientation ?? 'horizontal',
       role: edgeData?.role ?? 'flat',
       pitchRise: edgeData?.pitchRise ?? 0,
@@ -391,6 +394,21 @@ function interpolatePoint(start, end, amount) {
 }
 
 /**
+ * A footprint edge's own local frame: `right`, the unit vector from `start`
+ * toward `end` (the wall's own "u" axis), and `normal`, the outward unit
+ * vector (its "v"-facing direction) — rotating `right` -90°, which is
+ * outward for a footprint's own CCW winding (already guaranteed by
+ * normalizeFootprint/validateFootprint, unlike an arbitrary edge, so this
+ * needs no "inside point" the way roof-structures.js's edgeFrame/wallFrame do).
+ */
+export function wallRunFrame(start, end) {
+  const length = computeSegmentLength(start, end) || 1;
+  const right = [(end[0] - start[0]) / length, (end[1] - start[1]) / length];
+  const normal = [right[1], -right[0]];
+  return { right, normal };
+}
+
+/**
  * Maps direction string to primary ridge axis.
  *
  * @param {string} direction
@@ -653,6 +671,8 @@ export function serializeBuildingState(layout, modelConfig) {
     roofUpperPitchRise: modelConfig.roofUpperPitchRise,
     roofWalkHeight: modelConfig.roofWalkHeight,
     roofStructures: modelConfig.roofStructures ?? [],
+    openings: modelConfig.openings ?? [],
+    trim: normalizeTrim(modelConfig.trim),
     // where the footprint came from, to put the building back (see import.js)
     placement: modelConfig.placement ?? null,
     // the side the building fronts (walls are named from it)
@@ -717,6 +737,18 @@ export function deserializeBuildingState(data) {
     roofStructures = kept;
   }
 
+  // A footprint wall run's id is purely positional ('wall-run-<index>'), so
+  // the valid set is cheap to recompute from the footprint alone — one per
+  // edge, the same count computeFacadeLayout's own wallRuns would produce.
+  const wallRunIds = new Set(data.footprint.map((_, index) => `wall-run-${index}`));
+  const openings = normalizeOpenings(Array.isArray(data.openings) ? data.openings : []).filter((opening) => {
+    const hostOk = wallRunIds.has(opening.hostWallRunId);
+    if (!hostOk) {
+      warnings.push(`Dropped ${opening.kind} ${opening.id}: host wall ${opening.hostWallRunId} does not exist.`);
+    }
+    return hostOk;
+  });
+
   return {
     valid: true,
     warnings,
@@ -760,6 +792,9 @@ export function deserializeBuildingState(data) {
       // a hip roof's widow's walk (its flat top), if any; older files called it a deck
       roofWalkHeight: [data.roofWalkHeight, data.roofDeckHeight].find(Number.isFinite),
       roofStructures,
+      openings,
+      // trim courses; an older file has none, so every course is off
+      trim: normalizeTrim(data.trim),
       placement: data.placement && typeof data.placement === 'object' ? data.placement : undefined,
       frontSide: ['minX', 'maxX', 'minZ', 'maxZ'].includes(data.frontSide) ? data.frontSide : 'maxZ',
     },
