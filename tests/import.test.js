@@ -111,4 +111,11 @@ describe('hints from the game', () => {
     const plain = serializeBuildingState(computeFacadeLayout(footprint, {}), {});
     assert.equal(deserializeBuildingState(plain).state.placement, undefined);
   });
+
+  it('takes the building\'s front from the export, when it has one', () => {
+    // the house is turned 3.4 degrees; its street is to the south (+z in the game)
+    assert.equal(importDixonFootprint({ ...DIXON, front: [0, 1] }).settings.frontSide, 'maxZ');
+    assert.equal(importDixonFootprint({ ...DIXON, front: 90 }).settings.frontSide, 'maxX', 'a bearing: east');
+    assert.equal(importDixonFootprint(DIXON).settings.frontSide, undefined);
+  });
 });

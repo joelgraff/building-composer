@@ -1083,6 +1083,8 @@ function openPayload(payload) {
       return;
     }
     Object.assign(modelConfig, imported.settings, { placement: imported.placement });
+    frontSelect.value = modelConfig.frontSide;
+    nameSideControls();
     storyCountInput.value = modelConfig.storyCount;
     wallMaterialSelect.value = modelConfig.wallMaterial;
     roofTypeSelect.value = modelConfig.roofType;
@@ -1678,7 +1680,7 @@ const PLACEMENT_EDGE_MARGIN = 0.02;
  * structure, since it depends only on roof type and orientation, not offset.
  */
 function structureAlongOverhang(structure, frame) {
-  if (structure.roofType === 'flat') {
+  if (structure.roofType === 'flat' || structure.roofType === 'none') {
     return 0;
   }
   const ridgeAxis = structure.roofType === 'shed' || structure.ridge === 'parallel' ? frame.along : frame.inward;
@@ -2156,7 +2158,7 @@ function structureLevels(structure) {
     return null;
   }
   const roofRise = entry.resolved
-    ? (entry.resolved.roofType === 'flat' ? 0.08 : entry.resolved.roofHeight ?? 0)
+    ? ({ flat: 0.08, none: 0 }[entry.resolved.roofType] ?? entry.resolved.roofHeight ?? 0)
     : 0;
   const volumeId = structure.hostVolumeId;
   const storyHeight = modelConfig.volumeStoryHeights?.[volumeId] ?? modelConfig.storyHeight;
@@ -2292,16 +2294,19 @@ function structureEditorHtml(structure) {
     // a tower's roof is a pyramid (a cone when round): only its pitch is a choice
     roof.push(numberField('Roof pitch (rise per 12; empty for the building\'s)', 'pitch', structure.roofShape?.mode === 'slope' ? structure.roofShape.pitchRise : null, { length: false, step: 1, placeholder: 'building' }));
   } else if (!recess) {
-    // a wraparound turns its corner on a hip or shed roof
+    // a wraparound turns its corner on a hip or shed roof; a canted bay takes
+    // a hip, a flat roof, or none (tucked under the eave)
     const roofOptions = type === 'wraparound-porch'
       ? STRUCTURE_ROOF_OPTIONS.filter(([key]) => key === 'hip' || key === 'shed')
-      : STRUCTURE_ROOF_OPTIONS;
+      : type === 'canted-bay'
+        ? [...STRUCTURE_ROOF_OPTIONS.filter(([key]) => key === 'hip' || key === 'flat'), ['none', 'None (tucked under the eave)']]
+        : STRUCTURE_ROOF_OPTIONS;
     roof.push(selectField('Roof', 'roofType', roofOptions, structure.roofType));
-    // a dormer's ridge always runs into the roof
-    if ((through || standing) && (structure.roofType === 'gable' || structure.roofType === 'hip')) {
+    // a dormer's ridge always runs into the roof; a bay's roof rises from its outer walls
+    if ((through || standing) && type !== 'canted-bay' && (structure.roofType === 'gable' || structure.roofType === 'hip')) {
       roof.push(selectField('Ridge', 'ridge', [['perpendicular', 'Runs into the roof'], ['parallel', 'Runs along the side']], structure.ridge));
     }
-    if (structure.roofType !== 'flat') {
+    if (structure.roofType !== 'flat' && structure.roofType !== 'none') {
       roof.push(numberField('Roof pitch (rise per 12; empty for the building\'s)', 'pitch', structure.roofShape?.mode === 'slope' ? structure.roofShape.pitchRise : null, { length: false, step: 1, placeholder: 'building' }));
     }
   }

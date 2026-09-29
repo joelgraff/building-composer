@@ -272,9 +272,31 @@ export function importDixonFootprint(payload) {
       center: squared.center,
       groundY: Number.isFinite(payload.ground_y_min) ? payload.ground_y_min : null,
     },
-    settings: settingsFromHints(payload.hints ?? {}, payload),
+    settings: { ...settingsFromHints(payload.hints ?? {}, payload), ...frontFrom(payload.front, squared.rotation) },
     warnings,
   };
+}
+
+/**
+ * The side of the squared footprint a Dixon export's `front` faces: the
+ * street-facing direction in game space, as an [x, z] vector (x east, z
+ * south) or a bearing in degrees clockwise from north. Nothing when the
+ * export has none.
+ */
+function frontFrom(front, rotation) {
+  let vector = null;
+  if (Array.isArray(front) && front.length === 2 && front.every(Number.isFinite) && Math.hypot(...front) > EPSILON) {
+    vector = front;
+  } else if (Number.isFinite(front)) {
+    const bearing = (front * Math.PI) / 180;
+    vector = [Math.sin(bearing), -Math.cos(bearing)];
+  }
+  if (!vector) {
+    return {};
+  }
+  // into Composer's frame, which is the game's turned back by the rotation
+  const [x, z] = rotate(vector, -rotation);
+  return { frontSide: Math.abs(x) > Math.abs(z) ? (x > 0 ? 'maxX' : 'minX') : (z > 0 ? 'maxZ' : 'minZ') };
 }
 
 /**

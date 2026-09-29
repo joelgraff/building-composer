@@ -52,6 +52,17 @@ describe('canted bays', () => {
     assertWatertight(result, 'canted bay');
   });
 
+  it('can have no roof of its own, tucked under the eave, closed flat at its plate', () => {
+    const { result } = build([bay({ roofType: 'none', wallHeight: 5.6 })]);
+    const [{ resolved, errors }] = result.roofStructures;
+    assert.deepEqual(errors, []);
+    assert.equal(resolved.roofHeight, 0);
+    assertWatertight(result, 'roofless bay');
+    // only a canted bay goes without a roof
+    const porch = { ...bay(), plan: null, roofType: 'none' };
+    assert.deepEqual(build([porch]).result.roofStructures[0].errors.map((e) => e.code), ['roof-none']);
+  });
+
   it('can be an oriel on the upper story, with no support', () => {
     const { result } = build([bay({ offset: 2, width: 2.4, setback: -0.8, depth: 0.8, baseHeight: -3, wallHeight: 2.4, support: 'none' })]);
     const [{ resolved, errors }] = result.roofStructures;

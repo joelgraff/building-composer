@@ -447,7 +447,9 @@ function plannedParts(resolved, host, config, materials, {
   const center = [outline.reduce((sum, [x]) => sum + x, 0) / count, outline.reduce((sum, [, z]) => sum + z, 0) / count];
   const edges = outline.map((point, i) => [point, outline[(i + 1) % count]]);
   const structureMaterials = materialsFor(resolved, materials);
-  const top = resolved.roofType === 'flat' ? plateY + resolved.slabThickness : null;
+  // a bay with no roof of its own (tucked under the eave) is closed flat at its plate
+  const roofless = resolved.roofType === 'none';
+  const top = resolved.roofType === 'flat' ? plateY + resolved.slabThickness : roofless ? plateY : null;
 
   // walls on each edge, from low enough to meet the host up to the roof
   const bottomY = Math.min(sillY, resolved.standing ? host.wallTopY : host.baseY);
@@ -487,7 +489,9 @@ function plannedParts(resolved, host, config, materials, {
   });
   const fascia = eaves.fasciaDepth ?? 0;
   let roof;
-  if (top !== null) {
+  if (roofless) {
+    roof = polygonsToTriangles([outline.map(([x, z]) => [x, plateY, z])]);
+  } else if (top !== null) {
     // a flat slab over the outline carried out
     const sides = outer.map((point, i) => {
       const next = outer[(i + 1) % count];

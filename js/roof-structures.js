@@ -252,7 +252,8 @@ export const STRUCTURE_SUPPORTS = ['auto', 'none', 'deck', 'posts', 'porch', 'br
 /** Brackets carry only a shallow projection. */
 export const MAX_BRACKET_PROJECTION = 1.5;
 const SIDES = ['minX', 'maxX', 'minZ', 'maxZ'];
-const ROOF_TYPES = ['flat', 'gable', 'hip', 'shed'];
+// 'none': a canted bay tucked under the host eave, with no roof of its own
+const ROOF_TYPES = ['flat', 'gable', 'hip', 'shed', 'none'];
 const GEOMETRY_EPSILON = 1e-6;
 /** How near a wraparound's end must be to the corner, and its depth to its projection. */
 const WRAP_TOLERANCE = 1e-3;
@@ -785,6 +786,9 @@ function resolveStructureOnce(structure, host, config = {}) {
 
   // The structure's own roof.
   const { roofType } = structure;
+  if (roofType === 'none') {
+    return fail('roof-none', 'Only a canted bay can go without a roof of its own (tucked under the eave).');
+  }
   // a dormer's ridge always runs into the roof, square to the host ridge
   const ridgeAxis = roofType === 'shed' || (structure.ridge === 'parallel' && (standing || through)) ? frame.along : frame.inward;
   const roofHighEdge = roofType === 'shed' ? `${frame.inward}-${frame.sign > 0 ? 'max' : 'min'}` : undefined;
@@ -1050,8 +1054,8 @@ function resolvePlanned(structure, host, {
   if (structure.baseHeight === null && !through) {
     return fail('plan-needs-base', 'A canted or polygonal structure stands on a base or rises through the roof; a dormer is rectangular.');
   }
-  if (!['hip', 'flat'].includes(structure.roofType)) {
-    return fail('plan-roof', 'A canted or polygonal structure takes a hip (or cone) or a flat roof.');
+  if (!['hip', 'flat'].includes(structure.roofType) && !(structure.roofType === 'none' && structure.plan.shape === 'canted')) {
+    return fail('plan-roof', 'A canted or polygonal structure takes a hip (or cone) or a flat roof; a canted bay may have none, tucked under the eave.');
   }
   const at = (a, i) => pointOn(frame, a, i);
   const [a0, a1] = along;
