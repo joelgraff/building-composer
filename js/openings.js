@@ -26,6 +26,13 @@ export const FRAME_DEPTH = 0.08;
 export const PANE_RECESS = 0.03;
 /** A door's sill is a threshold, not a window ledge: it stays near the floor. */
 export const DOOR_SILL_MAX = 0.15;
+/** Entry steps: the riser they aim for, each tread's depth, the landing at the door, and how far past the frame they run each side. */
+export const STEP_RISER = 0.18;
+export const STEP_TREAD = 0.28;
+export const STEP_LANDING = 0.9;
+export const STEP_SIDE_MARGIN = 0.15;
+/** A threshold lower than this above grade needs no steps. */
+export const STEP_MIN_RISE = 0.05;
 
 const finite = (value, fallback) => (Number.isFinite(value) ? value : fallback);
 const plainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {});
@@ -43,6 +50,8 @@ const plainObject = (value) => (value && typeof value === 'object' && !Array.isA
  * - `sillHeight`: the opening's bottom above the wall's floor line. A
  *   window's is a free height; a door's is clamped to a small threshold
  *   range (DOOR_SILL_MAX) rather than left editable like a window ledge.
+ * - `steps` (a door's only): whether a flight of steps runs from its
+ *   threshold down to grade (on by default; built only on footprint walls).
  *
  * @returns {object|null}
  */
@@ -65,6 +74,7 @@ export function normalizeOpening(raw) {
     height: Math.max(MIN_OPENING_SIZE, finite(raw.height, preset.height)),
     sillHeight: kind === 'door' ? Math.min(DOOR_SILL_MAX, sillHeight) : sillHeight,
     materials: plainObject(raw.materials),
+    ...(kind === 'door' ? { steps: raw.steps !== false } : {}),
   };
 }
 
@@ -346,4 +356,33 @@ export function shapeLimit(opening, host, field, from, to) {
     }
   }
   return good;
+}
+
+/**
+ * A flight of entry steps from a door's threshold, `rise` above grade, down
+ * to the ground: even risers near STEP_RISER, STEP_TREAD treads, and a
+ * STEP_LANDING landing at the door. `profile` is the flight's side outline as
+ * [out, up] points — out from the wall face, up from grade — which is swept
+ * across the door's width. Null when the threshold is at grade.
+ */
+export function stepFlight(rise) {
+  if (!(rise >= STEP_MIN_RISE)) {
+    return null;
+  }
+  const count = Math.max(1, Math.round(rise / STEP_RISER));
+  const riser = rise / count;
+  const depth = STEP_LANDING + (count - 1) * STEP_TREAD;
+  const profile = [[0, 0], [depth, 0]];
+  for (let k = 1; k <= count; k += 1) {
+    const out = depth - (k - 1) * STEP_TREAD;
+    profile.push([out, k * riser]);
+    if (k < count) {
+      profile.push([out - STEP_TREAD, k * riser]);
+    }
+  }
+  profile[profile.length - 1] = [STEP_LANDING, rise];
+  profile.push([0, rise]);
+  return {
+    count, riser, depth, profile,
+  };
 }

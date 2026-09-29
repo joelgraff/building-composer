@@ -238,6 +238,7 @@ Requirements:
 ### Phase 8 — Footprint modifiers
 
 #### Task 8: Steps, window wells, stoops
+Status: Entry steps done: a door in the house's walls whose threshold is above grade gets a flight down to the ground (even risers, a landing at the door), part of the door record and switchable per door. Window wells and freestanding stoops are not done yet.
 
 Requirements:
 - Add non-functional plan extensions that share the footprint boundary.

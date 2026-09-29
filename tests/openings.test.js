@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  normalizeOpening, normalizeOpenings, createOpening, resolveOpening, openingOutline, structureOpeningHost, rectInShape, fitOpening, shapeLimit,
+  normalizeOpening, normalizeOpenings, createOpening, resolveOpening, openingOutline, structureOpeningHost, rectInShape, fitOpening, shapeLimit, stepFlight,
+  STEP_TREAD, STEP_LANDING, STEP_SIDE_MARGIN,
   OPENING_PRESETS, FRAME_CASING_WIDTH, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
 } from '../js/openings.js';
 import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState } from '../js/facade.js';
@@ -263,5 +264,70 @@ describe('windows on a roof structure\'s own walls', () => {
     const withoutDormer = deserializeBuildingState({ ...saved, roofStructures: [] });
     assert.equal(withoutDormer.state.openings.length, 0);
     assert.ok(withoutDormer.warnings.some((w) => w.includes(face.id)));
+  });
+});
+
+describe('entry steps', () => {
+  it('a door has steps unless turned off; a window never does', () => {
+    assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door' }).steps, true);
+    assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door', steps: false }).steps, false);
+    assert.equal('steps' in normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'window', steps: true }), false);
+  });
+
+  it('divides the rise into even risers near 18 cm, with a landing at the door', () => {
+    const flight = stepFlight(0.7);
+    assert.equal(flight.count, 4);
+    assert.ok(Math.abs(flight.riser - 0.175) < 1e-9);
+    assert.ok(Math.abs(flight.depth - (STEP_LANDING + 3 * STEP_TREAD)) < 1e-9);
+    // each riser climbs one step toward the wall: out decreases as up increases
+    const tops = flight.profile.filter(([, up]) => up > 0);
+    assert.deepEqual(tops.at(-1), [0, 0.7]);
+    assert.deepEqual(tops.at(-2), [STEP_LANDING, 0.7]);
+    assert.equal(stepFlight(0.02), null, 'a threshold at grade needs none');
+    assert.equal(stepFlight(0.1).count, 1);
+  });
+
+  const footprint = [[-5, -4], [5, -4], [5, 4], [-5, 4]];
+  const build = (openings, extra = {}) => {
+    const layout = computeFacadeLayout(footprint, {});
+    return createBuildingFromFootprint(footprint, {
+      storyCount: 1, storyHeight: 3, foundationDepth: 0.7, roofType: 'gable', roofDirection: 'x', roofHeight: 2,
+      volumes: layout.volumes, facadeLayout: layout, openings: normalizeOpenings(openings), ...extra,
+    });
+  };
+  const stepsOf = (built) => {
+    const found = [];
+    built.building.updateMatrixWorld(true);
+    built.building.traverse((mesh) => {
+      if (mesh.userData?.bodyPart === 'opening-steps') {
+        mesh.geometry.computeBoundingBox();
+        const box = mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
+        found.push({ mesh, box });
+      }
+    });
+    return found;
+  };
+
+  it('runs from a house door\'s threshold straight out and down to grade, in the foundation\'s material', () => {
+    const [{ mesh, box }] = stepsOf(build([{ kind: 'door', hostWallRunId: 'wall-run-0', offset: 1 }]));
+    // wall-run-0 is the z = -4 wall, facing -z
+    assert.ok(Math.abs(box.max.z - -4) < 1e-6 && Math.abs(box.min.z - (-4 - stepFlight(0.7).depth)) < 1e-6);
+    assert.ok(Math.abs(box.min.y) < 1e-6 && Math.abs(box.max.y - 0.7) < 1e-6);
+    const halfWidth = 0.9 / 2 + FRAME_CASING_WIDTH + STEP_SIDE_MARGIN;
+    assert.ok(Math.abs(box.min.x - (1 - halfWidth)) < 1e-6 && Math.abs(box.max.x - (1 + halfWidth)) < 1e-6);
+    assert.equal(mesh.material.userData.role, 'foundation');
+  });
+
+  it('builds none when turned off, at grade, or for a window', () => {
+    assert.equal(stepsOf(build([{ kind: 'door', hostWallRunId: 'wall-run-0', steps: false }])).length, 0);
+    assert.equal(stepsOf(build([{ kind: 'door', hostWallRunId: 'wall-run-0' }], { foundationDepth: 0 })).length, 0);
+    assert.equal(stepsOf(build([{ kind: 'window', hostWallRunId: 'wall-run-0' }])).length, 0);
+  });
+
+  it('saves whether a door has steps', () => {
+    const layout = computeFacadeLayout(footprint, {});
+    const openings = normalizeOpenings([{ kind: 'door', hostWallRunId: 'wall-run-0', steps: false }, { kind: 'door', hostWallRunId: 'wall-run-1', offset: 2 }]);
+    const { state } = deserializeBuildingState(serializeBuildingState(layout, { openings }));
+    assert.deepEqual(state.openings.map((opening) => opening.steps), [false, true]);
   });
 });

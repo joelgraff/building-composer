@@ -6,7 +6,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { createMaterials, MATERIAL_PALETTE, paletteMaterial, glazingMaterial } from './materials.js';
 import { roofAxisForDirection, findVolumeAdjacencies, wallRunFrame } from './facade.js';
 import {
-  resolveOpening, openingOutline, structureOpeningHost, FRAME_DEPTH, PANE_RECESS,
+  resolveOpening, openingOutline, structureOpeningHost, stepFlight, FRAME_DEPTH, PANE_RECESS, FRAME_CASING_WIDTH, STEP_SIDE_MARGIN,
 } from './openings.js';
 import {
   normalizeTrim, hasTrim, courseProfile, profileExtent, subtractIntervals, sweepCourse, dentilSize, dentilTriangles, floorLines,
@@ -213,7 +213,7 @@ const OPENING_OUTWARD_NUDGE = 0.01;
  * comment for why). Built in the wall's own (u, v, depth) frame, then
  * oriented into world space.
  */
-function buildOpeningMeshes(resolved, materials, glazing) {
+function buildOpeningMeshes(resolved, materials, glazing, flight = null) {
   const { outer, inner } = openingOutline(resolved);
   const frameShape = new THREE.Shape(outer.map(([u, v]) => new THREE.Vector2(u, v)));
   frameShape.holes.push(new THREE.Path(inner.map(([u, v]) => new THREE.Vector2(u, v))));
@@ -241,6 +241,9 @@ function buildOpeningMeshes(resolved, materials, glazing) {
 
   const group = new THREE.Group();
   group.add(frameMesh, paneMesh);
+  if (flight) {
+    group.add(buildDoorSteps(resolved, flight, materials.foundation));
+  }
 
   const {
     start, end, normal, baseY, right,
@@ -254,6 +257,31 @@ function buildOpeningMeshes(resolved, materials, glazing) {
   );
   group.userData = { openingId: resolved.id, bodyPart: 'opening' };
   return group;
+}
+
+/**
+ * A door's entry steps (see stepFlight in js/openings.js), in the door's own
+ * frame: the flight's side profile, extruded across the door's width plus a
+ * margin each side, turned so its "out" runs from the wall face outward (the
+ * frame's local -Z, see buildOpeningMeshes) and its foot sits at grade.
+ */
+function buildDoorSteps(resolved, flight, material) {
+  const shape = new THREE.Shape(flight.profile.map(([out, up]) => new THREE.Vector2(out, up)));
+  const halfWidth = (resolved.u1 - resolved.u0) / 2 + FRAME_CASING_WIDTH + STEP_SIDE_MARGIN;
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: halfWidth * 2, bevelEnabled: false, steps: 1, curveSegments: 1,
+  });
+  // shape x (out) -> local -z, shape y (up) -> local y, extrusion z -> local x
+  const u0 = (resolved.u0 + resolved.u1) / 2 - halfWidth;
+  geometry.applyMatrix4(new THREE.Matrix4().set(
+    0, 0, 1, u0,
+    0, 1, 0, -resolved.frame.baseY,
+    -1, 0, 0, OPENING_OUTWARD_NUDGE,
+    0, 0, 0, 1
+  ));
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData = { openingId: resolved.id, bodyPart: 'opening-steps' };
+  return mesh;
 }
 
 /**
@@ -283,7 +311,9 @@ function withOpenings(result, config) {
     } : structureWall && structureOpeningHost(structureWall);
     const { resolved, errors, warnings } = resolveOpening(opening, host, { siblings: openings, stories });
     if (resolved) {
-      result.building.add(buildOpeningMeshes(resolved, materials, glazing));
+      // steps down to grade from a door in the house's own walls (a door on a structure's wall opens onto its floor or roof)
+      const flight = opening.kind === 'door' && opening.steps !== false && wallRun ? stepFlight(host.baseY + resolved.sillHeight) : null;
+      result.building.add(buildOpeningMeshes(resolved, materials, glazing, flight));
     }
     return {
       id: opening.id, opening, host, resolved, errors, warnings,

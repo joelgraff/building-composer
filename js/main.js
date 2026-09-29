@@ -1213,8 +1213,12 @@ function openingEditorHtml(opening) {
   if (opening.kind === 'door') {
     materials.push(selectField('Door material', 'panelMaterial', MATERIAL_OPTIONS, opening.materials?.panel ?? ''));
   }
+  // steps are built only from a door in the house's own walls (see withOpenings)
+  const onHouseWall = activeLayout?.wallRuns.some((run) => run.id === opening.hostWallRunId);
+  const entryFields = opening.kind === 'door' && onHouseWall ? [checkField('Steps down to the ground', 'steps', opening.steps !== false)] : [];
   return `<div class="structure-editor-head"><span>Editing ${escapeHtml(opening.id)}</span></div>${errorBanner}`
     + fieldGroup('Placement', placement)
+    + fieldGroup('Entry', entryFields)
     + fieldGroup('Materials', materials);
 }
 
@@ -1259,6 +1263,7 @@ function applyOpeningFieldEdit(input) {
     }
     case 'frameMaterial': edited.materials.frame = input.value || undefined; break;
     case 'panelMaterial': edited.materials.panel = input.value || undefined; break;
+    case 'steps': edited.steps = input.checked; break;
     default: return;
   }
   rebuildWithOpenings(modelConfig.openings.map((opening) => (opening.id === record.id ? edited : opening)));
