@@ -1597,13 +1597,23 @@ export function structureFloorPolygon(resolved) {
   ];
 }
 
+/** A stud wall's typical thickness, shown at an otherwise knife-edge wall end (e.g. a recess's open jambs); see `structureRecess`. */
+export const WALL_END_CAP_DEPTH = 0.1524; // six inches
+
 /**
  * The recess an inset leaves at the front of a structure: its plan rectangle
  * (front line to inner line, across the structure's width), its floor at the
- * sill, and the inner wall across its back, from the sill up to the roof.
- * Null without an inset.
+ * sill, the inner wall across its back, from the sill up to the roof, and
+ * the two open jambs where the side walls are cut off at the front line.
+ * Without this, a jamb is a bare knife-edge, the wall plane simply ending in
+ * open air; `jambs` gives each one a short return face `WALL_END_CAP_DEPTH`
+ * deep, standing the wall's thickness the way a real stud wall would show it
+ * in the opening. Null without an inset.
  *
- * @returns {{ plan: Array<[number, number]>, floor: Array<[number, number, number]>, innerWall: Array<[number, number, number]> } | null}
+ * @returns {{
+ *   plan: Array<[number, number]>, floor: Array<[number, number, number]>,
+ *   innerWall: Array<[number, number, number]>, jambs: Array<Array<[number, number, number]>>,
+ * } | null}
  */
 export function structureRecess(resolved) {
   if (!(resolved.inset > GEOMETRY_EPSILON)) {
@@ -1621,10 +1631,29 @@ export function structureRecess(resolved) {
     const [x, z] = [p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t];
     return [x, plateY + height + top, z];
   });
+  // A side wall's top follows the roof along whichever axis it runs (its own
+  // face doesn't move along the other axis), so the jamb's height is the
+  // same at both its ends: no need to interpolate across its own thin depth.
+  const heightAt = (along) => {
+    const [x, z] = at(along, front);
+    const faceHeight = roofPlanes.length ? evalZoneHeight(roofPlanes, x, z) : top;
+    return plateY + faceHeight;
+  };
+  // Capped at half the recess width so the two jambs (one from each end,
+  // extending toward the middle) can never overlap on a narrow recess.
+  const capDepth = Math.min(WALL_END_CAP_DEPTH, Math.abs(a1 - a0) / 2);
+  const jamb = (edgeAlong, towardCenter) => {
+    const h = heightAt(edgeAlong);
+    const [x0, z0] = at(edgeAlong, front);
+    const [x1, z1] = at(edgeAlong + towardCenter * capDepth, front);
+    return [[x0, sillY, z0], [x1, sillY, z1], [x1, h, z1], [x0, h, z0]];
+  };
+  const jambs = capDepth > GEOMETRY_EPSILON ? [jamb(a0, 1), jamb(a1, -1)] : [];
   return {
     plan,
     floor: plan.map(([x, z]) => [x, sillY, z]),
     innerWall: [[p0[0], sillY, p0[1]], [p1[0], sillY, p1[1]], ...profile],
+    jambs,
   };
 }
 

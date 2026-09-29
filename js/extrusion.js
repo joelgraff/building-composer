@@ -398,7 +398,7 @@ function withRoofStructures(result, config) {
     result.structureFacades.push(structureFacade(resolved, wallFaces, skirts, [hostBody, ...others]));
     const structureMaterials = materialsFor(resolved, materials);
     const parts = [
-      ['walls', [...[...wallFaces.values()].flat(), ...clipOutside(kneeWalls(resolved, host), others), ...recess.liftStrip], structureMaterials.wall],
+      ['walls', [...[...wallFaces.values()].flat(), ...clipOutside(kneeWalls(resolved, host), others), ...recess.liftStrip, ...recess.jambs], structureMaterials.wall],
       ['roof', clipOutside(structureRoofTriangles(resolved, config), [...hostSolids, ...others]), structureMaterials.roof],
       ['floor', [
         ...(resolved.standing && !resolved.hood ? clipOutside(polygonsToTriangles([structureFloorPolygon(resolved)]), floorSolids) : []),
@@ -654,7 +654,7 @@ function recessParts(resolved, host, walls, { hostSolids, others, clipOutside })
   const recess = structureRecess(resolved);
   if (!recess) {
     return {
-      sides: [], inner: [], liftStrip: [], floor: [],
+      sides: [], inner: [], liftStrip: [], floor: [], jambs: [],
     };
   }
   const belowFloor = [{ normal: [0, 1, 0], offset: resolved.sillY }];
@@ -673,6 +673,11 @@ function recessParts(resolved, host, walls, { hostSolids, others, clipOutside })
     inner: clipOutside(polygonsToTriangles([recess.innerWall]), others),
     liftStrip: clipOutside(polygonsToTriangles(liftStrip), others),
     floor: resolved.standing ? [] : clipOutside(polygonsToTriangles([recess.floor]), others),
+    // the jambs where the open recess cuts off the side walls, given a stud
+    // wall's worth of visible thickness instead of a knife-edge (see
+    // structureRecess); a standing structure's post already reads as thick
+    // there, so this is only for one rising out of the roof (a dormer).
+    jambs: resolved.standing ? [] : clipOutside(polygonsToTriangles(recess.jambs), others),
   };
 }
 
@@ -680,10 +685,20 @@ function recessParts(resolved, host, walls, { hostSolids, others, clipOutside })
 const POST_SIZE = 0.2;
 const MAX_POST_SPAN = 3;
 
-/** Closed surface of an axis-aligned box. */
-function boxTriangles([x0, y0, z0], [x1, y1, z1]) {
+/**
+ * Surface of an axis-aligned box, its `y1` (top) and/or `y0` (bottom) faces
+ * left off on request — for a box standing in for solid ground under a
+ * feature that already has its own cap at that height (a deck's floor, a
+ * post's underside), so the two don't coincide and z-fight.
+ */
+function boxTriangles([x0, y0, z0], [x1, y1, z1], { top = true, bottom = true } = {}) {
   const p = (i) => [i & 1 ? x1 : x0, i & 2 ? y1 : y0, i & 4 ? z1 : z0];
-  const faces = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+  const faces = [
+    [0, 2, 3, 1], [4, 5, 7, 6],
+    ...(bottom ? [[0, 1, 5, 4]] : []),
+    ...(top ? [[2, 6, 7, 3]] : []),
+    [0, 4, 6, 2], [1, 3, 7, 5],
+  ];
   return faces.flatMap(([a, b, c, d]) => [[p(a), p(b), p(c)], [p(a), p(c), p(d)]]);
 }
 
@@ -762,15 +777,19 @@ function structureSupports(resolved, host) {
   const [i0, i1] = [Math.min(front, wall), Math.max(front, wall)];
   // a base reaching the floor leaves its top off: the floor is there (two
   // coplanar faces would z-fight)
-  const box = (y0, y1) => (frame.along === 'x'
-    ? boxTriangles([a0, y0, i0], [a1, y1, i1])
-    : boxTriangles([i0, y0, a0], [i1, y1, a1])
+  const box = (y0, y1, options) => (frame.along === 'x'
+    ? boxTriangles([a0, y0, i0], [a1, y1, i1], options)
+    : boxTriangles([i0, y0, a0], [i1, y1, a1], options)
   ).filter((triangle) => !(y1 >= sillY - 1e-9 && triangle.every((point) => Math.abs(point[1] - y1) < 1e-9)));
   const frontPoint = (along) => (frame.along === 'x' ? [along, front] : [front, along]);
   const frontPosts = (y0) => spacedPositions(a0, a1, MAX_POST_SPAN).flatMap((along) => postBox(bounds, frontPoint(along), y0, sillY));
   switch (resolved.support) {
     case 'deck':
-      return { ...empty, foundation: box(groundY, sillY) };
+      // No top face: it would sit exactly on top of, and z-fight with, the
+      // floor part built separately at this same sillY (unlike the other
+      // cases' foundation, which tops out lower, at a plinth posts or a
+      // skirt bridge the rest of the way up from).
+      return { ...empty, foundation: box(groundY, sillY, { top: false }) };
     case 'posts':
       return { ...empty, posts: frontPosts(groundY) };
     case 'porch':
@@ -909,9 +928,12 @@ function standingWalls(triangles, resolved, {
 }
 
 /**
- * Whether a structure breaks its host's eave. A flush front wall does,
- * where the host has a wall under the eave, and so does a projecting porch
- * whose walls rise past the host's wall top.
+ * Whether a structure breaks its host's eave. A flush front wall does, where
+ * the host has a wall under the eave and the structure actually reaches
+ * that high; a short one (e.g. a ground-level porch set well below the
+ * eave, just flush in plan) stands under the eave without touching it, and
+ * leaves it whole. A projecting porch does when its walls rise past the
+ * host's wall top.
  */
 function interruptsHostEave(resolved, host) {
   // a flush wall carries the host's wall up through the eave; where the host
@@ -921,7 +943,14 @@ function interruptsHostEave(resolved, host) {
     return false;
   }
   if (resolved.flush) {
-    return true;
+    const { frame } = resolved;
+    const wall = host.bounds[resolved.hostSide];
+    const along = (resolved.along[0] + resolved.along[1]) / 2;
+    const [x, z] = frame.along === 'x' ? [along, wall] : [wall, along];
+    const top = resolved.planes.length
+      ? resolved.plateY + evalZoneHeight(resolved.planes, x, z)
+      : resolved.plateY + resolved.slabThickness;
+    return top >= host.baseY - 1e-9;
   }
   // A projecting porch breaks the eave only when its walls rise past the
   // host's wall top. Where just its roof rises past the eave, the porch's
