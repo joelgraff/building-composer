@@ -33,6 +33,11 @@ export const STEP_LANDING = 0.9;
 export const STEP_SIDE_MARGIN = 0.15;
 /** A threshold lower than this above grade needs no steps. */
 export const STEP_MIN_RISE = 0.05;
+/** What a flight's settings can be set to (meters; a count of steps). */
+export const STEP_WIDTH_RANGE = Object.freeze([0.6, 8]);
+export const STEP_TREAD_RANGE = Object.freeze([0.2, 0.6]);
+export const STEP_RISER_RANGE = Object.freeze([0.1, 0.25]);
+export const STEP_COUNT_RANGE = Object.freeze([1, 40]);
 
 const finite = (value, fallback) => (Number.isFinite(value) ? value : fallback);
 const plainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {});
@@ -50,8 +55,8 @@ const plainObject = (value) => (value && typeof value === 'object' && !Array.isA
  * - `sillHeight`: the opening's bottom above the wall's floor line. A
  *   window's is a free height; a door's is clamped to a small threshold
  *   range (DOOR_SILL_MAX) rather than left editable like a window ledge.
- * - `steps` (a door's only): whether a flight of steps runs from its
- *   threshold down to grade (on by default; built only on footprint walls).
+ * - `steps` (a door's only): the flight of steps from its threshold down to
+ *   grade (see normalizeSteps; on by default; built only on footprint walls).
  *
  * @returns {object|null}
  */
@@ -74,7 +79,7 @@ export function normalizeOpening(raw) {
     height: Math.max(MIN_OPENING_SIZE, finite(raw.height, preset.height)),
     sillHeight: kind === 'door' ? Math.min(DOOR_SILL_MAX, sillHeight) : sillHeight,
     materials: plainObject(raw.materials),
-    ...(kind === 'door' ? { steps: raw.steps !== false } : {}),
+    ...(kind === 'door' ? { steps: normalizeSteps(raw.steps) } : {}),
   };
 }
 
@@ -359,30 +364,77 @@ export function shapeLimit(opening, host, field, from, to) {
 }
 
 /**
- * A flight of entry steps from a door's threshold, `rise` above grade, down
- * to the ground: even risers near STEP_RISER, STEP_TREAD treads, and a
- * STEP_LANDING landing at the door. `profile` is the flight's side outline as
- * [out, up] points — out from the wall face, up from grade — which is swept
- * across the door's width. Null when the threshold is at grade.
+ * A flight of steps' settings, from partial or older input (a plain
+ * true/false before they could be sized):
+ * - `enabled`: whether it's built (on unless turned off).
+ * - `width`: across the flight, or null to fit the door or porch it serves.
+ * - `tread`: each step's depth.
+ * - `riser`: the height each step aims for; the number of steps follows from
+ *   the rise, rounded so every riser comes out the same.
+ * - `count`: instead, this many steps exactly (null to size by `riser`).
  */
-export function stepFlight(rise) {
+export function normalizeSteps(raw) {
+  const source = raw === false ? { enabled: false } : raw && typeof raw === 'object' ? raw : {};
+  const inRange = (value, [min, max]) => (Number.isFinite(value) ? Math.min(Math.max(value, min), max) : null);
+  const count = inRange(source.count, STEP_COUNT_RANGE);
+  return {
+    enabled: source.enabled !== false,
+    width: inRange(source.width, STEP_WIDTH_RANGE),
+    tread: inRange(source.tread, STEP_TREAD_RANGE) ?? STEP_TREAD,
+    riser: inRange(source.riser, STEP_RISER_RANGE) ?? STEP_RISER,
+    count: count === null ? null : Math.round(count),
+  };
+}
+
+/**
+ * A flight of steps from a floor or threshold `rise` above grade down to the
+ * ground: `risers` even risers (`count` of them, or as many as bring each
+ * near `riser`) and `tread`-deep treads. At a door the flight tops out in a
+ * `landing` (STEP_LANDING) level with the threshold; with `landing: 0` the
+ * floor it serves is its own top step (a porch deck), and the flight stops a
+ * riser below it. `built` is how many steps that makes; `profile` is the
+ * flight's side outline as [out, up] points — out from the wall or deck
+ * edge, up from grade — swept across its width. Null when there is nothing
+ * to climb.
+ */
+export function stepFlight(rise, {
+  landing = STEP_LANDING, tread = STEP_TREAD, riser: target = STEP_RISER, count = null,
+} = {}) {
   if (!(rise >= STEP_MIN_RISE)) {
     return null;
   }
-  const count = Math.max(1, Math.round(rise / STEP_RISER));
-  const riser = rise / count;
-  const depth = STEP_LANDING + (count - 1) * STEP_TREAD;
-  const profile = [[0, 0], [depth, 0]];
-  for (let k = 1; k <= count; k += 1) {
-    const out = depth - (k - 1) * STEP_TREAD;
-    profile.push([out, k * riser]);
-    if (k < count) {
-      profile.push([out - STEP_TREAD, k * riser]);
-    }
+  const risers = Number.isFinite(count) && count >= 1 ? Math.round(count) : Math.max(1, Math.round(rise / target));
+  const riser = rise / risers;
+  const built = landing > 0 ? risers : risers - 1;
+  if (built < 1) {
+    return null;
   }
-  profile[profile.length - 1] = [STEP_LANDING, rise];
-  profile.push([0, rise]);
+  const depth = landing + (risers - 1) * tread;
+  const profile = [[0, 0], [depth, 0]];
+  for (let k = 1; k <= built; k += 1) {
+    const out = depth - (k - 1) * tread;
+    profile.push([out, k * riser], [out - tread, k * riser]);
+  }
+  // the top: a landing level with the threshold back to the wall, or the last tread meeting the deck's edge
+  if (landing > 0) {
+    profile.splice(profile.length - 2, 2, [landing, rise], [0, rise]);
+  }
   return {
-    count, riser, depth, profile,
+    count: risers, built, riser, depth, profile,
   };
+}
+
+/**
+ * The stepFlight a set of steps (normalizeSteps) makes up to a floor `rise`
+ * above grade, `count` being the steps built: a door's with its landing, a
+ * porch's (`deck`) with the deck as the top step, so one riser more than it
+ * has steps.
+ */
+export function flightFor(steps, rise, { deck = false } = {}) {
+  return stepFlight(rise, {
+    landing: deck ? 0 : STEP_LANDING,
+    tread: steps.tread,
+    riser: steps.riser,
+    count: steps.count === null ? null : steps.count + (deck ? 1 : 0),
+  });
 }

@@ -15,6 +15,7 @@
 import {
   computeVolumeEavePlanes, evalPlaneHeight, evalZoneHeight, makeEavePlane, makeEdgePlane, TWO_SLOPE_ROOF_TYPES,
 } from './roof-planes.js';
+import { normalizeSteps } from './openings.js';
 
 /** Default tolerance: faces within this distance of a solid's boundary count as inside. */
 export const SOLID_EPSILON = 1e-4;
@@ -338,6 +339,8 @@ function normalizeRoofShape(shape) {
  *   structure's rectangle.
  * - `openSides`: walls left open (`front`, `back`, and `left`/`right` as
  *   seen from outside, facing the front wall).
+ * - `steps` (a porch's only): its steps from the deck down to grade, see
+ *   normalizeSteps in js/openings.js.
  * - `mount`: `join` (default) to join one roof face, as a dormer does, or
  *   `through` to rise through the roof without joining it (a cupola or
  *   belvedere): no single-face rule or ridge cap, wall height measured from
@@ -401,6 +404,8 @@ export function normalizeRoofStructure(raw) {
     wrap: normalizeWrap(raw.wrap, raw.hostSide, finite(raw.width, preset.width)),
     eaves: plainObject(raw.eaves),
     materials: plainObject(raw.materials),
+    // a porch's steps from its deck to grade (built for a ground-level deck open at the front)
+    ...(kind === 'porch' ? { steps: normalizeSteps(raw.steps) } : {}),
   };
 }
 

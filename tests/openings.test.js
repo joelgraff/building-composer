@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  normalizeOpening, normalizeOpenings, createOpening, resolveOpening, openingOutline, structureOpeningHost, rectInShape, fitOpening, shapeLimit, stepFlight,
+  normalizeOpening, normalizeOpenings, createOpening, resolveOpening, openingOutline, structureOpeningHost, rectInShape, fitOpening, shapeLimit, stepFlight, normalizeSteps, flightFor,
   STEP_TREAD, STEP_LANDING, STEP_SIDE_MARGIN,
   OPENING_PRESETS, FRAME_CASING_WIDTH, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
 } from '../js/openings.js';
@@ -269,8 +269,11 @@ describe('windows on a roof structure\'s own walls', () => {
 
 describe('entry steps', () => {
   it('a door has steps unless turned off; a window never does', () => {
-    assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door' }).steps, true);
-    assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door', steps: false }).steps, false);
+    assert.deepEqual(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door' }).steps, {
+      enabled: true, width: null, tread: STEP_TREAD, riser: 0.18, count: null,
+    });
+    assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door', steps: false }).steps.enabled, false, 'an older file\'s plain off');
+    assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door', steps: true }).steps.enabled, true);
     assert.equal('steps' in normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'window', steps: true }), false);
   });
 
@@ -324,10 +327,82 @@ describe('entry steps', () => {
     assert.equal(stepsOf(build([{ kind: 'window', hostWallRunId: 'wall-run-0' }])).length, 0);
   });
 
+  it('a porch deck is its own top step: its flight starts a riser below', () => {
+    const flight = stepFlight(0.7, { landing: 0 });
+    assert.ok(Math.abs(Math.max(...flight.profile.map(([, up]) => up)) - 0.525) < 1e-9);
+    assert.ok(Math.abs(flight.depth - 3 * STEP_TREAD) < 1e-9);
+    assert.equal(stepFlight(0.18, { landing: 0 }), null, 'a deck one step up needs none');
+  });
+
+  const porch = (fields = {}) => ({
+    id: 'p', kind: 'porch', hostVolumeId: 'volume-0', hostSide: 'minZ', offset: 1, width: 5, setback: -2.4, depth: 2.4, baseHeight: 'ground', wallHeight: 2.8,
+    roofType: 'shed', roofShape: { mode: 'slope', pitchRise: 4 }, openSides: ['front', 'left', 'right'], ...fields,
+  });
+  const porchStepsOf = (built) => {
+    const found = [];
+    built.building.updateMatrixWorld(true);
+    built.building.traverse((mesh) => {
+      if (mesh.userData?.bodyPart === 'porch-steps') {
+        mesh.geometry.computeBoundingBox();
+        found.push(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld));
+      }
+    });
+    return found;
+  };
+
+  it('runs steps from a ground porch\'s open front, and none from a door the porch stands in front of', () => {
+    const built = build([{ kind: 'door', hostWallRunId: 'wall-run-0', offset: 1 }, { kind: 'door', hostWallRunId: 'wall-run-2' }], {
+      roofStructures: normalizeRoofStructures([porch()]),
+    });
+    const [box] = porchStepsOf(built);
+    // the porch front is at z = -4 - 2.4, facing -z; centered on the porch (x = 1)
+    assert.ok(Math.abs(box.max.z - -6.4) < 1e-6 && Math.abs(box.min.z - (-6.4 - 3 * STEP_TREAD)) < 1e-6);
+    assert.ok(Math.abs((box.min.x + box.max.x) / 2 - 1) < 1e-6 && Math.abs(box.max.x - box.min.x - 1.5) < 1e-6);
+    assert.ok(Math.abs(box.max.y - 0.525) < 1e-6);
+    const doorSteps = stepsOf(built).map(({ mesh }) => mesh.userData.openingId);
+    assert.deepEqual(doorSteps, ['opening-2'], 'the door onto the porch has none; the one on the far wall keeps its own');
+  });
+
+  it('none from a porch closed at the front, or raised on posts to an upper floor', () => {
+    assert.equal(porchStepsOf(build([], { roofStructures: normalizeRoofStructures([porch({ openSides: ['left', 'right'] })]) })).length, 0);
+    assert.equal(porchStepsOf(build([], { storyCount: 2, roofStructures: normalizeRoofStructures([porch({ baseHeight: 3, support: 'posts' })]) })).length, 0);
+  });
+
+  it('keeps sizes in range; a count of steps is whole', () => {
+    const steps = normalizeSteps({ width: 20, tread: 0.1, riser: 0.4, count: 3.6 });
+    assert.deepEqual(steps, { enabled: true, width: 8, tread: 0.2, riser: 0.25, count: 4 });
+  });
+
+  it('sizes a flight by its riser height, or by a number of steps', () => {
+    const byRiser = flightFor(normalizeSteps({ riser: 0.14, tread: 0.35 }), 0.7);
+    assert.equal(byRiser.built, 5);
+    assert.ok(Math.abs(byRiser.depth - (STEP_LANDING + 4 * 0.35)) < 1e-9);
+    const byCount = flightFor(normalizeSteps({ count: 2 }), 0.7);
+    assert.equal(byCount.built, 2);
+    assert.ok(Math.abs(byCount.riser - 0.35) < 1e-9);
+    // a porch's deck is its top step: two steps below it are three risers
+    const porchFlight = flightFor(normalizeSteps({ count: 2 }), 0.7, { deck: true });
+    assert.equal(porchFlight.built, 2);
+    assert.ok(Math.abs(porchFlight.riser - 0.7 / 3) < 1e-9);
+  });
+
+  it('builds a door\'s steps as wide as set, and a porch\'s as wide and deep as set', () => {
+    const [{ box }] = stepsOf(build([{
+      kind: 'door', hostWallRunId: 'wall-run-0', offset: 1, steps: { width: 2.4, tread: 0.4, count: 2 },
+    }]));
+    assert.ok(Math.abs(box.max.x - box.min.x - 2.4) < 1e-6);
+    assert.ok(Math.abs(-4 - box.min.z - (STEP_LANDING + 0.4)) < 1e-6);
+    const [porchBox] = porchStepsOf(build([], { roofStructures: normalizeRoofStructures([porch({ steps: { width: 3, tread: 0.5, count: 2 } })]) }));
+    assert.ok(Math.abs(porchBox.max.x - porchBox.min.x - 3) < 1e-6);
+    // two steps below the deck, three risers: the flight runs out (3 - 1) treads
+    assert.ok(Math.abs(porchBox.max.z - porchBox.min.z - 2 * 0.5) < 1e-6);
+    assert.equal(porchStepsOf(build([], { roofStructures: normalizeRoofStructures([porch({ steps: { enabled: false } })]) })).length, 0);
+  });
+
   it('saves whether a door has steps', () => {
     const layout = computeFacadeLayout(footprint, {});
     const openings = normalizeOpenings([{ kind: 'door', hostWallRunId: 'wall-run-0', steps: false }, { kind: 'door', hostWallRunId: 'wall-run-1', offset: 2 }]);
     const { state } = deserializeBuildingState(serializeBuildingState(layout, { openings }));
-    assert.deepEqual(state.openings.map((opening) => opening.steps), [false, true]);
+    assert.deepEqual(state.openings.map((opening) => opening.steps.enabled), [false, true]);
   });
 });

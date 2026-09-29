@@ -14,7 +14,7 @@ import {
   computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades, angledWallProblem, wallRunFrame,
 } from './facade.js';
 import {
-  normalizeOpenings, createOpening, fitOpening, structureOpeningHost, shapeLimit, resolveOpening, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
+  normalizeOpenings, createOpening, fitOpening, structureOpeningHost, shapeLimit, normalizeSteps, flightFor, resolveOpening, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
 } from './openings.js';
 import { normalizeTrim, TRIM_HEIGHT_RANGE, TRIM_PROJECTION_RANGE } from './trim.js';
 import { exportGlb } from './export.js';
@@ -1215,11 +1215,57 @@ function openingEditorHtml(opening) {
   }
   // steps are built only from a door in the house's own walls (see withOpenings)
   const onHouseWall = activeLayout?.wallRuns.some((run) => run.id === opening.hostWallRunId);
-  const entryFields = opening.kind === 'door' && onHouseWall ? [checkField('Steps down to the ground', 'steps', opening.steps !== false)] : [];
+  const entryFields = opening.kind === 'door' && onHouseWall ? stepsFieldsHtml(normalizeSteps(opening.steps), doorFlight(opening)) : [];
   return `<div class="structure-editor-head"><span>Editing ${escapeHtml(opening.id)}</span></div>${errorBanner}`
     + fieldGroup('Placement', placement)
     + fieldGroup('Entry', entryFields)
     + fieldGroup('Materials', materials);
+}
+
+/** The flight a door's steps make from its threshold, or null (see withOpenings). */
+function doorFlight(opening) {
+  const host = openingHost(opening.hostWallRunId);
+  return host ? flightFor(normalizeSteps(opening.steps), host.baseY + opening.sillHeight) : null;
+}
+
+/**
+ * A flight of steps' fields (see normalizeSteps), for a door's editor or a
+ * porch's, with what they come to (`flight`, when it has one): width (empty
+ * to fit the door or porch), tread depth, and either a riser height the
+ * number of steps follows from, or the number of steps.
+ */
+function stepsFieldsHtml(steps, flight) {
+  const parts = [checkField('Steps down to the ground', 'steps.enabled', steps.enabled)];
+  if (!steps.enabled) {
+    return parts;
+  }
+  parts.push(numberField('Width (empty to fit)', 'steps.width', steps.width, { step: 0.1, placeholder: 'fit' }));
+  parts.push(numberField('Tread depth', 'steps.tread', steps.tread, { step: 0.05 }));
+  parts.push(selectField('Size by', 'steps.sizeBy', [['riser', 'Riser height'], ['count', 'Number of steps']], steps.count === null ? 'riser' : 'count'));
+  parts.push(steps.count === null
+    ? numberField('Riser height', 'steps.riser', steps.riser, { step: 0.02 })
+    : numberField('Number of steps', 'steps.count', steps.count, { length: false, step: 1 }));
+  if (flight) {
+    parts.push(`<div class="scope-empty">${flight.built} ${flight.built === 1 ? 'step' : 'steps'}, ${formatLength(flight.riser, 2)} risers, running out ${formatLength(flight.depth, 1)}</div>`);
+  }
+  return parts;
+}
+
+/** A steps record with one edited field applied (see stepsFieldsHtml); switching to a count starts from the steps it has now. */
+function applyStepsField(steps, input, flight) {
+  const next = { ...normalizeSteps(steps) };
+  const meters = Number(input.value) / unitFactor();
+  const given = input.value !== '' && Number.isFinite(Number(input.value));
+  switch (input.dataset.field.slice('steps.'.length)) {
+    case 'enabled': next.enabled = input.checked; break;
+    case 'width': next.width = given ? meters : null; break;
+    case 'tread': if (given) { next.tread = meters; } break;
+    case 'riser': if (given) { next.riser = meters; } break;
+    case 'count': if (given) { next.count = Number(input.value); } break;
+    case 'sizeBy': next.count = input.value === 'count' ? (flight?.built ?? 3) : null; break;
+    default: break;
+  }
+  return normalizeSteps(next);
 }
 
 function rebuildWithOpenings(openings) {
@@ -1238,6 +1284,11 @@ function applyOpeningFieldEdit(input) {
   const edited = { ...record, materials: { ...record.materials } };
   const length = () => (Number(input.value) || 0) / unitFactor();
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+  if (input.dataset.field.startsWith('steps.')) {
+    edited.steps = applyStepsField(record.steps, input, doorFlight(record));
+    rebuildWithOpenings(modelConfig.openings.map((opening) => (opening.id === record.id ? edited : opening)));
+    return;
+  }
   switch (input.dataset.field) {
     case 'offset': {
       const limits = openingPlacementLimits(record);
@@ -1263,7 +1314,6 @@ function applyOpeningFieldEdit(input) {
     }
     case 'frameMaterial': edited.materials.frame = input.value || undefined; break;
     case 'panelMaterial': edited.materials.panel = input.value || undefined; break;
-    case 'steps': edited.steps = input.checked; break;
     default: return;
   }
   rebuildWithOpenings(modelConfig.openings.map((opening) => (opening.id === record.id ? edited : opening)));
@@ -3461,6 +3511,12 @@ function structureEditorHtml(structure) {
   const openings = ['<div class="field"><label>Open sides</label>'
     + STRUCTURE_WALLS.map((wall) => checkField(wall, `open:${wall}`, structure.openSides.includes(wall))).join('') + '</div>'];
 
+  // a ground-level porch deck open at the front has steps down to grade (see withPorchSteps in extrusion.js)
+  const built = activeStructureEntries.find((candidate) => candidate.id === structure.id)?.resolved;
+  const stepsFields = structure.kind === 'porch' && built && ['deck', 'porch'].includes(built.support) && structure.openSides.includes('front')
+    ? stepsFieldsHtml(normalizeSteps(structure.steps), flightFor(normalizeSteps(structure.steps), built.sillY, { deck: true }))
+    : [];
+
   const materials = [selectField('Wall material', 'wallMaterial', MATERIAL_OPTIONS, structure.materials?.wall ?? '')];
   if (!recess) {
     materials.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
@@ -3478,6 +3534,7 @@ function structureEditorHtml(structure) {
     + fieldGroup('Height', height)
     + fieldGroup('Roof', roof)
     + fieldGroup('Openings', openings)
+    + fieldGroup('Steps', stepsFields)
     + fieldGroup('Materials', materials);
 }
 
@@ -3619,6 +3676,9 @@ function applyStructureFieldEdit(input) {
       edited.wrap.endLength = span(walls[walls.length - 1]);
     }
     edited.hostSide = walls[0];
+  } else if (field.startsWith('steps.')) {
+    const built = activeStructureEntries.find((candidate) => candidate.id === record.id)?.resolved;
+    edited.steps = applyStepsField(record.steps, input, built ? flightFor(normalizeSteps(record.steps), built.sillY, { deck: true }) : null);
   } else if (field.startsWith('open:')) {
     const wall = field.slice(5);
     edited.openSides = input.checked ? [...new Set([...record.openSides, wall])] : record.openSides.filter((side) => side !== wall);

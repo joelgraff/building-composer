@@ -6,7 +6,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { createMaterials, MATERIAL_PALETTE, paletteMaterial, glazingMaterial } from './materials.js';
 import { roofAxisForDirection, findVolumeAdjacencies, wallRunFrame } from './facade.js';
 import {
-  resolveOpening, openingOutline, structureOpeningHost, stepFlight, FRAME_DEPTH, PANE_RECESS, FRAME_CASING_WIDTH, STEP_SIDE_MARGIN,
+  resolveOpening, openingOutline, structureOpeningHost, normalizeSteps, flightFor, FRAME_DEPTH, PANE_RECESS, FRAME_CASING_WIDTH, STEP_SIDE_MARGIN,
 } from './openings.js';
 import {
   normalizeTrim, hasTrim, courseProfile, profileExtent, subtractIntervals, sweepCourse, dentilSize, dentilTriangles, floorLines,
@@ -259,6 +259,82 @@ function buildOpeningMeshes(resolved, materials, glazing, flight = null) {
   return group;
 }
 
+/** Whether a door's steps would run into a structure standing in front of it (a porch's floor, a bay). */
+function doorStepsBlocked(resolved, flight, half, plans) {
+  const { start, end, normal } = resolved.frame;
+  const mid = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2];
+  const right = [(end[0] - start[0]), (end[1] - start[1])].map((c) => c / Math.hypot(end[0] - start[0], end[1] - start[1]));
+  const center = (resolved.u0 + resolved.u1) / 2;
+  const corners = [[-half, 0.02], [half, 0.02], [half, flight.depth], [-half, flight.depth]].map(([u, d]) => [
+    mid[0] + right[0] * (center + u) + normal[0] * d, mid[1] + right[1] * (center + u) + normal[1] * d,
+  ]);
+  const xs = corners.map(([x]) => x);
+  const zs = corners.map(([, z]) => z);
+  const gap = 1e-3;
+  return plans.some((b) => Math.min(...xs) < b.maxX - gap && Math.max(...xs) > b.minX + gap && Math.min(...zs) < b.maxZ - gap && Math.max(...zs) > b.minZ + gap);
+}
+
+/** Porch steps are this wide unless set otherwise, and never wider than the porch's open front. */
+const PORCH_STEP_WIDTH = 1.5;
+
+/**
+ * Steps from each ground-level porch's deck (a porch standing on a solid deck
+ * or on posts on one) down to grade, centered on its open front: the deck is
+ * the top step, so the flight starts a riser below it (stepFlight with no
+ * landing).
+ */
+function withPorchSteps(result, config) {
+  const records = new Map((config.roofStructures ?? []).map((record) => [record.id, record]));
+  const facades = new Map((result.structureFacades ?? []).map((facade) => [facade.structureId, facade]));
+  const material = createMaterials(config).foundation;
+  (result.roofStructures ?? []).forEach(({ resolved }) => {
+    if (!resolved || resolved.kind !== 'porch' || !['deck', 'porch'].includes(resolved.support) || !resolved.openSides.includes('front')) {
+      return;
+    }
+    const front = (facades.get(resolved.id)?.railRuns ?? []).filter((run) => run.wall === 'front')
+      .sort((a, b) => Math.hypot(b.end[0] - b.start[0], b.end[2] - b.start[2]) - Math.hypot(a.end[0] - a.start[0], a.end[2] - a.start[2]))[0];
+    const steps = normalizeSteps(records.get(resolved.recordId ?? resolved.id)?.steps);
+    const flight = front && steps.enabled && flightFor(steps, front.start[1], { deck: true });
+    if (!flight) {
+      return;
+    }
+    const length = Math.hypot(front.end[0] - front.start[0], front.end[2] - front.start[2]);
+    const width = Math.min(steps.width ?? PORCH_STEP_WIDTH, length - 0.2);
+    if (width < 0.6) {
+      return;
+    }
+    const normal = PORCH_OUTWARD[front.side];
+    const center = [(front.start[0] + front.end[0]) / 2, (front.start[2] + front.end[2]) / 2];
+    result.building.add(buildStepsAt(center, normal, width, flight, material, { structureId: resolved.id, bodyPart: 'porch-steps' }));
+  });
+  return result;
+}
+
+const PORCH_OUTWARD = { minX: [-1, 0], maxX: [1, 0], minZ: [0, -1], maxZ: [0, 1] };
+
+/**
+ * A flight of steps in world space: its profile's "out" along `normal` (in
+ * plan) from `center` on the edge it climbs to, its foot at grade, swept
+ * `width` across.
+ */
+function buildStepsAt(center, [nx, nz], width, flight, material, userData) {
+  const shape = new THREE.Shape(flight.profile.map(([out, up]) => new THREE.Vector2(out, up)));
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: width, bevelEnabled: false, steps: 1, curveSegments: 1,
+  });
+  // shape x (out) -> the normal, shape y -> up, extrusion -> along the edge (normal x up, so a proper rotation)
+  const [ax, az] = [-nz, nx];
+  geometry.applyMatrix4(new THREE.Matrix4().set(
+    nx, 0, ax, center[0] - ax * (width / 2),
+    0, 1, 0, 0,
+    nz, 0, az, center[1] - az * (width / 2),
+    0, 0, 0, 1
+  ));
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData = userData;
+  return mesh;
+}
+
 /**
  * A door's entry steps (see stepFlight in js/openings.js), in the door's own
  * frame: the flight's side profile, extruded across the door's width plus a
@@ -267,7 +343,7 @@ function buildOpeningMeshes(resolved, materials, glazing, flight = null) {
  */
 function buildDoorSteps(resolved, flight, material) {
   const shape = new THREE.Shape(flight.profile.map(([out, up]) => new THREE.Vector2(out, up)));
-  const halfWidth = (resolved.u1 - resolved.u0) / 2 + FRAME_CASING_WIDTH + STEP_SIDE_MARGIN;
+  const { halfWidth } = flight;
   const geometry = new THREE.ExtrudeGeometry(shape, {
     depth: halfWidth * 2, bevelEnabled: false, steps: 1, curveSegments: 1,
   });
@@ -301,6 +377,7 @@ function withOpenings(result, config) {
   const materials = createMaterials(config);
   const glazing = glazingMaterial();
   const structureWalls = (result.structureFacades ?? []).flatMap((facade) => facade.wallRuns);
+  const standingPlans = (result.roofStructures ?? []).filter((entry) => entry.resolved?.standing).map((entry) => entry.resolved.bounds);
   const entries = openings.map((opening) => {
     const wallRun = wallRuns.find((run) => run.id === opening.hostWallRunId);
     const structureWall = !wallRun && structureWalls.find((run) => run.id === opening.hostWallRunId);
@@ -311,8 +388,13 @@ function withOpenings(result, config) {
     } : structureWall && structureOpeningHost(structureWall);
     const { resolved, errors, warnings } = resolveOpening(opening, host, { siblings: openings, stories });
     if (resolved) {
-      // steps down to grade from a door in the house's own walls (a door on a structure's wall opens onto its floor or roof)
-      const flight = opening.kind === 'door' && opening.steps !== false && wallRun ? stepFlight(host.baseY + resolved.sillHeight) : null;
+      // steps down to grade from a door in the house's own walls (a door on a
+      // structure's wall opens onto its floor or roof), unless a porch or bay
+      // stands in front of it
+      const steps = normalizeSteps(opening.steps);
+      const doorFlight = opening.kind === 'door' && steps.enabled && wallRun ? flightFor(steps, host.baseY + resolved.sillHeight) : null;
+      const halfWidth = (steps.width ?? (resolved.u1 - resolved.u0) + 2 * (FRAME_CASING_WIDTH + STEP_SIDE_MARGIN)) / 2;
+      const flight = doorFlight && !doorStepsBlocked(resolved, doorFlight, halfWidth, standingPlans) ? { ...doorFlight, halfWidth } : null;
       result.building.add(buildOpeningMeshes(resolved, materials, glazing, flight));
     }
     return {
@@ -505,7 +587,7 @@ function withTrim(result, config) {
  */
 function withStructuresAndWalks(built, config, skeletonWalks = []) {
   const walks = [...skeletonWalks, ...built.roofZones.filter((zone) => !zone.skeleton).flatMap(zoneWalk)];
-  const result = withTrim(withOpenings(withRoofStructures(built, config), config), config);
+  const result = withTrim(withOpenings(withPorchSteps(withRoofStructures(built, config), config), config), config);
   // railings stop at anything standing on the walk
   const standing = result.structureSolids ?? [];
   delete result.structureSolids;
