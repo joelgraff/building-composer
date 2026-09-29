@@ -397,9 +397,7 @@ export function normalizeRoofStructure(raw) {
     roofShape: normalizeRoofShape(raw.roofShape),
     join: raw.join === 'snap-ridge' ? 'snap-ridge' : 'auto',
     plan: normalizePlan(raw.plan),
-    wrap: raw.wrap && ['left', 'right'].includes(raw.wrap.end) && raw.wrap.length > GEOMETRY_EPSILON
-      ? { end: raw.wrap.end, length: raw.wrap.length }
-      : null,
+    wrap: normalizeWrap(raw.wrap, raw.hostSide, finite(raw.width, preset.width)),
     eaves: plainObject(raw.eaves),
     materials: plainObject(raw.materials),
   };
@@ -409,6 +407,36 @@ export function normalizeRoofStructure(raw) {
  * Normalizes a list of records, dropping unplaceable ones and giving every
  * structure a unique id (`structure-N`).
  */
+/**
+ * A wraparound's walls and the lengths of its end legs:
+ * `{ walls, startLength, endLength }`. `walls` are two to four walls of its
+ * volume in order around it, each beside the next (all four: the porch runs
+ * all the way round). The first leg runs `startLength` back along its wall
+ * from the corner it turns, the last `endLength` on from the corner it turns
+ * onto its wall; legs between run their whole walls. Files from before
+ * wraparounds could turn more than one corner (`{ end, length }`) keep
+ * their porch's width as the first leg and `length` as the second.
+ */
+function normalizeWrap(raw, hostSide, width) {
+  if (!raw || typeof raw !== 'object' || !SIDES.includes(hostSide)) {
+    return null;
+  }
+  if (!Array.isArray(raw.walls)) {
+    if (!['left', 'right'].includes(raw.end) || !(raw.length > GEOMETRY_EPSILON)) {
+      return null;
+    }
+    return { walls: [hostSide, structureWallSides(structureFrame(hostSide))[raw.end]], startLength: width, endLength: raw.length };
+  }
+  const walls = raw.walls.filter((wall) => SIDES.includes(wall));
+  const across = (a, b) => (a === 'minX' || a === 'maxX') !== (b === 'minX' || b === 'maxX');
+  const chained = walls.every((wall, i) => i === 0 || across(walls[i - 1], wall));
+  if (walls.length < 2 || walls.length > 4 || new Set(walls).size !== walls.length || !chained) {
+    return null;
+  }
+  const length = (value, fallback) => (Number.isFinite(value) && value > GEOMETRY_EPSILON ? value : fallback);
+  return { walls, startLength: length(raw.startLength, width), endLength: length(raw.endLength, 4) };
+}
+
 export function normalizeRoofStructures(list) {
   const structures = (Array.isArray(list) ? list : []).map(normalizeRoofStructure).filter(Boolean);
   const used = new Set();
@@ -663,14 +691,10 @@ function resolveStructureOnce(structure, host, config = {}) {
     && (along[0] < hostAlong[0] - GEOMETRY_EPSILON || along[1] > hostAlong[1] + GEOMETRY_EPSILON)) {
     return fail('outside-host', `The structure runs past the ends of ${host.volumeId}'s ${structure.hostSide} wall.`);
   }
-  // a wraparound's front segment runs on past the corner by its projection
-  if (structure.wrapSegment === 'front') {
-    const atMax = structureWallSides(frame)[structure.wrapEnd].startsWith('max');
-    const corner = hostAlong[atMax ? 1 : 0];
-    if (Math.abs(along[atMax ? 1 : 0] - corner) > WRAP_TOLERANCE) {
-      return fail('wrap-not-at-corner', `A wraparound must reach the ${structure.wrapEnd} end of ${host.volumeId}'s ${structure.hostSide} wall to turn the corner.`);
-    }
-    along[atMax ? 1 : 0] = corner + (atMax ? 1 : -1) * -structure.setback;
+  // a wraparound's leg runs on past the corner it turns, by its projection
+  if (structure.wrapExtend) {
+    along[0] -= structure.wrapExtend.min ?? 0;
+    along[1] += structure.wrapExtend.max ?? 0;
   }
 
   if (structure.wrap || structure.wrapSegment) {
@@ -1319,11 +1343,15 @@ export function validateRoofStructures(structures, roofZones, config = {}, { des
 }
 
 /**
- * A wraparound porch (`wrap`) as two rectangular segments: the porch itself,
- * running on past the corner by its projection (`wrapSegment: 'front'`), and
- * a side segment (`<id>-wrap`) along the adjacent wall from the corner back
- * for `wrap.length`, with the same projection, base, walls, and roof. Where
- * they meet, and along the front segment's back, are seams (`seamSides`).
+ * A wraparound porch (`wrap`, see normalizeWrap) as one rectangular leg per
+ * wall. Each leg runs along its wall; where it turns a corner onto the next
+ * wall it runs on past the corner by its projection (`wrapExtend`), so the
+ * corner square is its, and the next leg starts at the corner. The first leg
+ * keeps the porch's id, the others are `<id>-wrap`, `<id>-wrap-2`, ...; all
+ * share the porch's projection, base, walls, and roof. Where legs meet, and
+ * along the back of a leg running past a corner, are seams (`seamSides`).
+ * The porch's front is every leg's front (and the outer side of each corner
+ * square); its left and right are its two free ends.
  */
 function expandWraps(structures, zones) {
   return structures.flatMap((structure) => {
@@ -1331,43 +1359,69 @@ function expandWraps(structures, zones) {
     if (!structure.wrap || structure.hostStructureId || !host) {
       return [structure];
     }
-    const { end, length } = structure.wrap;
-    const frame = structureFrame(structure.hostSide);
-    const sides = structureWallSides(frame);
-    const farEnd = end === 'left' ? 'right' : 'left';
-    const sideHost = sides[end];
     const projection = Number.isFinite(structure.setback) ? -structure.setback : 0;
     if (!(projection > GEOMETRY_EPSILON)) {
       // nothing past the wall to turn the corner with: resolving says why
-      return [{ ...structure, wrapSegment: 'front', wrapEnd: end, seamSides: ['back'] }];
+      return [{ ...structure, wrapSegment: 'leg', wrapOf: structure.id, wrapLeg: 0 }];
     }
-    // the side segment runs from the front wall line back along the side wall
-    const frontLine = host.bounds[structure.hostSide];
-    const range = [frontLine, frontLine + frame.sign * length].sort((a, b) => a - b);
-    const [sideMin, sideMax] = axisKeys(frame.inward);
-    const sideFrame = structureFrame(sideHost);
-    const sideWalls = structureWallSides(sideFrame);
-    const seam = ['left', 'right'].find((wall) => sideWalls[wall] === structure.hostSide);
-    const sideFar = seam === 'left' ? 'right' : 'left';
-    const side = {
-      ...structure,
-      id: `${structure.id}-wrap`,
-      wrap: null,
-      wrapSegment: 'side',
-      wrapOf: structure.id,
-      hostSide: sideHost,
-      offset: (range[0] + range[1]) / 2 - (host.bounds[sideMin] + host.bounds[sideMax]) / 2,
-      width: length,
-      depth: projection,
-      openSides: [
-        ...(structure.openSides.includes('front') ? ['front'] : []),
-        ...(structure.openSides.includes(farEnd) ? [sideFar] : []),
-      ],
-      seamSides: [seam],
-    };
-    return [{
-      ...structure, wrapSegment: 'front', wrapEnd: end, seamSides: ['back'],
-    }, side];
+    const { walls, startLength, endLength } = structure.wrap;
+    const loop = walls.length === 4;
+    const frontOpen = structure.openSides.includes('front');
+    const endsOpen = structure.openSides.includes('left') || structure.openSides.includes('right');
+    return walls.map((wall, i) => {
+      const previous = i > 0 ? walls[i - 1] : (loop ? walls[walls.length - 1] : null);
+      const next = i < walls.length - 1 ? walls[i + 1] : (loop ? walls[0] : null);
+      const frame = structureFrame(wall);
+      const [alongMin, alongMax] = axisKeys(frame.along);
+      const names = structureWallSides(frame);
+      const nameOf = (side) => ['left', 'right'].find((name) => names[name] === side);
+      let [lo, hi] = [host.bounds[alongMin], host.bounds[alongMax]];
+      const wrapExtend = {};
+      const seamSides = [];
+      const openSides = frontOpen ? ['front'] : [];
+      if (next) {
+        // on past the corner onto the next wall; its outer side is the porch's front
+        wrapExtend[next === alongMax ? 'max' : 'min'] = projection;
+        seamSides.push('back');
+        if (frontOpen) {
+          openSides.push(nameOf(next));
+        }
+      }
+      if (previous) {
+        seamSides.push(nameOf(previous));
+      }
+      if (!previous) {
+        // the first leg's free end, `startLength` back from the corner it turns
+        const cornerAtMax = next === alongMax;
+        [lo, hi] = cornerAtMax ? [Math.max(lo, hi - startLength), hi] : [lo, Math.min(hi, lo + startLength)];
+        if (endsOpen) {
+          openSides.push(nameOf(cornerAtMax ? alongMin : alongMax));
+        }
+      }
+      if (!next) {
+        // the last leg's free end, `endLength` on from the corner it turns
+        const cornerAtMax = previous === alongMax;
+        [lo, hi] = cornerAtMax ? [Math.max(lo, hi - endLength), hi] : [lo, Math.min(hi, lo + endLength)];
+        if (endsOpen) {
+          openSides.push(nameOf(cornerAtMax ? alongMin : alongMax));
+        }
+      }
+      return {
+        ...structure,
+        id: i === 0 ? structure.id : `${structure.id}-wrap${i === 1 ? '' : `-${i}`}`,
+        wrap: i === 0 ? structure.wrap : null,
+        wrapSegment: 'leg',
+        wrapOf: structure.id,
+        wrapLeg: i,
+        wrapExtend,
+        hostSide: wall,
+        offset: (lo + hi) / 2 - (host.bounds[alongMin] + host.bounds[alongMax]) / 2,
+        width: hi - lo,
+        depth: projection,
+        openSides,
+        seamSides,
+      };
+    });
   });
 }
 
@@ -1406,34 +1460,58 @@ function setEaveRoof(segments, eaveSides, slope) {
 }
 
 /**
- * The two segments of a wraparound share one roof: the planes rising from
- * its outer eaves (none from the walls), so it turns the corner on a hip
- * that drains away from the house and runs level into the walls. A hip roof
- * also slopes from its far ends, a shed's ends are plain; either way an end
- * against a wall runs level into it.
+ * The legs of a wraparound share one roof: the planes rising from its outer
+ * eaves (none from the walls), so it turns each corner on a hip that drains
+ * away from the house and runs level into the walls. Every leg takes every
+ * leg's front plane (each rises toward the house, so it is only the lowest
+ * near its own leg and the corners beside it); a hip roof also slopes from
+ * its two free ends, each only over its own leg, and a shed's ends are
+ * plain. An end against a wall runs level into it.
  */
 function joinWrapRoofs(entries, zones) {
-  entries.filter((entry) => entry.structure.wrapSegment === 'side').forEach((sideEntry) => {
-    const frontEntry = entries.find((entry) => entry.id === sideEntry.structure.wrapOf);
-    const segments = [frontEntry?.resolved, sideEntry.resolved];
-    if (!segments.every(Boolean)) {
-      // both or neither: a half-built wraparound would leave a hole at the corner
-      [frontEntry, sideEntry].filter((entry) => entry?.resolved).forEach((entry) => {
-        entry.errors.push(error('wrap-incomplete', 'The other half of this wraparound could not be built.'));
+  const porches = new Map();
+  entries.filter((entry) => entry.structure.wrapOf).forEach((entry) => {
+    porches.set(entry.structure.wrapOf, [...(porches.get(entry.structure.wrapOf) ?? []), entry]);
+  });
+  porches.forEach((legs) => {
+    if (legs.length < 2) {
+      return;
+    }
+    if (!legs.every((entry) => entry.resolved)) {
+      // all or none: a half-built wraparound would leave a hole at a corner
+      legs.filter((entry) => entry.resolved).forEach((entry) => {
+        entry.errors.push(error('wrap-incomplete', 'Another leg of this wraparound could not be built.'));
         entry.resolved = null;
       });
       return;
     }
-    const slope = segments[0].roofPitchRun > 0 ? segments[0].roofPitchRise / segments[0].roofPitchRun : 0;
-    const hipped = segments[0].roofType === 'hip';
-    const eaveSides = segments.map((resolved, k) => {
+    const first = legs[0].resolved;
+    const slope = first.roofPitchRun > 0 ? first.roofPitchRise / first.roofPitchRun : 0;
+    const hipped = first.roofType === 'hip';
+    const fronts = legs.map(({ resolved }) => makeEavePlane(resolved.bounds, structureWallSides(resolved.frame).front, slope));
+    legs.forEach(({ structure, resolved }) => {
       const walls = structureWallSides(resolved.frame);
-      // the front segment's corner end continues the side segment's front eave
-      const ends = hipped ? ['left', 'right'] : (k === 0 ? [frontEntry.structure.wrapEnd] : []);
-      return ['front', ...ends].filter((wall) => !resolved.seamSides.includes(wall)).map((wall) => walls[wall])
+      // an end run on past a corner continues the next leg's front eave; a free end is hipped on a hip roof
+      const pastCorner = Object.keys(structure.wrapExtend ?? {}).map((end) => resolved.frame.along === 'x'
+        ? (end === 'max' ? 'maxX' : 'minX')
+        : (end === 'max' ? 'maxZ' : 'minZ'));
+      const ends = ['left', 'right'].map((name) => walls[name])
+        .filter((side) => !resolved.seamSides.map((name) => walls[name]).includes(side))
+        .filter((side) => pastCorner.includes(side) || hipped)
         .filter((side) => !againstWall(resolved, side, zones));
+      const own = ends.filter((side) => !pastCorner.includes(side)).map((side) => makeEavePlane(resolved.bounds, side, slope));
+      const planes = [...fronts, ...own];
+      const unique = planes.filter((plane, i) => planes.findIndex((other) => other.axis === plane.axis && other.sign === plane.sign
+        && Math.abs(other.constant - plane.constant) < 1e-9) === i);
+      const { bounds } = resolved;
+      const rectangle = [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]];
+      Object.assign(resolved, {
+        planes: unique,
+        roofHeight: roofPeak(unique, rectangle),
+        eaveRoof: { eaveSides: [walls.front, ...ends] },
+      });
+      resolved.topY = resolved.plateY + resolved.roofHeight;
     });
-    setEaveRoof(segments, eaveSides, slope);
   });
 }
 

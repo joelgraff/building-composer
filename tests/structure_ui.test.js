@@ -39,7 +39,9 @@ describe('roof structure UI presets', () => {
   it('a wraparound porch runs the whole wall and turns the corner at its right end', () => {
     const record = newRoofStructure('wraparound-porch', placement);
     assert.equal(record.width, 20);
-    assert.deepEqual(record.wrap, { end: 'right', length: 4 });
+    assert.deepEqual(record.wrap.walls, ['minZ', 'minX'], 'on round the right-hand corner');
+    assert.equal(record.wrap.startLength, 20);
+    assert.equal(record.wrap.endLength, 4);
     const entries = buildWith([record]).roofStructures;
     assert.deepEqual(entries.map((entry) => entry.id), [record.id, `${record.id}-wrap`]);
     assert.deepEqual(entries.map((entry) => entry.errors), [[], []]);

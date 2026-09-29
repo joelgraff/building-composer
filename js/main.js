@@ -1674,11 +1674,15 @@ function structurePlacementLimits(structure) {
   };
   const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
   const host = entry?.host;
-  // a dormer asked for on a gable end is turned to the slope beside it (see resolveRoofStructure)
-  const turned = entry?.warnings?.some((warning) => warning.code === 'side-turned')
+  // a dormer asked for on a gable end is turned to the slope beside it (see
+  // resolveRoofStructure); what was built says so only for the side it was
+  // built on, not a side it is being moved to
+  const built = modelConfig.roofStructures.find((candidate) => candidate.id === structure.id);
+  const asBuilt = built?.hostSide === structure.hostSide;
+  const turned = asBuilt && entry?.warnings?.some((warning) => warning.code === 'side-turned')
     ? { minX: 'minZ', minZ: 'minX', maxX: 'maxZ', maxZ: 'maxX' }[structure.hostSide]
     : null;
-  const frame = host ? structureFrame(entry.resolved?.hostSide ?? turned ?? structure.hostSide) : null;
+  const frame = host ? structureFrame((asBuilt ? entry.resolved?.hostSide : null) ?? turned ?? structure.hostSide) : null;
   if (!host || !frame) {
     return fallback;
   }
@@ -1786,11 +1790,10 @@ function structurePlacementLimits(structure) {
     }
   }
   if (structure.wrap) {
-    // a wraparound stays at the corner it turns: its offset follows its width
-    const end = structureWallSides(frame)[structure.wrap.end]?.startsWith('max') ? 1 : -1;
-    const atCorner = end * Math.max(0, alongSpan / 2 - (structure.width ?? 0) / 2);
-    limits.offsetMin = atCorner;
-    limits.offsetMax = atCorner;
+    // a wraparound's end legs run from their corners at most the length of their walls
+    const { walls } = structure.wrap;
+    limits.wrapStartMax = wallSpan(host, walls[0]);
+    limits.wrapEndMax = wallSpan(host, walls[walls.length - 1]);
   }
   return limits;
 }
@@ -1928,6 +1931,45 @@ function renderStructurePanel() {
   structureEditor.innerHTML = selected ? structureEditorHtml(selected) : '';
 }
 
+/** The length of a volume's wall on `side` (a zone's rectangle). */
+function wallSpan(host, side) {
+  const { bounds } = host;
+  return side === 'minX' || side === 'maxX' ? bounds.maxZ - bounds.minZ : bounds.maxX - bounds.minX;
+}
+
+/** The walls in order around a volume: each beside the next, the last beside the first. */
+const WALL_ORDER = ['minZ', 'maxX', 'maxZ', 'minX'];
+
+/**
+ * A wraparound's walls after ticking or clearing one: the chosen walls in
+ * order around the volume, running the same way as before where it can, or
+ * null when they are not one unbroken run of two or more.
+ */
+function wrapWallsWith(walls, side, ticked) {
+  const chosen = new Set(ticked ? [...walls, side] : walls.filter((wall) => wall !== side));
+  if (chosen.size < 2) {
+    return null;
+  }
+  const at = (k) => WALL_ORDER[((k % 4) + 4) % 4];
+  let start = chosen.size === 4
+    ? WALL_ORDER.indexOf(walls[0])
+    : WALL_ORDER.findIndex((wall, k) => chosen.has(wall) && !chosen.has(at(k - 1)));
+  if (start < 0) {
+    return null;
+  }
+  const run = [];
+  for (let k = start; run.length < chosen.size && chosen.has(at(k)); k += 1) {
+    run.push(at(k));
+  }
+  if (run.length !== chosen.size) {
+    return null;
+  }
+  // keep the direction it ran before: its first (or last) wall stays first (or last)
+  const reversed = chosen.size === 4 ? [run[0], ...run.slice(1).reverse()] : [...run].reverse();
+  const keeps = (order) => order[0] === walls[0] || order[order.length - 1] === walls[walls.length - 1];
+  return !keeps(run) && keeps(reversed) ? reversed : run;
+}
+
 /**
  * Which kind of structure a record is, as the Add list names them: a
  * structure's editor only adjusts that kind, and never offers what would
@@ -2048,7 +2090,18 @@ function structureEditorHtml(structure) {
   const limits = structurePlacementLimits(structure);
 
   const type = structureType(structure);
-  const placement = [selectField('Facing', 'hostSide', SIDE_OPTIONS, structure.hostSide)];
+  const placement = [];
+  if (type === 'wraparound-porch') {
+    // the walls it runs along: one unbroken run of two or more (all four: all the way round)
+    const { walls } = structure.wrap;
+    placement.push('<div class="field"><label>Runs along</label>' + SIDE_OPTIONS.map(([side, label]) => {
+      const ticked = walls.includes(side);
+      const allowed = Boolean(wrapWallsWith(walls, side, !ticked));
+      return `<label class="field-inline" style="margin-bottom:6px;"><input type="checkbox" data-field="wrapWall:${side}"${ticked ? ' checked' : ''}${allowed ? '' : ' disabled'} />${escapeHtml(label)}</label>`;
+    }).join('') + '</div>');
+  } else {
+    placement.push(selectField('Facing', 'hostSide', SIDE_OPTIONS, structure.hostSide));
+  }
   if (type === 'cupola') {
     placement.push(selectField('Plan', 'planShape', [['', 'Rectangle'], ['polygon', 'Polygon (octagonal, or many sides for round)']], structure.plan?.shape ?? ''));
   }
@@ -2061,8 +2114,18 @@ function structureEditorHtml(structure) {
 
   const role = structureRole(structure);
   const footprint = [];
-  footprint.push(sliderField('Offset along the side', 'offset', structure.offset, limits.offsetMin, limits.offsetMax));
-  footprint.push(sliderField('Width', 'width', structure.width, limits.widthMin, limits.widthMax));
+  if (type === 'wraparound-porch') {
+    // its two end legs, each from the corner it turns (the legs between run their whole walls)
+    const { walls } = structure.wrap;
+    const name = (side) => SIDE_OPTIONS.find(([key]) => key === side)[1];
+    if (walls.length < 4) {
+      footprint.push(sliderField(`Leg along the ${name(walls[0])}, from the corner`, 'wrapStart', structure.wrap.startLength, MIN_STRUCTURE_SIZE, limits.wrapStartMax ?? FALLBACK_PLACEMENT_RANGE * 2));
+      footprint.push(sliderField(`Leg along the ${name(walls[walls.length - 1])}, from the corner`, 'wrapEnd', structure.wrap.endLength, MIN_STRUCTURE_SIZE, limits.wrapEndMax ?? FALLBACK_PLACEMENT_RANGE * 2));
+    }
+  } else {
+    footprint.push(sliderField('Offset along the side', 'offset', structure.offset, limits.offsetMin, limits.offsetMax));
+    footprint.push(sliderField('Width', 'width', structure.width, limits.widthMin, limits.widthMax));
+  }
   if (role === 'projecting') {
     // a porch, bay, or hood stands against its wall: its depth is how far it projects
     footprint.push(sliderField('Depth (out from the wall)', 'projection', structure.depth ?? -structure.setback, limits.depthMin, limits.depthMax));
@@ -2122,10 +2185,6 @@ function structureEditorHtml(structure) {
   if (!through && !standing) {
     roof.push(selectField('At the ridge', 'join', [['auto', 'Lower the roof only if it would pass the ridge'], ['snap-ridge', 'Always meet the ridge']], structure.join));
   }
-  if (type === 'wraparound-porch') {
-    footprint.push(selectField('Turns the corner at', 'wrapEnd', [['left', 'The left end'], ['right', 'The right end']], structure.wrap.end));
-    footprint.push(numberField('Length along the side wall', 'wrapLength', structure.wrap.length));
-  }
   if (!recess && type !== 'hood' && Number.isFinite(structure.setback) && structure.setback < 0) {
     // a hood is always on brackets; a porch on the ground stands on its deck, posts, or walls
     const supports = STRUCTURE_SUPPORTS.filter((key) => !(structure.baseHeight === 'ground' && (key === 'brackets' || key === 'none')));
@@ -2140,7 +2199,7 @@ function structureEditorHtml(structure) {
     materials.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
   }
 
-  return `<div class="structure-editor-head"><span>Editing ${escapeHtml(structure.id)}</span><button data-action="delete">Delete</button></div>`
+  return `<div class="structure-editor-head"><span>Editing ${escapeHtml(structure.id)}</span></div>`
     + fieldGroup('Placement', placement)
     + fieldGroup('Footprint', footprint)
     + fieldGroup('Height', height)
@@ -2203,12 +2262,6 @@ structureList.addEventListener('click', (event) => {
   }
 });
 
-structureEditor.addEventListener('click', (event) => {
-  if (event.target.closest('[data-action="delete"]')) {
-    deleteStructure(selectedStructureId);
-  }
-});
-
 /** Deletes a roof structure, with everything standing on it. */
 function deleteStructure(id) {
   const doomed = new Set([id]);
@@ -2241,12 +2294,48 @@ function applyStructureFieldEdit(input) {
   // both to the same limits the slider's own travel is bounded to.
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
   const field = input.dataset.field;
-  if (field.startsWith('open:')) {
+  if (field.startsWith('wrapWall:')) {
+    // tick or clear a wall; the end legs keep their lengths where their walls stay at the ends
+    const side = field.slice('wrapWall:'.length);
+    const walls = wrapWallsWith(record.wrap.walls, side, input.checked);
+    if (!walls) {
+      renderStructurePanel();
+      return;
+    }
+    const host = activeStructureEntries.find((candidate) => candidate.id === record.id)?.host;
+    const span = (wall) => (host ? wallSpan(host, wall) : 4);
+    const old = record.wrap.walls;
+    edited.wrap = {
+      walls,
+      startLength: walls[0] === old[0] ? record.wrap.startLength : Math.min(4, span(walls[0])),
+      endLength: walls[walls.length - 1] === old[old.length - 1] ? record.wrap.endLength : Math.min(4, span(walls[walls.length - 1])),
+    };
+    // a leg that was in the middle and is now an end keeps its whole wall
+    if (old.includes(walls[0]) && walls[0] !== old[0]) {
+      edited.wrap.startLength = span(walls[0]);
+    }
+    if (old.includes(walls[walls.length - 1]) && walls[walls.length - 1] !== old[old.length - 1]) {
+      edited.wrap.endLength = span(walls[walls.length - 1]);
+    }
+    edited.hostSide = walls[0];
+  } else if (field.startsWith('open:')) {
     const wall = field.slice(5);
     edited.openSides = input.checked ? [...new Set([...record.openSides, wall])] : record.openSides.filter((side) => side !== wall);
   } else {
     switch (field) {
-      case 'hostSide': edited.hostSide = input.value; break;
+      case 'hostSide': {
+        // on a shorter wall it is made to fit: as wide as the wall at most, and on it
+        edited.hostSide = input.value;
+        const limits = structurePlacementLimits(edited);
+        edited.width = clamp(record.width, limits.widthMin, limits.widthMax);
+        const placed = structurePlacementLimits({ ...edited, width: edited.width });
+        edited.offset = clamp(record.offset, placed.offsetMin, placed.offsetMax);
+        if (structureRole(edited) === 'projecting') {
+          edited.depth = clamp(record.depth ?? -record.setback, placed.depthMin, placed.depthMax);
+          edited.setback = -edited.depth;
+        }
+        break;
+      }
       case 'offset': {
         const limits = structurePlacementLimits(record);
         edited.offset = clamp(length(), limits.offsetMin, limits.offsetMax);
@@ -2349,23 +2438,33 @@ function applyStructureFieldEdit(input) {
       case 'planShape': edited.plan = input.value ? { shape: input.value } : null; break;
       case 'planAngle': edited.plan = { ...edited.plan, angle: Number(input.value) || 45 }; break;
       case 'planSides': edited.plan = { ...edited.plan, sides: Math.round(Number(input.value) || 8) }; break;
-      case 'wrapEnd': {
-        edited.wrap = input.value ? { end: input.value, length: edited.wrap?.length ?? 3 } : null;
-        if (edited.wrap) {
-          // it moves to the corner it turns, standing wholly outside the walls
-          const limits = structurePlacementLimits(edited);
-          edited.offset = limits.offsetMin;
-          edited.depth = -edited.setback;
-        }
+      case 'wrapStart': {
+        const limits = structurePlacementLimits(record);
+        edited.wrap = { ...record.wrap, startLength: clamp(length(), MIN_STRUCTURE_SIZE, limits.wrapStartMax ?? Infinity) };
         break;
       }
-      case 'wrapLength': edited.wrap = edited.wrap ? { ...edited.wrap, length: Math.max(0.5, length()) } : null; break;
+      case 'wrapEnd': {
+        const limits = structurePlacementLimits(record);
+        edited.wrap = { ...record.wrap, endLength: clamp(length(), MIN_STRUCTURE_SIZE, limits.wrapEndMax ?? Infinity) };
+        break;
+      }
       case 'wallMaterial': edited.materials.wall = input.value || undefined; break;
       case 'roofMaterial': edited.materials.roof = input.value || undefined; break;
       default: return;
     }
   }
   rebuildWithStructures(modelConfig.roofStructures.map((structure) => (structure.id === record.id ? edited : structure)));
+  // a wider or steeper roof rises higher: a porch's walls come down so it
+  // still tops out under the host eave (its limits use the roof as built)
+  const settled = modelConfig.roofStructures.find((structure) => structure.id === record.id);
+  if (settled && structureRole(settled) === 'projecting') {
+    const limits = structurePlacementLimits(settled);
+    if (settled.wallHeight > limits.wallHeightMax + 1e-6 && limits.wallHeightMax > limits.wallHeightMin) {
+      rebuildWithStructures(modelConfig.roofStructures.map((structure) => (structure.id === record.id
+        ? { ...settled, wallHeight: limits.wallHeightMax }
+        : structure)));
+    }
+  }
 }
 
 structureEditor.addEventListener('change', (event) => {

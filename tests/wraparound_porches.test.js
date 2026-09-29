@@ -51,6 +51,18 @@ function roofHeightAt(result, id, [x, z]) {
   return best;
 }
 
+/** The whole building is one closed shell (roofs sit ROOF_LIFT above their walls). */
+function assertClosed(result, label) {
+  const tris = [];
+  result.building.traverse((child) => {
+    if (child.isMesh && !child.userData?.editorOnly) {
+      meshTriangles(child).forEach((tri) => tris.push(tri.map(([x, y, z]) => [x, y + child.position.y, z])));
+    }
+  });
+  const lift = (edge) => result.roofZones.some((zone) => edge.every((p) => Math.abs(p[1] - zone.baseY) < 1e-3));
+  assert.deepEqual(uncoveredEdges(tris).filter((edge) => !lift(edge)), [], `${label}: see-through edges`);
+}
+
 describe('wraparound porches', () => {
   it('run on past the corner and back along the side wall, as two segments', () => {
     const [front, side] = build([porch()]).result.roofStructures;
@@ -110,18 +122,22 @@ describe('wraparound porches', () => {
     });
   });
 
-  it('must reach the corner, stand wholly outside the walls, and take a hip or shed roof', () => {
+  it('stands wholly outside the walls and takes a hip or shed roof', () => {
     const codes = (fields) => build([porch(fields)]).result.roofStructures.map((entry) => entry.errors.map((e) => e.code));
-    assert.deepEqual(codes({ offset: 1 }), [['wrap-not-at-corner'], ['wrap-incomplete']]);
-    assert.deepEqual(codes({ depth: 3 }), [['wrap-depth'], ['wrap-incomplete']]);
     assert.deepEqual(codes({ roofType: 'gable' }), [['wrap-roof'], ['wrap-roof']]);
     assert.deepEqual(codes({ setback: 0, depth: 2.4 }), [['wrap-not-porch']]);
   });
 
-  it('keeps its wrap in the record', () => {
-    assert.deepEqual(normalizeRoofStructure(porch()).wrap, { end: 'right', length: 4 });
+  it('keeps its walls and end legs in the record, converting the older one-corner form', () => {
+    // the older form: the porch's width is its first leg, `length` its second
+    assert.deepEqual(normalizeRoofStructure(porch()).wrap, { walls: ['maxZ', 'maxX'], startLength: 6, endLength: 4 });
+    assert.deepEqual(normalizeRoofStructure(porch({ wrap: { end: 'left', length: 3 } })).wrap, { walls: ['maxZ', 'minX'], startLength: 6, endLength: 3 });
     assert.equal(normalizeRoofStructure(porch({ wrap: { end: 'up', length: 4 } })).wrap, null);
     assert.equal(normalizeRoofStructure(porch({ wrap: { end: 'left', length: 0 } })).wrap, null);
+    const walls = (list) => normalizeRoofStructure(porch({ wrap: { walls: list, startLength: 3, endLength: 3 } })).wrap?.walls ?? null;
+    assert.deepEqual(walls(['minX', 'maxZ', 'maxX']), ['minX', 'maxZ', 'maxX']);
+    assert.equal(walls(['maxZ', 'minZ']), null, 'opposite walls do not meet');
+    assert.equal(walls(['maxZ']), null, 'one wall is a porch, not a wraparound');
   });
 
   it('a shed wraparound turns the corner on a hip and has plain far ends', () => {
@@ -177,5 +193,33 @@ describe('wraparound porches', () => {
     assert.deepEqual(entry.errors, []);
     assert.deepEqual(entry.resolved.eaveRoof.eaveSides.sort(), ['maxX', 'maxZ'], 'no hip against the wing at x = 1');
   });
-});
 
+  it('turns two corners: legs on three walls, both end legs adjustable', () => {
+    const { result } = build([porch({ wrap: { walls: ['minX', 'maxZ', 'maxX'], startLength: 3, endLength: 5 } })]);
+    const [a, b, c] = result.roofStructures;
+    assert.deepEqual([a.id, b.id, c.id], ['p', 'p-wrap', 'p-wrap-2']);
+    assert.deepEqual([a.errors, b.errors, c.errors], [[], [], []]);
+    assert.deepEqual(a.resolved.bounds, { minX: -7.4, maxX: -5, minZ: 1, maxZ: 6.4 }, 'the first leg: 3 m back from its corner, and past it');
+    assert.deepEqual(b.resolved.bounds, { minX: -5, maxX: 7.4, minZ: 4, maxZ: 6.4 }, 'the middle leg: the whole wall, and past its far corner');
+    assert.deepEqual(c.resolved.bounds, { minX: 5, maxX: 7.4, minZ: -1, maxZ: 4 }, 'the last leg: 5 m on from its corner');
+    // one roof, continuous across both seams
+    const plate = a.resolved.plateY;
+    near(roofHeightAt(result, 'p', [-5.2, 6.399 - 1e-3]), roofHeightAt(result, 'p-wrap', [-4.999, 6.399 - 1e-3]), 'across the first seam');
+    near(roofHeightAt(result, 'p-wrap', [6.8, 4.001]), roofHeightAt(result, 'p-wrap-2', [6.8, 3.999]), 'across the second seam');
+    near(roofHeightAt(result, 'p-wrap-2', [6.8, 1]), plate + SLOPE * 0.6, 'the last leg\'s slope');
+    assertClosed(result, 'three walls');
+  });
+
+  it('runs all the way round on four walls, with no ends', () => {
+    const { result } = build([porch({ wrap: { walls: ['maxZ', 'maxX', 'minZ', 'minX'], startLength: 3, endLength: 3 } })]);
+    assert.equal(result.roofStructures.length, 4);
+    result.roofStructures.forEach((entry) => assert.deepEqual(entry.errors, [], entry.id));
+    const along = result.roofStructures.map((entry) => entry.resolved.bounds);
+    // every wall's leg runs its whole wall, and on past one corner
+    assert.deepEqual(along[0], { minX: -5, maxX: 7.4, minZ: 4, maxZ: 6.4 });
+    assert.deepEqual(along[2], { minX: -7.4, maxX: 5, minZ: -6.4, maxZ: -4 });
+    near(roofHeightAt(result, 'p-wrap', [6.8, 3.999]), roofHeightAt(result, 'p', [6.8, 4.001]), 'across a seam');
+    near(roofHeightAt(result, 'p-wrap-3', [-5.001, 5]), roofHeightAt(result, 'p', [-4.999, 5]), 'closing the loop');
+    assertClosed(result, 'all the way round');
+  });
+});

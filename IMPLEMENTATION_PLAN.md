@@ -893,10 +893,15 @@ Still to do, when a real building needs it:
 - The trip back to the game: write the composed building out in game space from its `placement`.
 - Found while testing (predates this work): a gable over three stacked bands (building 1393801286 squared off) leaves gaps at its rake ends.
 
+## Wraparound porches on more than one corner
+
+A wraparound (`wrap: { walls, startLength, endLength }`) runs along two to four walls of its volume, each beside the next; with all four it runs all the way round. `expandWraps` makes one leg per wall: a leg turning a corner runs on past it by the projection (`wrapExtend`), the next starts at the corner. The two end legs' lengths are measured from their corners; the legs between run their whole walls. All legs share one depth and one roof: every leg takes every leg's front plane, and only its own end hips (`joinWrapRoofs`). The editor ticks the walls (only one unbroken run can be ticked) and has a slider for each end leg. Files with the one-corner form (`{ end, length }`) load as two walls, the porch's width as the first leg. Tests: `tests/wraparound_porches.test.js`.
+
 ## Immediate next implementation step
 
 - Facade modifiers (Tasks 6–7): windows, doors, trim, and railings, placed on the footprint's wall runs and on roof structures' wall runs (within their visible pieces) and railing runs.
 - Revisit porches with real buildings to model against.
+- Found 2026-09-28, not fixed: a single-rectangle hip takes its height from the run along its ridge direction (`roofHeightFromPitch`), so for one of the two directions it is the longer side's and one pair of slopes is steeper than the pitch (a 12 x 9 m hip at 6/12 is 3.0 m high, not 2.25 m). A height below the natural one (a .bld with no `roofHeight`) makes the other pair shallower, and the walls show through at the eave.
 - Porch posts, adjustable (asked for 2026-09-28; not designed yet): a spacing slider, like an array modifier (closer spacing, more posts), and a post style, with posts always at the porch's corners. Posts are placed by `spacedPositions` at `MAX_POST_SPAN` today.
 - Deferred until needed: a continuous mansard around L/U footprints (straight skeleton split at the break); the open-to-the-sky recessed notch; curved mansard slopes.
 - Remaining resolver work: hip and flat roofs as the merging roof, and cutting wall tops to the roof.
