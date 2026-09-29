@@ -1612,15 +1612,29 @@ function createRoofGeometry(footprint, config) {
     return { geometry: createRoofFieldSurface(footprint, config), zones: [] };
   }
 
+  // a flat roof over several volumes: one slab over the whole footprint, with
+  // no overhang, and a zone per volume for structures to stand on
   const roofShape = buildShape(footprint, 0);
   const geometry = new THREE.ExtrudeGeometry(roofShape, {
-    depth: 0.08,
+    depth: FLAT_ROOF_THICKNESS,
     bevelEnabled: false,
     steps: 1,
     curveSegments: 12,
   });
   geometry.rotateX(-Math.PI / 2);
-  return { geometry, zones: [] };
+  const noOverhang = { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
+  const zones = (config.volumes ?? []).map((volume) => {
+    const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
+    const zone = roofZoneDescriptor(volume.id, {
+      wallBounds: bounds,
+      roofBounds: bounds,
+      roofType: 'flat',
+      roofConfig: { ...config, roofDirection: volume.ridgeAxis },
+      setup: { overhang: noOverhang, eaves: { ...resolveVolumeEaves(volume.id, config), eaveDepth: 0, rakeDepth: 0 } },
+    });
+    return volume.outline ? { ...zone, outline: volume.outline } : zone;
+  });
+  return { geometry, zones };
 }
 
 /** Whether a wall a-b of `volume` lies against another of `volumes` (a wall they share). */

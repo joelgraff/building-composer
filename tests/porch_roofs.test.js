@@ -168,3 +168,25 @@ describe('entry hoods', () => {
   });
 });
 
+
+describe('porches on a flat roof over several volumes', () => {
+  it('have a host on every volume and side (the flat roof reports a zone per volume)', () => {
+    // the app's "narrow rear lean-to" footprint, flat roofed (the app's default)
+    const leanTo = [[-10, -7], [10, -7], [10, 3], [4, 3], [4, 10], [-4, 10], [-4, 3], [-10, 3]];
+    const volumes = computeFacadeLayout(leanTo, { volumeSplit: 'auto' }).volumes;
+    assert.equal(volumes.length, 2);
+    const porch = (hostVolumeId, hostSide) => ({
+      id: 'p', kind: 'porch', hostVolumeId, hostSide, offset: 0, width: 3, setback: -2, depth: 2, baseHeight: 'ground', wallHeight: 2.6, roofType: 'shed',
+    });
+    const result = (structure) => createBuildingFromFootprint(leanTo, {
+      storyCount: 2, storyHeight: 3, foundationDepth: 0.7, roofType: 'flat', volumes, roofStructures: normalizeRoofStructures([structure]),
+    });
+    assert.equal(result(porch('volume-0', 'minZ')).roofZones.length, 2);
+    volumes.forEach((volume) => ['minX', 'maxX', 'maxZ'].forEach((side) => {
+      if (volume.id === 'volume-0' && side === 'maxZ') {
+        return; // the main block's rear, behind the lean-to
+      }
+      assert.deepEqual(result(porch(volume.id, side)).roofStructures[0].errors, [], `${volume.id} ${side}`);
+    }));
+  });
+});

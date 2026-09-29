@@ -897,5 +897,6 @@ Still to do, when a real building needs it:
 
 - Facade modifiers (Tasks 6–7): windows, doors, trim, and railings, placed on the footprint's wall runs and on roof structures' wall runs (within their visible pieces) and railing runs.
 - Revisit porches with real buildings to model against.
+- Porch posts, adjustable (asked for 2026-09-28; not designed yet): a spacing slider, like an array modifier (closer spacing, more posts), and a post style, with posts always at the porch's corners. Posts are placed by `spacedPositions` at `MAX_POST_SPAN` today.
 - Deferred until needed: a continuous mansard around L/U footprints (straight skeleton split at the break); the open-to-the-sky recessed notch; curved mansard slopes.
 - Remaining resolver work: hip and flat roofs as the merging roof, and cutting wall tops to the roof.

@@ -5,7 +5,7 @@ import {
   createBuildingFromFootprint, volumeWallHeight, volumeFoundationHeight, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS,
 } from './extrusion.js';
 import {
-  normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS, structureFrame, resolveRoofStructure,
+  normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS, structureFrame, structureWallSides, resolveRoofStructure, MAX_BRACKET_PROJECTION, hostEaveProfile,
 } from './roof-structures.js';
 import { STRUCTURE_UI_PRESETS, newRoofStructure, structureLabel } from './structure-ui.js';
 import { TWO_SLOPE_ROOF_TYPES } from './roof-planes.js';
@@ -1674,7 +1674,11 @@ function structurePlacementLimits(structure) {
   };
   const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
   const host = entry?.host;
-  const frame = host ? structureFrame(structure.hostSide) : null;
+  // a dormer asked for on a gable end is turned to the slope beside it (see resolveRoofStructure)
+  const turned = entry?.warnings?.some((warning) => warning.code === 'side-turned')
+    ? { minX: 'minZ', minZ: 'minX', maxX: 'maxZ', maxZ: 'maxX' }[structure.hostSide]
+    : null;
+  const frame = host ? structureFrame(entry.resolved?.hostSide ?? turned ?? structure.hostSide) : null;
   if (!host || !frame) {
     return fallback;
   }
@@ -1691,11 +1695,12 @@ function structurePlacementLimits(structure) {
   // porch roof would, and its footprint can run flush to the corner too.
   const isDormer = structure.baseHeight === null && structure.mount !== 'through';
   const overhang = isDormer ? structureAlongOverhang(structure, frame) : 0;
-  // a porch, bay, or tower may stand past the end of its wall (a corner
-  // tower centered on the corner); a dormer stays on its slope
-  const halfTravel = isDormer
-    ? Math.max(0, alongSpan / 2 - (structure.width ?? 0) / 2 - overhang - PLACEMENT_EDGE_MARGIN)
-    : alongSpan / 2 + (structure.width ?? 0) / 2;
+  // a polygonal tower may stand past the end of its wall (centered on the
+  // corner); anything else stays on its wall, and a dormer on its slope
+  const pastCorner = structure.plan?.shape === 'polygon' && !isDormer;
+  const halfTravel = pastCorner
+    ? alongSpan / 2 + (structure.width ?? 0) / 2
+    : Math.max(0, alongSpan / 2 - (structure.width ?? 0) / 2 - overhang - (isDormer ? PLACEMENT_EDGE_MARGIN : 0));
   // Width's own bound holds *at offset 0* (as wide as the host wall run
   // allows if centered) rather than the current offset: were it narrowed by
   // the current offset instead, dragging offset would visibly rescale the
@@ -1729,19 +1734,24 @@ function structurePlacementLimits(structure) {
   // stand right at the wall line), not the current setback.
   // A structure on a base, or rising through the roof, may stand as tall as
   // the house and its roof (a tower rising past the eave).
+  // A porch, bay, or hood against its wall stays under the host's eave: its
+  // roof tops out no higher than the host's wall top.
+  const levels = structureRole(structure) === 'projecting' ? structureLevels(structure) : null;
   const wallHeightMax = isDormer && pitchSlope > 0
     ? Math.max(MIN_STRUCTURE_SIZE, host.roofHeight - PLACEMENT_EDGE_MARGIN)
-    : Math.max(fallback.wallHeightMax, (host.wallTopY ?? 0) + (host.roofHeight ?? 0) + FALLBACK_PLACEMENT_RANGE);
+    : levels
+      ? Math.max(MIN_STRUCTURE_SIZE, levels.topY - levels.sillY - levels.roofRise)
+      : Math.max(fallback.wallHeightMax, (host.wallTopY ?? 0) + (host.roofHeight ?? 0) + FALLBACK_PLACEMENT_RANGE);
 
   const effectiveDepth = entry?.resolved
     ? Math.abs(entry.resolved.back - entry.resolved.front)
     : (structure.depth ?? depthMax);
   const insetMax = maxValidInset(structure, host, Math.max(0, effectiveDepth - PLACEMENT_EDGE_MARGIN));
 
-  return {
+  const limits = {
     offsetMin: -halfTravel,
     offsetMax: halfTravel,
-    setbackMin: structure.baseHeight === null ? 0 : -Math.max(usableInward, FALLBACK_PLACEMENT_RANGE),
+    setbackMin: structure.baseHeight === null ? 0 : -Math.max(usableInward, FALLBACK_PLACEMENT_RANGE * 2),
     setbackMax: Math.min(planSetbackMax, plateSetbackMax),
     widthMin: MIN_STRUCTURE_SIZE,
     widthMax,
@@ -1752,6 +1762,37 @@ function structurePlacementLimits(structure) {
     insetMin: 0,
     insetMax,
   };
+  const role = structureRole(structure);
+  if (role === 'on-roof') {
+    // a porch on the roof stays within the walls (past them it is an upper porch)
+    limits.setbackMin = Math.max(limits.setbackMin, 0);
+  }
+  if (role === 'projecting' && (structure.kind === 'hood' || structure.support === 'brackets')) {
+    // brackets carry only so much projection
+    limits.depthMax = Math.min(limits.depthMax, MAX_BRACKET_PROJECTION);
+  }
+  if (structure.plan?.shape === 'canted') {
+    // a canted bay's front is what its width leaves after its two angled sides
+    const run = 1 / Math.tan(((structure.plan.angle ?? 45) * Math.PI) / 180);
+    const depthNow = structure.depth ?? -structure.setback;
+    limits.widthMin = Math.max(limits.widthMin, 2 * depthNow * run + MIN_STRUCTURE_SIZE);
+    limits.depthMax = Math.min(limits.depthMax, Math.max(MIN_STRUCTURE_SIZE, ((structure.width ?? 0) - MIN_STRUCTURE_SIZE) / (2 * run)));
+  }
+  if (role === 'recess') {
+    // the recess's ceiling stays under the roof
+    const levels = structureLevels(structure);
+    if (levels) {
+      limits.wallHeightMax = Math.max(MIN_STRUCTURE_SIZE, levels.wallTopY - levels.sillY);
+    }
+  }
+  if (structure.wrap) {
+    // a wraparound stays at the corner it turns: its offset follows its width
+    const end = structureWallSides(frame)[structure.wrap.end]?.startsWith('max') ? 1 : -1;
+    const atCorner = end * Math.max(0, alongSpan / 2 - (structure.width ?? 0) / 2);
+    limits.offsetMin = atCorner;
+    limits.offsetMax = atCorner;
+  }
+  return limits;
 }
 
 function escapeHtml(text) {
@@ -1789,11 +1830,17 @@ function numberField(label, field, value, { length = true, step = 0.1, disabled 
  */
 function sliderField(label, field, value, min, max, { disabled = false } = {}) {
   const factor = unitFactor();
-  const displayMin = Number((min * factor).toFixed(2));
-  const displayMax = Number((max * factor).toFixed(2));
+  let displayMin = Number((min * factor).toFixed(2));
+  let displayMax = Number((max * factor).toFixed(2));
   const shown = Number.isFinite(value) ? Number((value * factor).toFixed(2)) : displayMax;
   const clamped = Math.min(Math.max(shown, displayMin), displayMax);
-  const disabledAttr = disabled ? ' disabled' : '';
+  // no travel left (a porch as wide as its wall has one place to be): the
+  // slider sits disabled at its middle rather than pinned to one end
+  const stuck = displayMax - displayMin < 0.005;
+  if (stuck) {
+    [displayMin, displayMax] = [clamped - 1, clamped + 1];
+  }
+  const disabledAttr = disabled || stuck ? ' disabled' : '';
   // step="any": with a min that isn't a clean multiple of a fixed step, a
   // numeric step snaps every value a little off what was actually set.
   return `<div class="field"><label>${escapeHtml(label)} (${unitLabel()})</label>`
@@ -1859,8 +1906,9 @@ function renderStructurePanel() {
       const note = problem
         ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(problem.message)}</span>`
         : '';
-      return `<button class="structure-row${structure.id === selectedStructureId ? ' selected' : ''}" data-structure-id="${structure.id}">`
-        + `${escapeHtml(structure.id)}: ${escapeHtml(structureLabel(structure))}${note}</button>`;
+      return `<div class="structure-row-wrap"><button class="structure-row${structure.id === selectedStructureId ? ' selected' : ''}" data-structure-id="${structure.id}">`
+        + `${escapeHtml(structure.id)}: ${escapeHtml(structureLabel(structure))}${note}</button>`
+        + `<button class="structure-delete" data-delete-structure="${structure.id}" title="Delete ${escapeHtml(structure.id)}" aria-label="Delete ${escapeHtml(structure.id)}">×</button></div>`;
     }).join('')
     : '<div style="color:var(--muted);">No roof structures. Pick one above and add it to the selected volume.</div>';
 
@@ -1880,62 +1928,189 @@ function renderStructurePanel() {
   structureEditor.innerHTML = selected ? structureEditorHtml(selected) : '';
 }
 
+/**
+ * Which kind of structure a record is, as the Add list names them: a
+ * structure's editor only adjusts that kind, and never offers what would
+ * make it another (a ground porch's base on the roof is a dormer, at a
+ * height an upper porch); another kind is added from the list instead.
+ */
+function structureType(structure) {
+  if (structure.kind === 'hood') {
+    return 'hood';
+  }
+  if (structure.mount === 'recess') {
+    return 'integral-porch';
+  }
+  if (structure.baseHeight === null) {
+    return structure.mount === 'through' ? 'cupola' : 'dormer';
+  }
+  if (structure.hostStructureId) {
+    return 'sleeping-porch';
+  }
+  if (structure.plan?.shape === 'polygon') {
+    return 'tower';
+  }
+  if (structure.plan?.shape === 'canted') {
+    return 'canted-bay';
+  }
+  if (structure.wrap) {
+    return 'wraparound-porch';
+  }
+  const projecting = Number.isFinite(structure.setback) && structure.setback < 0;
+  if (!projecting) {
+    return 'porch-on-roof';
+  }
+  return structure.baseHeight === 'ground' ? 'ground-porch' : 'upper-porch';
+}
+
+/**
+ * What a structure is, for its editor: 'dormer' (rises out of the roof),
+ * 'through' (rises through it, a cupola), 'recess' (cut into the house),
+ * 'projecting' (stands against its wall and projects from it: a porch, bay,
+ * or hood), 'tower' (a polygonal tower, which may straddle the wall or
+ * corner), or 'on-roof' (stands on the roof or on another structure).
+ */
+function structureRole(structure) {
+  if (structure.baseHeight === null) {
+    return structure.mount === 'through' ? 'through' : 'dormer';
+  }
+  if (structure.mount === 'recess') {
+    return 'recess';
+  }
+  if (structure.plan?.shape === 'polygon') {
+    return 'tower';
+  }
+  return !structure.hostStructureId && Number.isFinite(structure.setback) && structure.setback < 0 ? 'projecting' : 'on-roof';
+}
+
+/**
+ * Where a structure stands against its host: its floor (sill), its roof's
+ * rise above its plate, and the host's floor, wall top, and story height.
+ * Null when it hasn't been built.
+ */
+function structureLevels(structure) {
+  const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
+  const host = entry?.host;
+  if (!host || !Number.isFinite(host.wallTopY)) {
+    return null;
+  }
+  const sillY = entry.resolved?.sillY ?? (structure.baseHeight === 'ground'
+    ? host.foundationTopY
+    : Number.isFinite(structure.baseHeight) ? host.wallTopY + structure.baseHeight : null);
+  if (!Number.isFinite(sillY)) {
+    return null;
+  }
+  const roofRise = entry.resolved
+    ? (entry.resolved.roofType === 'flat' ? 0.08 : entry.resolved.roofHeight ?? 0)
+    : 0;
+  const volumeId = structure.hostVolumeId;
+  const storyHeight = modelConfig.volumeStoryHeights?.[volumeId] ?? modelConfig.storyHeight;
+  // the underside of the host's eave where the structure meets the wall: its
+  // roof stays below it (see the resolver's above-eave warning)
+  let topY = host.wallTopY;
+  const resolved = entry.resolved;
+  if (resolved?.along && Number.isFinite(host.baseY)) {
+    const wall = host.bounds[resolved.hostSide];
+    const profile = hostEaveProfile(host, resolved.hostSide, (resolved.along[0] + resolved.along[1]) / 2);
+    const atWall = profile?.outline.filter(([u]) => Math.abs(u - wall) < 1e-9).map(([, v]) => v) ?? [];
+    if (atWall.length) {
+      topY = Math.min(topY, host.baseY + Math.min(...atWall));
+    }
+  }
+  return {
+    sillY, roofRise, storyHeight, floorY: host.foundationTopY ?? sillY, wallTopY: host.wallTopY, topY,
+  };
+}
+
+/** The whole-story heights a porch or bay can rise to: its roof topping out at the top of story 1, 2, ... of its host. */
+function storyChoices(structure) {
+  const levels = structureLevels(structure);
+  if (!levels) {
+    return [];
+  }
+  const choices = [];
+  for (let stories = 1; levels.floorY + stories * levels.storyHeight <= levels.wallTopY + 1e-6; stories += 1) {
+    const wallHeight = Math.min(levels.floorY + stories * levels.storyHeight, levels.topY) - levels.sillY - levels.roofRise;
+    if (wallHeight >= MIN_PORCH_WALL) {
+      choices.push({ stories, wallHeight });
+    }
+  }
+  return choices;
+}
+
+/** The lowest a porch's walls go when set by stories (a door fits under). */
+const MIN_PORCH_WALL = 2;
+
 function structureEditorHtml(structure) {
   const through = structure.mount === 'through';
   const recess = structure.mount === 'recess';
   const standing = structure.baseHeight !== null;
-  const baseMode = structure.baseHeight === null ? 'roof' : structure.baseHeight === 'ground' ? 'ground' : 'height';
   const limits = structurePlacementLimits(structure);
 
+  const type = structureType(structure);
   const placement = [selectField('Facing', 'hostSide', SIDE_OPTIONS, structure.hostSide)];
-  if (!standing) {
-    // a porch stands on its base; only a structure without one joins or rises through the roof
-    placement.push(selectField('Meets the roof', 'mount', [['join', 'Joins one slope (a dormer)'], ['through', 'Rises through it (a cupola)']], structure.mount));
+  if (type === 'cupola') {
+    placement.push(selectField('Plan', 'planShape', [['', 'Rectangle'], ['polygon', 'Polygon (octagonal, or many sides for round)']], structure.plan?.shape ?? ''));
   }
-  if (standing) {
-    // an integral porch is cut into the house under its roof
-    placement.push(checkField('Recessed into the house, under its roof', 'recess', recess));
+  if (type === 'canted-bay') {
+    placement.push(numberField('Angle of the sides (degrees)', 'planAngle', structure.plan.angle, { length: false, step: 5 }));
   }
-  if (standing || through) {
-    // a bay or tower can be canted or polygonal in plan
-    placement.push(selectField('Plan', 'planShape', [['', 'Rectangle'], ['canted', 'Canted bay (angled sides)'], ['polygon', 'Polygon (octagonal, or many sides for round)']], structure.plan?.shape ?? ''));
-    if (structure.plan?.shape === 'canted') {
-      placement.push(numberField('Angle of the sides (degrees)', 'planAngle', structure.plan.angle, { length: false, step: 5 }));
-    }
-    if (structure.plan?.shape === 'polygon') {
-      placement.push(numberField('Sides', 'planSides', structure.plan.sides, { length: false, step: 1 }));
-    }
+  if (structure.plan?.shape === 'polygon') {
+    placement.push(numberField('Sides', 'planSides', structure.plan.sides, { length: false, step: 1 }));
   }
 
+  const role = structureRole(structure);
   const footprint = [];
   footprint.push(sliderField('Offset along the side', 'offset', structure.offset, limits.offsetMin, limits.offsetMax));
   footprint.push(sliderField('Width', 'width', structure.width, limits.widthMin, limits.widthMax));
-  if (!recess) {
+  if (role === 'projecting') {
+    // a porch, bay, or hood stands against its wall: its depth is how far it projects
+    footprint.push(sliderField('Depth (out from the wall)', 'projection', structure.depth ?? -structure.setback, limits.depthMin, limits.depthMax));
+  } else if (role === 'tower') {
+    footprint.push(sliderField('Setback from the wall (negative stands out past it)', 'setback', structure.setback, limits.setbackMin, limits.setbackMax));
+    footprint.push(sliderField('Depth', 'depth', structure.depth, limits.depthMin, limits.depthMax));
+  } else if (recess) {
+    footprint.push(sliderField('Depth into the house', 'depth', structure.depth, limits.depthMin, limits.depthMax));
+  } else {
+    // a dormer, a cupola, or a porch standing on the roof: placed up the roof from the wall
     footprint.push(checkField('Centered across the roof', 'setbackCenter', structure.setback === 'center'));
     if (structure.setback !== 'center') {
-      footprint.push(sliderField('Setback from the wall (negative projects)', 'setback', structure.setback, limits.setbackMin, limits.setbackMax));
+      footprint.push(sliderField('Setback from the wall', 'setback', structure.setback, limits.setbackMin, limits.setbackMax));
     }
-    footprint.push(checkField('Depth runs back to the roof', 'depthAuto', structure.depth === null));
+    if (role === 'dormer') {
+      footprint.push(checkField('Depth runs back to the roof', 'depthAuto', structure.depth === null));
+    }
+    footprint.push(sliderField('Depth', 'depth', structure.depth, limits.depthMin, limits.depthMax, { disabled: structure.depth === null }));
   }
-  footprint.push(sliderField(recess ? 'Depth into the house' : 'Depth', 'depth', structure.depth, limits.depthMin, limits.depthMax, { disabled: structure.depth === null }));
 
-  const height = [sliderField(
+  const height = [];
+  const stories = role === 'projecting' && structure.kind !== 'hood' ? storyChoices(structure) : [];
+  if (stories.length) {
+    // a porch or bay rises a whole number of the house's stories: its roof tops out at the top of one
+    const current = stories.find((choice) => Math.abs(choice.wallHeight - structure.wallHeight) < 0.005);
+    height.push(selectField('Stories (its roof reaches the top of)', 'stories', [
+      ...(current ? [] : [['', 'Custom height']]),
+      ...stories.map((choice) => [String(choice.stories), choice.stories === 1 ? 'The first story' : `Story ${choice.stories}`]),
+    ], current ? String(current.stories) : ''));
+  }
+  height.push(sliderField(
     recess ? 'Ceiling height' : structure.kind === 'hood' ? 'Height of its roof above the floor' : 'Wall height',
     'wallHeight', structure.wallHeight, limits.wallHeightMin, limits.wallHeightMax,
-  )];
-  if (!through) {
-    height.push(selectField('Base', 'baseMode', [['roof', 'Rises out of the roof (a dormer)'], ['ground', 'Stands on the ground (a porch)'], ['height', 'Stands at a height above the host plate (a porch)']], baseMode));
-    if (baseMode === 'height') {
-      height.push(numberField('Base height above the host plate', 'baseHeight', structure.baseHeight));
-    }
-    if (!recess) {
-      height.push(sliderField('Recessed front (inset)', 'inset', structure.inset, limits.insetMin, limits.insetMax));
-    }
+  ));
+  if (type === 'upper-porch') {
+    height.push(numberField('Base height above the host plate', 'baseHeight', structure.baseHeight));
+  }
+  if (role === 'dormer') {
+    height.push(sliderField('Recessed front (inset)', 'inset', structure.inset, limits.insetMin, limits.insetMax));
   }
 
   const roof = [];
   if (!recess) {
-    roof.push(selectField('Roof', 'roofType', STRUCTURE_ROOF_OPTIONS, structure.roofType));
+    // a wraparound turns its corner on a hip or shed roof
+    const roofOptions = type === 'wraparound-porch'
+      ? STRUCTURE_ROOF_OPTIONS.filter(([key]) => key === 'hip' || key === 'shed')
+      : STRUCTURE_ROOF_OPTIONS;
+    roof.push(selectField('Roof', 'roofType', roofOptions, structure.roofType));
     // a dormer's ridge always runs into the roof
     if ((through || standing) && (structure.roofType === 'gable' || structure.roofType === 'hip')) {
       roof.push(selectField('Ridge', 'ridge', [['perpendicular', 'Runs into the roof'], ['parallel', 'Runs along the side']], structure.ridge));
@@ -1947,15 +2122,14 @@ function structureEditorHtml(structure) {
   if (!through && !standing) {
     roof.push(selectField('At the ridge', 'join', [['auto', 'Lower the roof only if it would pass the ridge'], ['snap-ridge', 'Always meet the ridge']], structure.join));
   }
-  if (!recess && standing && Number.isFinite(structure.setback) && structure.setback < 0) {
-    // a porch past its wall can turn the corner at either end
-    footprint.push(selectField('Wraps around the corner', 'wrapEnd', [['', 'No'], ['left', 'At the left end'], ['right', 'At the right end']], structure.wrap?.end ?? ''));
-    if (structure.wrap) {
-      footprint.push(numberField('Length along the side wall', 'wrapLength', structure.wrap.length));
-    }
+  if (type === 'wraparound-porch') {
+    footprint.push(selectField('Turns the corner at', 'wrapEnd', [['left', 'The left end'], ['right', 'The right end']], structure.wrap.end));
+    footprint.push(numberField('Length along the side wall', 'wrapLength', structure.wrap.length));
   }
-  if (!recess && Number.isFinite(structure.setback) && structure.setback < 0) {
-    roof.push(selectField('Held up by', 'support', STRUCTURE_SUPPORTS.map((key) => [key, key === 'auto' ? 'Automatic' : `${key[0].toUpperCase()}${key.slice(1)}`]), structure.support));
+  if (!recess && type !== 'hood' && Number.isFinite(structure.setback) && structure.setback < 0) {
+    // a hood is always on brackets; a porch on the ground stands on its deck, posts, or walls
+    const supports = STRUCTURE_SUPPORTS.filter((key) => !(structure.baseHeight === 'ground' && (key === 'brackets' || key === 'none')));
+    roof.push(selectField('Held up by', 'support', supports.map((key) => [key, key === 'auto' ? 'Automatic' : `${key[0].toUpperCase()}${key.slice(1)}`]), structure.support));
   }
 
   const openings = ['<div class="field"><label>Open sides</label>'
@@ -1966,14 +2140,13 @@ function structureEditorHtml(structure) {
     materials.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
   }
 
-  return `<div style="margin:10px 0 8px; font-weight:700;">Editing ${escapeHtml(structure.id)}</div>`
+  return `<div class="structure-editor-head"><span>Editing ${escapeHtml(structure.id)}</span><button data-action="delete">Delete</button></div>`
     + fieldGroup('Placement', placement)
     + fieldGroup('Footprint', footprint)
     + fieldGroup('Height', height)
     + fieldGroup('Roof', roof)
     + fieldGroup('Openings', openings)
-    + fieldGroup('Materials', materials)
-    + '<div class="actions"><button data-action="delete">Delete</button></div>';
+    + fieldGroup('Materials', materials);
 }
 
 function rebuildWithStructures(structures) {
@@ -2015,6 +2188,11 @@ structureAddBtn.addEventListener('click', () => {
 });
 
 structureList.addEventListener('click', (event) => {
+  const remove = event.target.closest('[data-delete-structure]');
+  if (remove) {
+    deleteStructure(remove.dataset.deleteStructure);
+    return;
+  }
   const row = event.target.closest('[data-structure-id]');
   if (!row) {
     return;
@@ -2026,11 +2204,14 @@ structureList.addEventListener('click', (event) => {
 });
 
 structureEditor.addEventListener('click', (event) => {
-  if (!event.target.closest('[data-action="delete"]')) {
-    return;
+  if (event.target.closest('[data-action="delete"]')) {
+    deleteStructure(selectedStructureId);
   }
-  // a structure goes with everything standing on it
-  const doomed = new Set([selectedStructureId]);
+});
+
+/** Deletes a roof structure, with everything standing on it. */
+function deleteStructure(id) {
+  const doomed = new Set([id]);
   let grew = true;
   while (grew) {
     grew = false;
@@ -2041,9 +2222,11 @@ structureEditor.addEventListener('click', (event) => {
       }
     });
   }
-  selectedStructureId = null;
+  if (doomed.has(selectedStructureId)) {
+    selectedStructureId = null;
+  }
   rebuildWithStructures(modelConfig.roofStructures.filter((structure) => !doomed.has(structure.id)));
-});
+}
 
 /** Applies one structure-editor field's current value to its record and rebuilds. Shared by `change` (every field) and `input` (sliders, for continuous updates while dragging). */
 function applyStructureFieldEdit(input) {
@@ -2064,7 +2247,6 @@ function applyStructureFieldEdit(input) {
   } else {
     switch (field) {
       case 'hostSide': edited.hostSide = input.value; break;
-      case 'mount': edited.mount = input.value; break;
       case 'offset': {
         const limits = structurePlacementLimits(record);
         edited.offset = clamp(length(), limits.offsetMin, limits.offsetMax);
@@ -2080,6 +2262,12 @@ function applyStructureFieldEdit(input) {
         edited.width = clamp(length(), limits.widthMin, limits.widthMax);
         const offsetLimits = structurePlacementLimits({ ...record, width: edited.width });
         edited.offset = clamp(record.offset, offsetLimits.offsetMin, offsetLimits.offsetMax);
+        if (record.plan?.shape === 'canted') {
+          // narrowing a canted bay shortens its projection to keep a front
+          const depthLimits = structurePlacementLimits({ ...record, width: edited.width });
+          const depth = clamp(record.depth ?? -record.setback, depthLimits.depthMin, depthLimits.depthMax);
+          Object.assign(edited, { depth, setback: -depth });
+        }
         break;
       }
       case 'setbackCenter':
@@ -2111,39 +2299,43 @@ function applyStructureFieldEdit(input) {
         const limits = structurePlacementLimits(record);
         edited.wallHeight = clamp(length(), limits.wallHeightMin, limits.wallHeightMax);
         const setbackLimits = structurePlacementLimits({ ...record, wallHeight: edited.wallHeight });
-        if (typeof record.setback === 'number') {
+        if (structureRole(record) === 'dormer' && record.inset > 0) {
+          // lower walls leave less room for a recessed front
+          const insetLimits = structurePlacementLimits({ ...record, wallHeight: edited.wallHeight });
+          edited.inset = clamp(record.inset, insetLimits.insetMin, insetLimits.insetMax);
+        }
+        if (typeof record.setback === 'number' && structureRole(record) !== 'projecting') {
           edited.setback = clamp(record.setback, setbackLimits.setbackMin, setbackLimits.setbackMax);
         }
         break;
       }
-      case 'baseMode': {
-        const wasDormer = record.baseHeight === null;
-        edited.baseHeight = { roof: null, ground: 'ground', height: 0 }[input.value];
-        const becomingPorch = wasDormer && edited.baseHeight !== null;
-        // A dormer's setback measures how far its front wall sits *in* from
-        // the host wall, toward the ridge; a porch's measures how far it
-        // projects *out* past it instead (see numberField's own label).
-        // Carrying a dormer's non-negative (inset, or flush) setback over
-        // when switching to a porch would plant it inside the building
-        // rather than out on the wall it's meant to stand against, so reset
-        // it to a typical projection instead.
-        if (becomingPorch && typeof record.setback === 'number' && record.setback >= 0) {
-          const limits = structurePlacementLimits({ ...record, baseHeight: edited.baseHeight });
-          edited.setback = clamp(-2.4, limits.setbackMin, limits.setbackMax);
-        }
-        // only a structure on a base can be recessed
-        if (edited.baseHeight === null && edited.mount === 'recess') {
-          edited.mount = 'join';
+      case 'projection': {
+        // a porch stands against its wall: its back on the wall, its front out by its depth
+        const limits = structurePlacementLimits(record);
+        edited.depth = clamp(length(), limits.depthMin, limits.depthMax);
+        edited.setback = -edited.depth;
+        if (record.wrap) {
+          edited.wrap = { ...record.wrap };
         }
         break;
       }
-      case 'recess':
-        edited.mount = input.checked ? 'recess' : 'join';
-        if (input.checked) {
-          Object.assign(edited, { setback: 0, depth: Number.isFinite(edited.depth) ? edited.depth : 2.4, wrap: null, inset: 0 });
+      case 'stories': {
+        const choice = storyChoices(record).find((candidate) => String(candidate.stories) === input.value);
+        if (choice) {
+          edited.wallHeight = choice.wallHeight;
         }
         break;
-      case 'baseHeight': edited.baseHeight = length(); break;
+      }
+      case 'baseHeight': {
+        // an upper porch stays at least a story up, and no higher than the host's plate
+        const host = activeStructureEntries.find((candidate) => candidate.id === record.id)?.host;
+        const storyHeight = modelConfig.volumeStoryHeights?.[record.hostVolumeId] ?? modelConfig.storyHeight;
+        const lowest = host && Number.isFinite(host.foundationTopY) && Number.isFinite(host.baseY)
+          ? host.foundationTopY + storyHeight - host.baseY
+          : -Infinity;
+        edited.baseHeight = clamp(length(), Math.min(lowest, 0), 0);
+        break;
+      }
       case 'inset': {
         const limits = structurePlacementLimits(record);
         edited.inset = clamp(length(), limits.insetMin, limits.insetMax);
@@ -2157,7 +2349,16 @@ function applyStructureFieldEdit(input) {
       case 'planShape': edited.plan = input.value ? { shape: input.value } : null; break;
       case 'planAngle': edited.plan = { ...edited.plan, angle: Number(input.value) || 45 }; break;
       case 'planSides': edited.plan = { ...edited.plan, sides: Math.round(Number(input.value) || 8) }; break;
-      case 'wrapEnd': edited.wrap = input.value ? { end: input.value, length: edited.wrap?.length ?? 3 } : null; break;
+      case 'wrapEnd': {
+        edited.wrap = input.value ? { end: input.value, length: edited.wrap?.length ?? 3 } : null;
+        if (edited.wrap) {
+          // it moves to the corner it turns, standing wholly outside the walls
+          const limits = structurePlacementLimits(edited);
+          edited.offset = limits.offsetMin;
+          edited.depth = -edited.setback;
+        }
+        break;
+      }
       case 'wrapLength': edited.wrap = edited.wrap ? { ...edited.wrap, length: Math.max(0.5, length()) } : null; break;
       case 'wallMaterial': edited.materials.wall = input.value || undefined; break;
       case 'roofMaterial': edited.materials.roof = input.value || undefined; break;

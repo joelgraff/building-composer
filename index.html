@@ -223,12 +223,35 @@
         font: inherit;
       }
 
+      .structure-row-wrap {
+        display: flex;
+        gap: 6px;
+        align-items: stretch;
+        margin-bottom: 6px;
+      }
+
       .structure-row {
         display: block;
-        width: 100%;
+        flex: 1;
+        min-width: 0;
         text-align: left;
-        margin-bottom: 6px;
         font-weight: 600;
+      }
+
+      .structure-delete {
+        flex: none;
+        width: 2.2em;
+        font-size: 1.1rem;
+        line-height: 1;
+        padding: 0;
+      }
+
+      .structure-editor-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 10px 0 8px;
+        font-weight: 700;
       }
 
       .structure-row.selected {
