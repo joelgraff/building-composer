@@ -230,7 +230,7 @@ Requirements:
 ### Phase 7 — Ornament and trim
 
 #### Task 7: Cornices, water tables, dentils
-Status: First pass done (`js/trim.js`). Building-wide water table, belt courses at floor lines, and a cornice with optional dentils, swept round the footprint walls with mitered corners and broken around windows and doors. The cornice top is measured from the built roof's soffit. Per-wall settings and trim on structure walls are not done yet.
+Status: First pass done (`js/trim.js`). Building-wide water table, belt courses at floor lines, and a cornice with optional dentils, swept round the footprint walls with mitered corners and broken around windows and doors. The cornice top is measured from the built roof's soffit. Roof structures' walls carry the courses too: the house's water table and belt courses where their walls span those heights (a tower, a bay), and each structure's own cornice under its own roof, all kept to the visible part of each wall. Per-wall settings are not done yet.
 
 Requirements:
 - Add trim features as surface modifiers on the facade envelope.

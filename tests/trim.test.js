@@ -7,6 +7,7 @@ import {
 import { computeFacadeLayout } from '../js/facade.js';
 import { createBuildingFromFootprint } from '../js/extrusion.js';
 import { gameMaterial } from '../js/game-export.js';
+import { normalizeRoofStructures } from '../js/roof-structures.js';
 
 const RECT = [[-5, -4], [5, -4], [5, 4], [-5, 4]];
 
@@ -110,6 +111,13 @@ describe('sweeping a course round the walls', () => {
     assert.equal(triangles.length, 3 * faceCount * 2 + 4 * capTriangles);
   });
 
+  it('miters only where runs meet: a chain open at one side ends square there', () => {
+    const ring = ringOf(RECT);
+    const open = [ring[1], ring[2], ring[3]]; // three walls of a box, the fourth left out
+    const capTriangles = profile.length - 2;
+    assert.equal(sweepCourse(open, profile).length, 3 * faceCount * 2 + 2 * capTriangles);
+  });
+
   it('breaks around a cut, capping both sides of the gap', () => {
     const ring = ringOf(RECT);
     ring[0] = { ...ring[0], pieces: [[0, 4], [6, 10]] };
@@ -189,5 +197,60 @@ describe('trim on a built building', () => {
   it('goes to the game as its palette\'s wall material', () => {
     assert.equal(gameMaterial({ role: 'trim', palette: 'paint' }, [1, 0, 0]), 'siding_white');
     assert.equal(gameMaterial({ role: 'trim', palette: 'stone' }, [0, 1, 0]), 'limestone');
+  });
+});
+
+describe('trim on roof structures\' walls', () => {
+  const FOOTPRINT = [[-6, -5], [6, -5], [6, 5], [-6, 5]];
+  const ALL = { waterTable: { enabled: true }, beltCourse: { enabled: true }, cornice: { enabled: true } };
+  const tower = {
+    id: 't', kind: 'porch', hostVolumeId: 'volume-0', hostSide: 'maxZ', offset: 6, width: 3.4, setback: -1.7, depth: 3.4, baseHeight: 'ground', wallHeight: 8.2,
+    roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 18 }, openSides: [], plan: { shape: 'polygon', sides: 8 },
+  };
+  const dormer = { id: 'd', kind: 'dormer', hostVolumeId: 'volume-0', hostSide: 'minZ', offset: -2, width: 2.4, setback: 0.6 };
+  function build(structures, trim = ALL) {
+    const layout = computeFacadeLayout(FOOTPRINT, { storyCount: 2, storyHeight: 3 });
+    return createBuildingFromFootprint(FOOTPRINT, {
+      storyCount: 2, storyHeight: 3, foundationDepth: 0.7, roofType: 'gable', roofDirection: 'x', roofPitchRise: 8, roofPitchRun: 12,
+      roofHeight: (8 / 12) * 5, roofEaveDepth: 0.4, volumes: layout.volumes, facadeLayout: layout, roofStructures: normalizeRoofStructures(structures), trim,
+    });
+  }
+  // every point of one kind of trim
+  const trimPoints = (built, kind) => {
+    const points = [];
+    built.building.traverse((mesh) => {
+      if (mesh.userData?.trimKind === kind) {
+        const p = mesh.geometry.getAttribute('position');
+        for (let i = 0; i < p.count; i += 1) {
+          points.push([p.getX(i), p.getY(i), p.getZ(i)]);
+        }
+      }
+    });
+    return points;
+  };
+
+  it('a corner tower carries the house\'s water table and belt course round it, and its own cornice under its roof', () => {
+    const built = build([tower]);
+    const [{ resolved }] = built.roofStructures;
+    // the tower stands round (6, 5 + 1.7): its facets are 1.7 off center or less, the house's walls farther
+    const onTower = (kind) => trimPoints(built, kind).filter(([x, , z]) => x > 6.05 || z > 5.05);
+    assert.ok(onTower('waterTable').length > 0 && onTower('waterTable').every(([, y]) => y >= 0.7 - 1e-6 && y <= 0.7 + 0.25 + 1e-6));
+    assert.ok(onTower('beltCourse').some(([, y]) => Math.abs(y - 3.7) < 0.1));
+    const corniceTop = Math.max(...onTower('cornice').map(([, y]) => y));
+    assert.ok(corniceTop <= resolved.plateY + 1e-6 && corniceTop > resolved.plateY - 1, `${corniceTop} near the tower's plate ${resolved.plateY}`);
+  });
+
+  it('a dormer gets a cornice at its own plate, and no water table or belt course up on the roof', () => {
+    const built = build([dormer]);
+    const [{ resolved }] = built.roofStructures;
+    const high = (kind) => trimPoints(built, kind).filter(([, y]) => y > resolved.sillY - 1e-6);
+    assert.equal(high('waterTable').length, 0);
+    assert.equal(high('beltCourse').length, 0);
+    const cornice = high('cornice');
+    assert.ok(cornice.length > 0 && Math.max(...cornice.map(([, y]) => y)) <= resolved.plateY + 1e-6);
+  });
+
+  it('none on a structure when every course is off', () => {
+    assert.equal(trimPoints(build([tower], {}), 'cornice').length, 0);
   });
 });

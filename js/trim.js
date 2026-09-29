@@ -159,11 +159,13 @@ export function miterVector(n0, n1) {
 }
 
 /**
- * The triangles of one course swept around a closed ring of wall runs.
+ * The triangles of one course swept along a ring of wall runs.
  *
  * @param {Array<{start: number[], end: number[], normal: number[], y: number|null, pieces?: number[][]}>} ring
- *   The footprint's wall runs in order (each run's end is the next run's
- *   start), each with where the course's anchor sits on it (`y`, world
+ *   Wall runs in order around a building or structure; a run's course is
+ *   mitered into its neighbor's only where the two meet (the run's end is
+ *   the next one's start), so a chain left open at the house wall ends
+ *   square. Each has where the course's anchor sits on it (`y`, world
  *   height; null where the run doesn't carry this course) and the parts of
  *   the run it covers (`pieces`, [from, to] meters from the run's start;
  *   the whole run when omitted).
@@ -192,8 +194,9 @@ export function sweepCourse(ring, profile) {
       const otherLength = Math.hypot(other.end[0] - other.start[0], other.end[1] - other.start[1]);
       return (other.pieces ?? [[0, otherLength]]).some(([, b]) => b > otherLength - 1e-6);
     };
-    const joinedStart = joins(prev) && touchesEnd(prev);
-    const joinedEnd = joins(next) && touchesStart(next);
+    const meets = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6;
+    const joinedStart = joins(prev) && touchesEnd(prev) && meets(prev.end, run.start);
+    const joinedEnd = joins(next) && touchesStart(next) && meets(run.end, next.start);
     const startMiter = miterVector(prev.normal, run.normal);
     const endMiter = miterVector(run.normal, next.normal);
 

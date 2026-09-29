@@ -493,7 +493,44 @@ function coursePieces(run, openingRects, minY, maxY) {
   const cuts = openingRects
     .filter((rect) => rect.minY < maxY - 1e-6 && rect.maxY > minY + 1e-6)
     .map((rect) => [rect.from - 0.01, rect.to + 0.01]);
+  if (run.shape) {
+    // a structure's wall shows only in part: keep the course where it shows across its whole height
+    const hidden = subtractIntervals(run.length, bandIntervals(run.shape, minY - run.baseY, maxY - run.baseY), 0);
+    cuts.push(...hidden);
+  }
   return subtractIntervals(run.length, cuts);
+}
+
+/**
+ * Where a wall's visible shape (triangles in (u, v)) spans the whole band
+ * from v0 to v1: the u ranges where a line just inside the band's bottom,
+ * middle, and top all cross it.
+ */
+function bandIntervals(shape, v0, v1) {
+  const inset = Math.min(1e-4, (v1 - v0) / 4);
+  const lineAt = (v) => {
+    const spans = shape.flatMap((triangle) => {
+      const us = [];
+      triangle.forEach((a, i) => {
+        const b = triangle[(i + 1) % 3];
+        if ((a[1] - v) * (b[1] - v) <= 0 && Math.abs(b[1] - a[1]) > 1e-12) {
+          us.push(a[0] + ((v - a[1]) / (b[1] - a[1])) * (b[0] - a[0]));
+        }
+      });
+      return us.length >= 2 ? [[Math.min(...us), Math.max(...us)]] : [];
+    }).sort((p, q) => p[0] - q[0]);
+    const merged = [];
+    spans.forEach(([a, b]) => {
+      if (merged.length && a <= merged[merged.length - 1][1] + 1e-6) {
+        merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], b);
+      } else {
+        merged.push([a, b]);
+      }
+    });
+    return merged;
+  };
+  const intersect = (xs, ys) => xs.flatMap(([a, b]) => ys.map(([c, d]) => [Math.max(a, c), Math.min(b, d)]).filter(([p, q]) => q - p > 1e-9));
+  return [v0 + inset, (v0 + v1) / 2, v1 - inset].map(lineAt).reduce(intersect);
 }
 
 /**
@@ -510,31 +547,53 @@ function withTrim(result, config) {
     return result;
   }
   const levelConfig = { ...config, foundationDepth: config.foundationDepth ?? 0.6 };
-  const runs = wallRuns.map((wallRun) => {
+  const houseRuns = wallRuns.map((wallRun) => {
     const baseY = volumeFoundationHeight(wallRun.volumeId, levelConfig);
     const wallHeight = volumeWallHeight(wallRun.volumeId, config);
-    const length = Math.hypot(wallRun.end[0] - wallRun.start[0], wallRun.end[1] - wallRun.start[1]);
+    const { count, height, hasKneeWall } = volumeStories(wallRun.volumeId, config);
     return {
-      id: wallRun.id, volumeId: wallRun.volumeId, start: wallRun.start, end: wallRun.end, normal: wallRun.normal, length, baseY, wallHeight, plateY: baseY + wallHeight,
+      id: wallRun.id,
+      start: wallRun.start,
+      end: wallRun.end,
+      normal: wallRun.normal,
+      length: Math.hypot(wallRun.end[0] - wallRun.start[0], wallRun.end[1] - wallRun.start[1]),
+      baseY,
+      wallHeight,
+      plateY: baseY + wallHeight,
+      // no foundation (a slab at grade), no water table
+      waterY: baseY > 0.01 ? baseY : null,
+      floorLines: floorLines(count, height, hasKneeWall).map((line) => baseY + line),
     };
   });
-  const openingRects = new Map(runs.map((run) => [run.id, []]));
+  const tops = corniceTops(houseRuns, result.building);
+  houseRuns.forEach((run, i) => {
+    run.corniceY = tops[i];
+  });
+  const chains = [houseRuns, ...structureTrimChains(result, config, levelConfig)];
+  const allRuns = chains.flat();
+
+  const openingRects = new Map(allRuns.map((run) => [run.id, []]));
   (result.openings ?? []).filter((entry) => entry.resolved && entry.host).forEach(({ resolved, host }) => {
+    const run = allRuns.find((candidate) => candidate.id === resolved.hostWallRunId);
+    if (!run) {
+      return;
+    }
     const { outer } = openingOutline(resolved);
     const us = outer.map(([u]) => u);
     const vs = outer.map(([, v]) => v);
-    const length = openingRects.has(resolved.hostWallRunId) ? runs.find((run) => run.id === resolved.hostWallRunId).length : 0;
-    openingRects.get(resolved.hostWallRunId)?.push({
-      from: Math.min(...us) + length / 2, to: Math.max(...us) + length / 2, minY: host.baseY + Math.min(...vs), maxY: host.baseY + Math.max(...vs),
+    openingRects.get(run.id).push({
+      from: Math.min(...us) + run.length / 2, to: Math.max(...us) + run.length / 2, minY: host.baseY + Math.min(...vs), maxY: host.baseY + Math.max(...vs),
     });
   });
-  const ringFor = (anchorOf, extent) => runs.map((run, i) => {
-    const y = anchorOf(run, i);
+  // one course along one chain: where each run carries it (`anchorOf`, a height or null), the parts it covers
+  const sweepChain = (chain, anchorOf, extent, sweep) => sweep(chain.map((run) => {
+    const y = anchorOf(run);
     if (!Number.isFinite(y)) {
       return { ...run, y: null };
     }
-    return { ...run, y, pieces: coursePieces(run, openingRects.get(run.id), y + extent.min, y + extent.max) };
-  });
+    const pieces = coursePieces(run, openingRects.get(run.id), y + extent.min, y + extent.max);
+    return pieces.length ? { ...run, y, pieces } : { ...run, y: null };
+  }));
 
   const material = paletteMaterial(trim.material, 'trim');
   const addMesh = (kind, triangles) => {
@@ -545,37 +604,107 @@ function withTrim(result, config) {
     mesh.userData = { bodyPart: 'trim', trimKind: kind };
     result.building.add(mesh);
   };
+  const eachChain = (anchorOf, extent, sweep) => chains.flatMap((chain) => sweepChain(chain, anchorOf, extent, sweep));
 
   if (trim.waterTable.enabled) {
     const profile = courseProfile('waterTable', trim.waterTable);
-    // no foundation (a slab at grade), no water table
-    addMesh('waterTable', sweepCourse(ringFor((run) => (run.baseY > 0.01 ? run.baseY : null), profileExtent(profile)), profile));
+    addMesh('waterTable', eachChain((run) => run.waterY, profileExtent(profile), (ring) => sweepCourse(ring, profile)));
   }
   if (trim.beltCourse.enabled) {
     const profile = courseProfile('beltCourse', trim.beltCourse);
     const extent = profileExtent(profile);
-    const linesByRun = runs.map((run) => {
-      const { count, height, hasKneeWall } = volumeStories(run.volumeId, config);
-      return floorLines(count, height, hasKneeWall).map((line) => run.baseY + line);
-    });
-    const levels = [...new Set(linesByRun.flat().map((y) => y.toFixed(6)))].map(Number);
-    const triangles = levels.flatMap((level) => sweepCourse(
-      ringFor((run, i) => linesByRun[i].find((y) => Math.abs(y - level) < 1e-5) ?? null, extent),
-      profile
-    ));
-    addMesh('beltCourse', triangles);
+    const levels = [...new Set(allRuns.flatMap((run) => run.floorLines).map((y) => y.toFixed(6)))].map(Number);
+    addMesh('beltCourse', levels.flatMap((level) => eachChain(
+      (run) => run.floorLines.find((y) => Math.abs(y - level) < 1e-5) ?? null,
+      extent,
+      (ring) => sweepCourse(ring, profile)
+    )));
   }
   if (trim.cornice.enabled) {
     const profile = courseProfile('cornice', trim.cornice);
-    const tops = corniceTops(runs, result.building);
-    addMesh('cornice', sweepCourse(ringFor((run, i) => tops[i], profileExtent(profile)), profile));
+    addMesh('cornice', eachChain((run) => run.corniceY, profileExtent(profile), (ring) => sweepCourse(ring, profile)));
     if (trim.cornice.dentils) {
       const size = dentilSize(trim.cornice);
-      const bottoms = tops.map((top) => top - trim.cornice.height);
-      addMesh('dentils', dentilTriangles(ringFor((run, i) => bottoms[i], { min: -size.height, max: 0 }), size));
+      addMesh('dentils', eachChain((run) => run.corniceY - trim.cornice.height, { min: -size.height, max: 0 }, (ring) => dentilTriangles(ring, size)));
     }
   }
   return result;
+}
+
+/**
+ * Each roof structure's walls as a chain of trim runs, in the house walls'
+ * own frame (as structureOpeningHost puts them: start and end swapped, u
+ * mirrored) and chained end to start, so its courses miter round its
+ * corners and end square where it meets the house. A run keeps its visible
+ * shape, which limits every course to where the wall shows across the
+ * course's whole height (a dormer's cheek only near its front, a tower above
+ * the house roof). A structure carries the house's water table where its
+ * walls come down to the host's foundation top, the host volume's belt
+ * courses where it spans those floor lines, and its own cornice under its
+ * own roof's soffit at its plate.
+ */
+function structureTrimChains(result, config, levelConfig) {
+  const resolvedById = new Map((result.roofStructures ?? []).filter((entry) => entry.resolved).map((entry) => [entry.resolved.id, entry.resolved]));
+  return (result.structureFacades ?? []).map((facade) => {
+    const resolved = resolvedById.get(facade.structureId);
+    if (!resolved) {
+      return [];
+    }
+    const hostVolumeId = resolved.hostVolumeId ?? null;
+    const hostBase = volumeFoundationHeight(hostVolumeId, levelConfig);
+    const { count, height, hasKneeWall } = volumeStories(hostVolumeId, config);
+    const lines = floorLines(count, height, hasKneeWall).map((line) => hostBase + line);
+    const runs = facade.wallRuns.filter((run) => !run.wall.startsWith('base-')).map((run) => ({
+      id: run.id,
+      start: run.end,
+      end: run.start,
+      normal: run.normal,
+      length: run.length,
+      baseY: run.baseY,
+      wallHeight: resolved.plateY - resolved.sillY,
+      plateY: resolved.plateY,
+      shape: run.pieces.map((triangle) => triangle.map(([u, v]) => [run.length - u, v])),
+      waterY: hostBase > 0.01 ? hostBase : null,
+      floorLines: lines,
+    }));
+    const roofTriangles = [];
+    result.building.children.filter((child) => child.isMesh && child.userData?.structureId === facade.structureId && child.userData.structurePart === 'roof')
+      .forEach((mesh) => roofTriangles.push(...geometryTriangles(mesh.geometry).map((tri) => tri.map(([x, y, z]) => [x + mesh.position.x, y + mesh.position.y, z + mesh.position.z]))));
+    const measured = Math.min(...runs.map((run) => soffitAbove(run, roofTriangles, run.baseY + run.wallHeight * 0.5)));
+    const top = Math.min(resolved.plateY, measured - CORNICE_SOFFIT_GAP);
+    runs.forEach((run) => {
+      run.corniceY = top;
+    });
+    return chainRuns(runs);
+  }).filter((chain) => chain.length);
+}
+
+/** The lowest roof surface above points just outside a run (see corniceTops). */
+function soffitAbove(run, triangles, floorY) {
+  let lowest = Infinity;
+  [0.15, 0.5, 0.85].forEach((t) => {
+    const x = run.start[0] + (run.end[0] - run.start[0]) * t + run.normal[0] * SOFFIT_PROBE_OFFSET;
+    const z = run.start[1] + (run.end[1] - run.start[1]) * t + run.normal[1] * SOFFIT_PROBE_OFFSET;
+    lowest = Math.min(lowest, lowestSurfaceAbove(triangles, x, z, floorY));
+  });
+  return lowest;
+}
+
+/** Runs put in order end to start, from one no other run leads into (or any, when they close a ring). */
+function chainRuns(runs) {
+  const meets = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6;
+  const left = [...runs];
+  const chain = [];
+  while (left.length) {
+    let run = left.find((candidate) => !left.some((other) => other !== candidate && meets(other.end, candidate.start))) ?? left[0];
+    while (run) {
+      chain.push(run);
+      left.splice(left.indexOf(run), 1);
+      const current = run;
+      run = left.find((candidate) => meets(current.end, candidate.start));
+    }
+  }
+  return chain;
 }
 
 /**
