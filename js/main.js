@@ -14,6 +14,7 @@ import {
   computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades, angledWallProblem,
 } from './facade.js';
 import { exportGlb } from './export.js';
+import { buildGameFile } from './game-export.js';
 import { importDixonFootprint } from './import.js';
 
 const statusValue = document.getElementById('status-value');
@@ -69,6 +70,7 @@ const footprintSelect = document.getElementById('footprint-select');
 const loadBtn = document.getElementById('load-btn');
 const saveBtn = document.getElementById('save-btn');
 const exportBtn = document.getElementById('export-btn');
+const sendBtn = document.getElementById('send-btn');
 const resetViewBtn = document.getElementById('reset-view-btn');
 const roofPitchField = document.getElementById('roof-pitch-field');
 const roofHeightField = document.getElementById('roof-height-field');
@@ -1082,6 +1084,18 @@ function openPayload(payload) {
       setStatus(imported.error, 'error');
       return;
     }
+    const saved = payload.project?.format === 'building-composer' ? deserializeBuildingState(payload.project) : undefined;
+    if (saved?.valid) {
+      const was = saved.state.placement;
+      const now = imported.placement;
+      const [dx, dz] = was ? [was.center[0] - now.center[0], was.center[1] - now.center[1]] : [Infinity, Infinity];
+      if (Math.hypot(dx, dz) < 0.05 && Math.abs(Math.atan2(Math.sin(was.rotation - now.rotation), Math.cos(was.rotation - now.rotation))) < 0.005) {
+        openPayload(payload.project);
+        setStatus(`Building ${now.id}: the design saved from the game is open. ${imported.warnings.join(' ')}`.trim());
+        return;
+      }
+      imported.warnings.push('The outline was changed in the game since this design was made, so the design is not opened; the new outline is.');
+    }
     Object.assign(modelConfig, imported.settings, { placement: imported.placement });
     frontSelect.value = modelConfig.frontSide;
     nameSideControls();
@@ -1158,6 +1172,37 @@ saveBtn.addEventListener('click', () => {
   link.click();
   URL.revokeObjectURL(url);
   setStatus('Project saved as building-model.bld', 'default');
+});
+
+sendBtn.addEventListener('click', async () => {
+  if (!group.children.length || !activeLayout) {
+    setStatus('Load a footprint before sending.', 'error');
+    return;
+  }
+  const { placement } = modelConfig;
+  if (!placement?.id) {
+    setStatus('Only a building opened from the game (its X key) can be sent back to it.', 'error');
+    return;
+  }
+  const project = serializeBuildingState(activeLayout, modelConfig);
+  const file = buildGameFile(group, placement, project);
+  const body = JSON.stringify(file);
+  try {
+    const response = await fetch(`/game-save/${encodeURIComponent(placement.id)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Composer': '1' }, body,
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    setStatus(`Building ${placement.id} sent to the game. In the game, select it and press I.`);
+  } catch (error) {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
+    link.download = `${placement.id}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    setStatus(`Not sent (${error.message || 'no game server'}); saved ${placement.id}.json. Put it in dixon_dem/game/data/composed/.`, 'error');
+  }
 });
 
 exportBtn.addEventListener('click', async () => {

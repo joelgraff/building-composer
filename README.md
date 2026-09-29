@@ -90,6 +90,7 @@ npm test
   - **Save Project (`.bld`)**: Serializes complete footprint, volumes, roof graph, story overrides, materials, edge pitches, per-volume roof shapes, eave settings, and roof structures into a native JSON document.
   - **Load Project**: Restores saved `.bld` files or raw footprint JSON arrays.
   - **GLB Export**: One-click binary GLTF/GLB export via Three.js `GLTFExporter`, cleanly omitting editor-only visual guides, outlines, and pick targets.
+  - **Send to game**: For a building opened from the Dixon game (its X key), posts the model back as game triangles (`js/game-export.js`) with the project, so the game can use it in place of the generated building. Falls back to a download.
 
 ## Project Structure
 
@@ -100,6 +101,7 @@ building-composer/
 ├── js/
 │   ├── eaves.js           # Eave/rake overhang, fascia, and soffit geometry
 │   ├── export.js          # GLTF/GLB binary export logic
+│   ├── game-export.js     # the model as the Dixon game's triangles, by its material names
 │   ├── extrusion.js       # 3D procedural geometry builders for walls, roofs, foundation; roof merge resolver
 │   ├── facade.js          # Facade layout (with roof structure surfaces), volume decomposition, roof graph, .bld persistence
 │   ├── footprint.js       # 2D polygon validation, normalization, and metrics

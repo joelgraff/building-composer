@@ -3,7 +3,7 @@
  */
 
 import * as THREE from '../node_modules/three/build/three.module.js';
-import { createMaterials, MATERIAL_PALETTE } from './materials.js';
+import { createMaterials, MATERIAL_PALETTE, paletteMaterial } from './materials.js';
 import { roofAxisForDirection, findVolumeAdjacencies } from './facade.js';
 import {
   resolveVolumeEaves, sideOverhangs, buildGableTrim, buildHipTrim, buildShedTrim, buildPartialEaveStrips,
@@ -643,14 +643,9 @@ function buildRecess(resolved, host, result, materials) {
  * volume, story, building.
  */
 function materialsFor(resolved, materials) {
-  const pick = (key, fallback) => {
-    const preset = MATERIAL_PALETTE[resolved.materials?.[key]];
-    return preset
-      ? new THREE.MeshStandardMaterial({
-        color: preset.color, roughness: preset.roughness, metalness: preset.metalness, side: THREE.DoubleSide,
-      })
-      : fallback;
-  };
+  const pick = (key, fallback) => (MATERIAL_PALETTE[resolved.materials?.[key]]
+    ? paletteMaterial(resolved.materials[key], key)
+    : fallback);
   return { wall: pick('wall', materials.wall), roof: pick('roof', materials.roof) };
 }
 
@@ -3664,13 +3659,7 @@ function addFacadePanels(group, footprint, layout, foundationHeight, config) {
         ?? config.storyMaterials?.[story.index]
         ?? config.wallMaterial
         ?? 'wood';
-      const preset = MATERIAL_PALETTE[materialKey] ?? MATERIAL_PALETTE.wood;
-      const panel = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-        color: preset.color,
-        roughness: preset.roughness,
-        metalness: preset.metalness,
-        side: THREE.DoubleSide,
-      }));
+      const panel = new THREE.Mesh(geometry, paletteMaterial(materialKey, 'wall'));
       panel.userData = {
         facadeRegion: `${story.id}:${facadePanel.id}`,
         storyId: story.id,

@@ -44,16 +44,35 @@ export const MATERIALS = Object.freeze({
 
 export function createMaterials(config = {}) {
   const wallPreset = MATERIAL_PALETTE[config.wallMaterial] ?? MATERIAL_PALETTE.wood;
+  const wall = new THREE.MeshStandardMaterial({
+    color: wallPreset.color,
+    roughness: wallPreset.roughness,
+    metalness: wallPreset.metalness,
+    side: THREE.DoubleSide,
+  });
+  wall.userData = { role: 'wall', palette: MATERIAL_PALETTE[config.wallMaterial] ? config.wallMaterial : 'wood' };
+  const foundation = MATERIALS.foundation.clone();
+  foundation.userData = { role: 'foundation' };
+  const roof = MATERIALS.roof.clone();
+  roof.userData = { role: 'roof' };
   return {
-    wall: new THREE.MeshStandardMaterial({
-      color: wallPreset.color,
-      roughness: wallPreset.roughness,
-      metalness: wallPreset.metalness,
-      side: THREE.DoubleSide,
-    }),
-    foundation: MATERIALS.foundation.clone(),
-    roof: MATERIALS.roof.clone(),
+    wall,
+    foundation,
+    roof,
     outline: MATERIALS.outline.clone(),
     ground: MATERIALS.ground.clone(),
   };
+}
+
+/** A material made from a palette entry, remembering which one (the game export maps it). */
+export function paletteMaterial(key, role) {
+  const preset = MATERIAL_PALETTE[key] ?? MATERIAL_PALETTE.wood;
+  const material = new THREE.MeshStandardMaterial({
+    color: preset.color,
+    roughness: preset.roughness,
+    metalness: preset.metalness,
+    side: THREE.DoubleSide,
+  });
+  material.userData = { role, palette: MATERIAL_PALETTE[key] ? key : 'wood' };
+  return material;
 }
