@@ -7,7 +7,7 @@ import {
 import {
   normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS, structureFrame, structureWallSides, resolveRoofStructure, MAX_BRACKET_PROJECTION, hostEaveProfile,
 } from './roof-structures.js';
-import { STRUCTURE_UI_PRESETS, newRoofStructure, structureLabel } from './structure-ui.js';
+import { STRUCTURE_UI_PRESETS, newRoofStructure, structureLabel, wallNames } from './structure-ui.js';
 import { TWO_SLOPE_ROOF_TYPES } from './roof-planes.js';
 import { sideOverhangs, resolveVolumeEaves } from './eaves.js';
 import {
@@ -26,6 +26,7 @@ const statusBox = document.getElementById('status-box');
 const fileInput = document.getElementById('file-input');
 const windingSelect = document.getElementById('winding-select');
 const unitSelect = document.getElementById('unit-select');
+const frontSelect = document.getElementById('front-select');
 const storyCountInput = document.getElementById('story-count');
 const storyHeightInput = document.getElementById('story-height');
 const kneeWallInput = document.getElementById('knee-wall-height');
@@ -208,6 +209,8 @@ let modelConfig = {
   roofStructures: [],
   // where an imported footprint came from, to put the building back (see import.js)
   placement: undefined,
+  // the side the building fronts: walls are named from it (see wallNames)
+  frontSide: 'maxZ',
 };
 let currentVolumeCount = 1;
 // why any of modelConfig.roofStructures could not be built on the last render
@@ -419,7 +422,7 @@ function renderElementSelector(layout) {
   elementSelect.innerHTML = options.join('');
   elementSelect.value = selectedElementId;
   selectedElementLabel.textContent = structure
-    ? `Roof structure: ${structureLabel(structure)} (volume settings: ${selectedElementId === 'building-defaults' ? 'building defaults' : selectedElementId.replace('-', ' ')})`
+    ? `Roof structure: ${structureLabel(structure, modelConfig.frontSide)} (volume settings: ${selectedElementId === 'building-defaults' ? 'building defaults' : selectedElementId.replace('-', ' ')})`
     : selectedElementId === 'building-defaults'
       ? 'Building defaults'
       : `Volume: ${selectedElementId.replace('-', ' ')}`;
@@ -617,6 +620,54 @@ function renderFootprintPreview(vertices) {
   group.add(outline);
 }
 
+/**
+ * The building's front, marked in the views: an arrow on the ground just
+ * out from the middle of the front, pointing away from the house, labeled
+ * FRONT (editor-only; not exported).
+ */
+function renderFrontMarker(vertices) {
+  const xs = vertices.map(([x]) => x);
+  const zs = vertices.map(([, z]) => z);
+  const bounds = { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
+  const side = modelConfig.frontSide ?? 'maxZ';
+  const sign = side.startsWith('max') ? 1 : -1;
+  const acrossX = side === 'minX' || side === 'maxX';
+  const span = acrossX ? bounds.maxZ - bounds.minZ : bounds.maxX - bounds.minX;
+  const size = Math.min(3, Math.max(1.2, span * 0.25));
+  const gap = 1.2;
+  // (u along the front, v out from it) -> [x, z]
+  const at = (u, v) => (acrossX
+    ? [bounds[side] + sign * v, (bounds.minZ + bounds.maxZ) / 2 + u]
+    : [(bounds.minX + bounds.maxX) / 2 + u, bounds[side] + sign * v]);
+  const arrow = [
+    [-size * 0.18, gap], [size * 0.18, gap], [size * 0.18, gap + size * 0.55], [size * 0.45, gap + size * 0.55],
+    [0, gap + size], [-size * 0.45, gap + size * 0.55], [-size * 0.18, gap + size * 0.55],
+  ].map(([u, v]) => at(u, v));
+  const shape = new THREE.Shape(arrow.map(([x, z]) => new THREE.Vector2(x, -z)));
+  const geometry = new THREE.ShapeGeometry(shape);
+  geometry.rotateX(-Math.PI / 2);
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x1f5edc, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
+  mesh.position.y = 0.03;
+  mesh.userData.editorOnly = true;
+  group.add(mesh);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#1f5edc';
+  context.font = 'bold 44px system-ui, sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText('FRONT', 128, 34);
+  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true, depthTest: false }));
+  const [lx, lz] = at(0, gap + size + 0.9);
+  label.position.set(lx, 0.6, lz);
+  label.scale.set(size * 1.4, size * 0.35, 1);
+  label.userData.editorOnly = true;
+  group.add(label);
+}
+
 function renderFacadeGuides(layout, foundationHeight) {
   if (!layout) {
     return;
@@ -771,7 +822,7 @@ async function loadFootprint(footprintData, preserveView = true) {
   });
   const unbuilt = roofStructures.filter((entry) => entry.errors.length);
   roofStructureIssues = unbuilt.length
-    ? `Roof structures not built: ${unbuilt.map((entry) => `${entry.id} (${entry.errors.map((e) => e.message).join(' ')})`).join('; ')}`
+    ? `Roof structures not built: ${unbuilt.map((entry) => `${entry.id} (${entry.errors.map((e) => nameSides(e.message)).join(' ')})`).join('; ')}`
     : '';
   if (roofStructureIssues) {
     setStatus(roofStructureIssues, 'error');
@@ -802,6 +853,7 @@ async function loadFootprint(footprintData, preserveView = true) {
   renderStructurePanel();
   if (normalized.length === 4) {
     renderFootprintPreview(normalized);
+    renderFrontMarker(normalized);
   }
   renderFacadeGuides(layout, foundationHeight);
 
@@ -840,6 +892,9 @@ async function loadSampleFootprint() {
   modelConfig.volumeEaves = {};
   modelConfig.roofStructures = [];
   modelConfig.placement = undefined;
+  modelConfig.frontSide = 'maxZ';
+  frontSelect.value = 'maxZ';
+  nameSideControls();
   // a new footprint: cut it to follow its massing (a .bld sets its own)
   modelConfig.volumeSplit = 'auto';
   volumeSplitSelect.value = 'auto';
@@ -981,6 +1036,9 @@ function resetForNewFootprint() {
   modelConfig.edgePitchOverrides = {};
   modelConfig.roofStructures = [];
   modelConfig.placement = undefined;
+  modelConfig.frontSide = 'maxZ';
+  frontSelect.value = 'maxZ';
+  nameSideControls();
   // a new footprint: cut it to follow its massing (a .bld sets its own)
   modelConfig.volumeSplit = 'auto';
   volumeSplitSelect.value = 'auto';
@@ -1005,6 +1063,8 @@ function openPayload(payload) {
       roofPitchRiseInput.value = modelConfig.roofPitchRise;
       roofHeightModeSelect.value = modelConfig.roofHeightMode;
       volumeSplitSelect.value = modelConfig.volumeSplit;
+      frontSelect.value = modelConfig.frontSide;
+      nameSideControls();
       syncUnitLabels();
       syncLengthInputs();
       updateRoofPitchDisplay();
@@ -1375,6 +1435,15 @@ loadBtn.addEventListener('click', () => {
 });
 
 fileInput.addEventListener('change', handleFileInput);
+
+frontSelect.addEventListener('change', () => {
+  modelConfig.frontSide = frontSelect.value;
+  nameSideControls();
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
+nameSideControls();
 resetViewBtn.addEventListener('click', () => {
   controls.reset();
   camera.position.set(30, 18, 28);
@@ -1492,7 +1561,42 @@ roofWalkHeightInput.addEventListener('change', () => {
 
 // --- Roof structures -----------------------------------------------------------
 
-const SIDE_OPTIONS = [['minZ', 'Z-min side'], ['maxZ', 'Z-max side'], ['minX', 'X-min side'], ['maxX', 'X-max side']];
+/** A wall's name, from the building's front ("front", "left side", ...). */
+function wallName(side) {
+  return wallNames(modelConfig.frontSide)[side] ?? side;
+}
+
+/** The four sides as choices, named from the front: front, right side, back, left side. */
+function sideOptions() {
+  const names = wallNames(modelConfig.frontSide);
+  const order = ['front', 'right side', 'back', 'left side'];
+  return Object.entries(names).sort(([, a], [, b]) => order.indexOf(a) - order.indexOf(b))
+    .map(([side, name]) => [side, `${name[0].toUpperCase()}${name.slice(1)}`]);
+}
+
+/** Text from the resolver with its sides (minZ, ...) named from the front instead. */
+function nameSides(text) {
+  return String(text).replace(/\b(min|max)(X|Z)\b/g, (side) => wallName(side));
+}
+
+/**
+ * Names the side choices outside the structure editor from the front: the
+ * Add menu's facing and the roof's high edge (x-min: the high edge on the
+ * minX side, the ridge along z).
+ */
+function nameSideControls() {
+  [...structureSideSelect.options].forEach((option) => {
+    const name = wallName(option.value);
+    option.textContent = `${name[0].toUpperCase()}${name.slice(1)}`;
+  });
+  // a ridge along an axis runs toward the walls across that axis
+  const ridge = (axis) => (['front', 'back'].includes(wallName(axis === 'z' ? 'maxZ' : 'maxX')) ? 'front to back' : 'side to side');
+  [...roofDirectionSelect.options].forEach((option) => {
+    const [axis, end] = option.value.split('-');
+    // a high edge on an x side puts the ridge along z, and the other way round
+    option.textContent = `High edge on the ${wallName(`${end}${axis.toUpperCase()}`)} (ridge ${ridge(axis === 'x' ? 'z' : 'x')})`;
+  });
+}
 const STRUCTURE_ROOF_OPTIONS = [['gable', 'Gable'], ['hip', 'Hip'], ['shed', 'Shed'], ['flat', 'Flat']];
 const MATERIAL_OPTIONS = [['', 'Building default'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['metal', 'Metal'], ['stone', 'Stone']];
 
@@ -1775,6 +1879,14 @@ function structurePlacementLimits(structure) {
     // brackets carry only so much projection
     limits.depthMax = Math.min(limits.depthMax, MAX_BRACKET_PROJECTION);
   }
+  if (structureType(structure) === 'turret' && structure.support !== 'none') {
+    // a turret on a corbel projects no further than brackets carry
+    const center = (Number.isFinite(structure.setback) ? structure.setback : 0) + (structure.depth ?? structure.width) / 2;
+    const most = Math.max(MIN_STRUCTURE_SIZE, 2 * (MAX_BRACKET_PROJECTION + center));
+    limits.setbackMin = Math.max(limits.setbackMin, -MAX_BRACKET_PROJECTION);
+    limits.widthMax = Math.min(limits.widthMax, most);
+    limits.depthMax = Math.min(limits.depthMax, most);
+  }
   if (structure.plan?.shape === 'canted') {
     // a canted bay's front is what its width leaves after its two angled sides
     const run = 1 / Math.tan(((structure.plan.angle ?? 45) * Math.PI) / 180);
@@ -1831,8 +1943,8 @@ function numberField(label, field, value, { length = true, step = 0.1, disabled 
  * field-edit path (which also clamps offset/setback to these limits, since a
  * typed value bypasses the slider's own inherent clamping).
  */
-function sliderField(label, field, value, min, max, { disabled = false } = {}) {
-  const factor = unitFactor();
+function sliderField(label, field, value, min, max, { disabled = false, unitless = false, step = 'any' } = {}) {
+  const factor = unitless ? 1 : unitFactor();
   let displayMin = Number((min * factor).toFixed(2));
   let displayMax = Number((max * factor).toFixed(2));
   const shown = Number.isFinite(value) ? Number((value * factor).toFixed(2)) : displayMax;
@@ -1846,10 +1958,11 @@ function sliderField(label, field, value, min, max, { disabled = false } = {}) {
   const disabledAttr = disabled || stuck ? ' disabled' : '';
   // step="any": with a min that isn't a clean multiple of a fixed step, a
   // numeric step snaps every value a little off what was actually set.
-  return `<div class="field"><label>${escapeHtml(label)} (${unitLabel()})</label>`
+  const digits = unitless && step !== 'any' ? 0 : 2;
+  return `<div class="field"><label>${escapeHtml(label)}${unitless ? '' : ` (${unitLabel()})`}</label>`
     + `<div class="slider-field">`
-    + `<input type="range" data-field="${field}" min="${displayMin}" max="${displayMax}" step="any" value="${clamped}"${disabledAttr} />`
-    + `<input type="number" class="slider-value" data-field="${field}" min="${displayMin}" max="${displayMax}" step="0.01" value="${clamped.toFixed(2)}"${disabledAttr} />`
+    + `<input type="range" data-field="${field}" min="${displayMin}" max="${displayMax}" step="${step}" value="${clamped}"${disabledAttr} />`
+    + `<input type="number" class="slider-value" data-field="${field}" min="${displayMin}" max="${displayMax}" step="${digits ? '0.01' : step}" value="${clamped.toFixed(digits)}"${disabledAttr} />`
     + `</div></div>`;
 }
 
@@ -1907,10 +2020,10 @@ function renderStructurePanel() {
       const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
       const problem = entry?.errors?.[0] ?? entry?.warnings?.[0];
       const note = problem
-        ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(problem.message)}</span>`
+        ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(nameSides(problem.message))}</span>`
         : '';
       return `<div class="structure-row-wrap"><button class="structure-row${structure.id === selectedStructureId ? ' selected' : ''}" data-structure-id="${structure.id}">`
-        + `${escapeHtml(structure.id)}: ${escapeHtml(structureLabel(structure))}${note}</button>`
+        + `${escapeHtml(structure.id)}: ${escapeHtml(structureLabel(structure, modelConfig.frontSide))}${note}</button>`
         + `<button class="structure-delete" data-delete-structure="${structure.id}" title="Delete ${escapeHtml(structure.id)}" aria-label="Delete ${escapeHtml(structure.id)}">×</button></div>`;
     }).join('')
     : '<div style="color:var(--muted);">No roof structures. Pick one above and add it to the selected volume.</div>';
@@ -1990,7 +2103,7 @@ function structureType(structure) {
     return 'sleeping-porch';
   }
   if (structure.plan?.shape === 'polygon') {
-    return 'tower';
+    return structure.baseHeight === 'ground' ? 'tower' : 'turret';
   }
   if (structure.plan?.shape === 'canted') {
     return 'canted-bay';
@@ -2094,13 +2207,13 @@ function structureEditorHtml(structure) {
   if (type === 'wraparound-porch') {
     // the walls it runs along: one unbroken run of two or more (all four: all the way round)
     const { walls } = structure.wrap;
-    placement.push('<div class="field"><label>Runs along</label>' + SIDE_OPTIONS.map(([side, label]) => {
+    placement.push('<div class="field"><label>Runs along</label>' + sideOptions().map(([side, label]) => {
       const ticked = walls.includes(side);
       const allowed = Boolean(wrapWallsWith(walls, side, !ticked));
       return `<label class="field-inline" style="margin-bottom:6px;"><input type="checkbox" data-field="wrapWall:${side}"${ticked ? ' checked' : ''}${allowed ? '' : ' disabled'} />${escapeHtml(label)}</label>`;
     }).join('') + '</div>');
   } else {
-    placement.push(selectField('Facing', 'hostSide', SIDE_OPTIONS, structure.hostSide));
+    placement.push(selectField('Facing', 'hostSide', sideOptions(), structure.hostSide));
   }
   if (type === 'cupola') {
     placement.push(selectField('Plan', 'planShape', [['', 'Rectangle'], ['polygon', 'Polygon (octagonal, or many sides for round)']], structure.plan?.shape ?? ''));
@@ -2109,7 +2222,7 @@ function structureEditorHtml(structure) {
     placement.push(numberField('Angle of the sides (degrees)', 'planAngle', structure.plan.angle, { length: false, step: 5 }));
   }
   if (structure.plan?.shape === 'polygon') {
-    placement.push(numberField('Sides', 'planSides', structure.plan.sides, { length: false, step: 1 }));
+    placement.push(sliderField('Sides', 'planSides', structure.plan.sides, 5, 32, { unitless: true, step: 1 }));
   }
 
   const role = structureRole(structure);
@@ -2117,21 +2230,25 @@ function structureEditorHtml(structure) {
   if (type === 'wraparound-porch') {
     // its two end legs, each from the corner it turns (the legs between run their whole walls)
     const { walls } = structure.wrap;
-    const name = (side) => SIDE_OPTIONS.find(([key]) => key === side)[1];
+    const name = (side) => wallName(side);
     if (walls.length < 4) {
       footprint.push(sliderField(`Leg along the ${name(walls[0])}, from the corner`, 'wrapStart', structure.wrap.startLength, MIN_STRUCTURE_SIZE, limits.wrapStartMax ?? FALLBACK_PLACEMENT_RANGE * 2));
       footprint.push(sliderField(`Leg along the ${name(walls[walls.length - 1])}, from the corner`, 'wrapEnd', structure.wrap.endLength, MIN_STRUCTURE_SIZE, limits.wrapEndMax ?? FALLBACK_PLACEMENT_RANGE * 2));
     }
   } else {
     footprint.push(sliderField('Offset along the side', 'offset', structure.offset, limits.offsetMin, limits.offsetMax));
-    footprint.push(sliderField('Width', 'width', structure.width, limits.widthMin, limits.widthMax));
+    if (role === 'tower') {
+      // a regular polygon: one size across
+      footprint.push(sliderField('Diameter', 'diameter', structure.width, limits.widthMin, Math.min(limits.widthMax, limits.depthMax)));
+    } else {
+      footprint.push(sliderField('Width', 'width', structure.width, limits.widthMin, limits.widthMax));
+    }
   }
   if (role === 'projecting') {
     // a porch, bay, or hood stands against its wall: its depth is how far it projects
     footprint.push(sliderField('Depth (out from the wall)', 'projection', structure.depth ?? -structure.setback, limits.depthMin, limits.depthMax));
   } else if (role === 'tower') {
     footprint.push(sliderField('Setback from the wall (negative stands out past it)', 'setback', structure.setback, limits.setbackMin, limits.setbackMax));
-    footprint.push(sliderField('Depth', 'depth', structure.depth, limits.depthMin, limits.depthMax));
   } else if (recess) {
     footprint.push(sliderField('Depth into the house', 'depth', structure.depth, limits.depthMin, limits.depthMax));
   } else {
@@ -2160,15 +2277,21 @@ function structureEditorHtml(structure) {
     recess ? 'Ceiling height' : structure.kind === 'hood' ? 'Height of its roof above the floor' : 'Wall height',
     'wallHeight', structure.wallHeight, limits.wallHeightMin, limits.wallHeightMax,
   ));
-  if (type === 'upper-porch') {
+  if (type === 'upper-porch' || type === 'turret') {
     height.push(numberField('Base height above the host plate', 'baseHeight', structure.baseHeight));
+  }
+  if (type === 'turret') {
+    height.push(selectField('Held up by', 'support', [['brackets', 'A corbel (brackets)'], ['none', 'Nothing (cantilevered)']], structure.support === 'none' ? 'none' : 'brackets'));
   }
   if (role === 'dormer') {
     height.push(sliderField('Recessed front (inset)', 'inset', structure.inset, limits.insetMin, limits.insetMax));
   }
 
   const roof = [];
-  if (!recess) {
+  if (role === 'tower') {
+    // a tower's roof is a pyramid (a cone when round): only its pitch is a choice
+    roof.push(numberField('Roof pitch (rise per 12; empty for the building\'s)', 'pitch', structure.roofShape?.mode === 'slope' ? structure.roofShape.pitchRise : null, { length: false, step: 1, placeholder: 'building' }));
+  } else if (!recess) {
     // a wraparound turns its corner on a hip or shed roof
     const roofOptions = type === 'wraparound-porch'
       ? STRUCTURE_ROOF_OPTIONS.filter(([key]) => key === 'hip' || key === 'shed')
@@ -2185,10 +2308,10 @@ function structureEditorHtml(structure) {
   if (!through && !standing) {
     roof.push(selectField('At the ridge', 'join', [['auto', 'Lower the roof only if it would pass the ridge'], ['snap-ridge', 'Always meet the ridge']], structure.join));
   }
-  if (!recess && type !== 'hood' && Number.isFinite(structure.setback) && structure.setback < 0) {
+  if (!recess && !['hood', 'tower', 'turret'].includes(type) && Number.isFinite(structure.setback) && structure.setback < 0) {
     // a hood is always on brackets; a porch on the ground stands on its deck, posts, or walls
     const supports = STRUCTURE_SUPPORTS.filter((key) => !(structure.baseHeight === 'ground' && (key === 'brackets' || key === 'none')));
-    roof.push(selectField('Held up by', 'support', supports.map((key) => [key, key === 'auto' ? 'Automatic' : `${key[0].toUpperCase()}${key.slice(1)}`]), structure.support));
+    height.push(selectField('Held up by', 'support', supports.map((key) => [key, key === 'auto' ? 'Automatic' : `${key[0].toUpperCase()}${key.slice(1)}`]), structure.support));
   }
 
   const openings = ['<div class="field"><label>Open sides</label>'
@@ -2437,7 +2560,20 @@ function applyStructureFieldEdit(input) {
       case 'support': edited.support = input.value; break;
       case 'planShape': edited.plan = input.value ? { shape: input.value } : null; break;
       case 'planAngle': edited.plan = { ...edited.plan, angle: Number(input.value) || 45 }; break;
-      case 'planSides': edited.plan = { ...edited.plan, sides: Math.round(Number(input.value) || 8) }; break;
+      case 'planSides': edited.plan = { ...edited.plan, sides: clamp(Math.round(Number(input.value) || 8), 5, 32) }; break;
+      case 'diameter': {
+        // resized about its center, so a tower on a corner stays on it
+        const limits = structurePlacementLimits(record);
+        const diameter = clamp(length(), limits.widthMin, Math.min(limits.widthMax, limits.depthMax));
+        const depth = record.depth ?? record.width;
+        Object.assign(edited, { width: diameter, depth: diameter });
+        if (Number.isFinite(record.setback)) {
+          edited.setback = record.setback + (depth - diameter) / 2;
+        }
+        const placed = structurePlacementLimits(edited);
+        edited.offset = clamp(record.offset, placed.offsetMin, placed.offsetMax);
+        break;
+      }
       case 'wrapStart': {
         const limits = structurePlacementLimits(record);
         edited.wrap = { ...record.wrap, startLength: clamp(length(), MIN_STRUCTURE_SIZE, limits.wrapStartMax ?? Infinity) };

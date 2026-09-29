@@ -655,6 +655,8 @@ export function serializeBuildingState(layout, modelConfig) {
     roofStructures: modelConfig.roofStructures ?? [],
     // where the footprint came from, to put the building back (see import.js)
     placement: modelConfig.placement ?? null,
+    // the side the building fronts (walls are named from it)
+    frontSide: modelConfig.frontSide ?? 'maxZ',
     roofGraph: layout.roofGraph,
   };
 }
@@ -759,6 +761,7 @@ export function deserializeBuildingState(data) {
       roofWalkHeight: [data.roofWalkHeight, data.roofDeckHeight].find(Number.isFinite),
       roofStructures,
       placement: data.placement && typeof data.placement === 'object' ? data.placement : undefined,
+      frontSide: ['minX', 'maxX', 'minZ', 'maxZ'].includes(data.frontSide) ? data.frontSide : 'maxZ',
     },
   };
 }

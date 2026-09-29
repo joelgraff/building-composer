@@ -75,10 +75,11 @@ describe('roof structure UI presets', () => {
   });
 
   it('labels structures by what they are and where', () => {
-    assert.equal(structureLabel(newRoofStructure('gable-dormer', placement)), 'Dormer · volume 0, Z-min side');
-    assert.equal(structureLabel(newRoofStructure('shed-dormer', placement)), 'Shed dormer · volume 0, Z-min side');
+    assert.equal(structureLabel(newRoofStructure('gable-dormer', placement)), 'Dormer · volume 0, back');
+    assert.equal(structureLabel(newRoofStructure('shed-dormer', placement)), 'Shed dormer · volume 0, back');
     assert.equal(structureLabel({ kind: 'porch', hostStructureId: 'structure-1', hostSide: 'minZ' }), 'Porch · on structure-1');
-    assert.equal(structureLabel(newRoofStructure('canted-bay', placement)), 'Canted bay · volume 0, Z-min side');
-    assert.equal(structureLabel(newRoofStructure('round-turret', placement)), 'Tower · volume 0, Z-min side');
+    assert.equal(structureLabel(newRoofStructure('canted-bay', placement)), 'Canted bay · volume 0, back');
+    assert.equal(structureLabel(newRoofStructure('corner-tower', placement)), 'Tower · volume 0, back');
+    assert.equal(structureLabel(newRoofStructure('corbelled-turret', placement)), 'Turret · volume 0, back');
   });
 });

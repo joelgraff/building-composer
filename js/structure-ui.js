@@ -3,7 +3,7 @@
  * DOM or THREE dependency; the sidebar in js/main.js builds on them.
  */
 
-import { createRoofStructure } from './roof-structures.js';
+import { createRoofStructure, structureFrame, structureWallSides } from './roof-structures.js';
 
 /**
  * What the "Add" menu offers: a starting record for each common case, from
@@ -71,7 +71,7 @@ export const STRUCTURE_UI_PRESETS = Object.freeze([
   },
   {
     key: 'corner-tower',
-    label: 'Octagonal corner tower',
+    label: 'Corner tower (octagonal, or round with more sides)',
     corner: true,
     fields: {
       kind: 'porch', setback: -1.7, depth: 3.4, width: 3.4, baseHeight: 'ground',
@@ -79,12 +79,13 @@ export const STRUCTURE_UI_PRESETS = Object.freeze([
     },
   },
   {
-    key: 'round-turret',
-    label: 'Round corner turret',
+    key: 'corbelled-turret',
+    label: 'Corbelled turret (from an upper story)',
     corner: true,
+    turret: true,
     fields: {
-      kind: 'porch', setback: -1.4, depth: 2.8, width: 2.8, baseHeight: 'ground',
-      roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 24 }, openSides: [], plan: { shape: 'polygon', sides: 16 },
+      kind: 'porch', setback: -1.2, depth: 2.4, width: 2.4, support: 'brackets',
+      roofType: 'hip', roofShape: { mode: 'slope', pitchRise: 24 }, openSides: [], plan: { shape: 'polygon', sides: 12 },
     },
   },
   { key: 'cupola', label: 'Cupola', fields: { kind: 'cupola' } },
@@ -116,6 +117,12 @@ export function newRoofStructure(presetKey, placement, existing = []) {
     // centered on the right-hand corner, rising a story above the plate
     fields.offset = Number.isFinite(placement.wallLength) ? placement.wallLength / 2 : 0;
     fields.wallHeight = (placement.wallTop ?? 2 * (placement.storyHeight ?? 3.2)) + (placement.storyHeight ?? 3.2) * 0.6;
+  }
+  if (preset.turret) {
+    // from the top story's floor, on its corbel, up past the eave
+    const storyHeight = placement.storyHeight ?? 3.2;
+    fields.baseHeight = -storyHeight;
+    fields.wallHeight = storyHeight * 1.6;
   }
   if (presetKey === 'wraparound-porch' && Number.isFinite(placement.wallLength)) {
     // along the whole wall, so its right end is at the corner
@@ -149,18 +156,26 @@ const KIND_LABELS = {
   hood: 'Entry hood',
 };
 
-const SIDE_LABELS = {
-  minX: 'X-min side', maxX: 'X-max side', minZ: 'Z-min side', maxZ: 'Z-max side',
-};
+/**
+ * The walls of a volume named from the building's front (`front`, a side
+ * such as 'maxZ'): the front, the back, and the left and right sides as seen
+ * standing in front of it, facing the front wall.
+ */
+export function wallNames(front = 'maxZ') {
+  const walls = structureWallSides(structureFrame(front));
+  return {
+    [walls.front]: 'front', [walls.back]: 'back', [walls.left]: 'left side', [walls.right]: 'right side',
+  };
+}
 
-/** A short label for a structure record: what it is, and where. */
-export function structureLabel(structure) {
-  const plan = { canted: 'Canted bay', polygon: 'Tower' }[structure.plan?.shape];
+export function structureLabel(structure, front = 'maxZ') {
+  const polygon = structure.baseHeight === 'ground' || structure.baseHeight === undefined ? 'Tower' : 'Turret';
+  const plan = { canted: 'Canted bay', polygon }[structure.plan?.shape];
   const roof = plan ?? (['dormer', 'wall-dormer'].includes(structure.kind) && structure.roofType !== 'gable'
     ? `${structure.roofType[0].toUpperCase()}${structure.roofType.slice(1)} ${KIND_LABELS[structure.kind].toLowerCase()}`
     : KIND_LABELS[structure.kind] ?? structure.kind);
   const host = structure.hostStructureId
     ? `on ${structure.hostStructureId}`
-    : `${(structure.hostVolumeId ?? '').replace('-', ' ')}, ${SIDE_LABELS[structure.hostSide] ?? structure.hostSide}`;
+    : `${(structure.hostVolumeId ?? '').replace('-', ' ')}, ${wallNames(front)[structure.hostSide] ?? structure.hostSide}`;
   return `${roof} · ${host}`;
 }

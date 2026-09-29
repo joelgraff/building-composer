@@ -1134,8 +1134,9 @@ function resolvePlanned(structure, host, {
       through,
       setback,
       projecting,
-      // at ground level a foundation carries it; above, it is cantilevered (an oriel)
-      support: projecting && groundLevel ? 'deck' : 'none',
+      // at ground level a foundation carries it; above, it is cantilevered
+      // (an oriel), or carried on a corbel (a turret on brackets)
+      support: projecting && groundLevel ? 'deck' : (!groundLevel && structure.support === 'brackets' ? 'brackets' : 'none'),
       wallLine: wall,
       foundationTopY: host.foundationTopY,
       hostStructureId: structure.hostStructureId,

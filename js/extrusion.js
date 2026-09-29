@@ -535,6 +535,13 @@ function plannedParts(resolved, host, config, materials, {
     ]), [...hostSolids, ...others])
     : [];
 
+  // a turret on brackets is carried on a corbel: a cone (or pyramid) tapering
+  // from its floor to a point below its center, cut off where it meets the house
+  const across = Math.max(...outline.map(([x, z]) => Math.hypot(x - center[0], z - center[1]))) * 2;
+  const corbel = resolved.support === 'brackets' && resolved.standing && sillY > (host.foundationTopY ?? 0) + 1e-6
+    ? clipOutside(edges.map(([a, b]) => [[b[0], sillY, b[1]], [a[0], sillY, a[1]], [center[0], sillY - CORBEL_DEPTH * across, center[1]]]), [...hostSolids, ...others])
+    : [];
+
   const storyId = `story-${id}-1`;
   const common = { structureId: id, hostVolumeId: resolved.hostVolumeId, storyId };
   const wallRuns = wallFaces.map((triangles, i) => (triangles.length
@@ -546,6 +553,7 @@ function plannedParts(resolved, host, config, materials, {
       ['roof', clipOutside(roof, [...hostSolids, ...others]), structureMaterials.roof],
       ['floor', floor, materials.roof],
       ['foundation', foundation, materials.foundation],
+      ['corbel', corbel, structureMaterials.wall],
     ],
     facade: {
       structureId: id, wallRuns, stories: [{ id: storyId, structureId: id, minY: sillY, maxY: plateY }], railRuns: [],
@@ -682,6 +690,9 @@ function recessParts(resolved, host, walls, { hostSolids, others, clipOutside })
 }
 
 /** Post size (square) and the longest span between posts along an open side or a supported front. */
+/** How deep a turret's corbel runs below its floor, as a share of its diameter. */
+const CORBEL_DEPTH = 0.6;
+
 const POST_SIZE = 0.2;
 const MAX_POST_SPAN = 3;
 
