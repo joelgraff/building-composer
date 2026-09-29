@@ -221,7 +221,7 @@ Roof-zone test fixtures:
 ### Phase 6 — Facade modifiers
 
 #### Task 6: Windows, doors, and parametric facade openings
-Status: First pass done (footprint walls; `js/openings.js`). Openings are frame-and-pane appliqué on the wall face, not cuts; structure walls are not yet hosts.
+Status: First pass done (`js/openings.js`). Openings are frame-and-pane appliqué on the wall face, not cuts, on footprint walls and on roof structures' own walls (a dormer's face, a tower's sides), kept within the wall's visible shape.
 
 Requirements:
 - Place windows and doors on facade panels using story + wall-run addressing.

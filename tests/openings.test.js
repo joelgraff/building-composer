@@ -1,9 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  normalizeOpening, normalizeOpenings, createOpening, resolveOpening, openingOutline,
-  OPENING_PRESETS, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
+  normalizeOpening, normalizeOpenings, createOpening, resolveOpening, openingOutline, structureOpeningHost, rectInShape, fitOpening, shapeLimit,
+  OPENING_PRESETS, FRAME_CASING_WIDTH, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
 } from '../js/openings.js';
+import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState } from '../js/facade.js';
+import { createBuildingFromFootprint } from '../js/extrusion.js';
+import { normalizeRoofStructures } from '../js/roof-structures.js';
 
 const wallRun = (overrides = {}) => ({
   id: 'wall-run-0',
@@ -164,5 +167,101 @@ describe('openingOutline', () => {
     const [outerU1, outerV1] = outer[2];
     assert.ok(outerU1 > innerU1);
     assert.ok(outerV1 > innerV1);
+  });
+});
+
+describe('windows on a roof structure\'s own walls', () => {
+  // a gable dormer's face as facadeWallRun gives it: 2.4 wide, walls 1.4 high, its gable peaking at 2.4
+  const dormerFace = {
+    id: 'wall-run-d-front',
+    start: [1.2, -4],
+    end: [-1.2, -4],
+    length: 2.4,
+    normal: [0, -1],
+    baseY: 7,
+    pieces: [
+      [[0, 0], [2.4, 0], [2.4, 1.4]], [[0, 0], [2.4, 1.4], [0, 1.4]], [[0, 1.4], [2.4, 1.4], [1.2, 2.4]],
+    ],
+    extent: { minU: 0, maxU: 2.4, minV: 0, maxV: 2.4 },
+  };
+
+  it('puts the wall in the footprint walls\' frame: u from its middle, the same handedness', () => {
+    const host = structureOpeningHost(dormerFace);
+    assert.deepEqual(host.right, [1, 0]);
+    // (right, normal) as wallRunFrame pairs them: normal = (right.z, -right.x)
+    assert.deepEqual([host.right[1], -host.right[0]].map((c) => c + 0), dormerFace.normal);
+    assert.deepEqual([host.start, host.end], [dormerFace.end, dormerFace.start]);
+    assert.equal(host.wallHeight, 2.4);
+    const us = host.shape.flat().map(([u]) => u);
+    assert.deepEqual([Math.min(...us), Math.max(...us)], [-1.2, 1.2]);
+  });
+
+  it('knows which rectangles lie on the visible face', () => {
+    const { shape } = structureOpeningHost(dormerFace);
+    assert.equal(rectInShape(-0.5, 0.2, 0.5, 1.3, shape), true);
+    assert.equal(rectInShape(-0.5, 0.2, 0.5, 1.8, shape), true, 'up into the gable, clear of its slopes');
+    assert.equal(rectInShape(-1, 0.2, 1, 2.2, shape), false, 'through the gable\'s slopes');
+  });
+
+  it('refuses a window whose frame runs into the dormer\'s roof', () => {
+    const host = structureOpeningHost(dormerFace);
+    const { errors } = resolveOpening(normalizeOpening({ hostWallRunId: dormerFace.id, kind: 'window', width: 1.6, height: 1.9, sillHeight: 0.2 }), host);
+    assert.deepEqual(errors.map((e) => e.code), ['outside-shape']);
+  });
+
+  it('fits a new window onto a face too small for the preset', () => {
+    const host = structureOpeningHost(dormerFace);
+    const preset = createOpening('window', { hostWallRunId: dormerFace.id });
+    assert.ok(resolveOpening(preset, host).errors.length, 'the preset does not fit');
+    const fitted = fitOpening(preset, host);
+    assert.equal(resolveOpening(fitted, host).errors.length, 0);
+    assert.equal(fitted.offset, 0);
+    assert.ok(fitted.sillHeight > FRAME_CASING_WIDTH && fitted.height >= MIN_OPENING_SIZE && fitted.height <= preset.height);
+    assert.deepEqual(fitOpening(normalizeOpening({ hostWallRunId: dormerFace.id, sillHeight: 0.2, height: 1, width: 0.8 }), host).width, 0.8, 'one that fits is left alone');
+  });
+
+  it('finds how far a field can go before the frame leaves the face', () => {
+    const host = structureOpeningHost(dormerFace);
+    const window = normalizeOpening({ hostWallRunId: dormerFace.id, width: 0.6, height: 0.8, sillHeight: 0.2 });
+    const tallest = shapeLimit(window, host, 'height', 0.3, 3);
+    // the frame's top corners (0.39 out from the middle) meet the gable slopes: v = 1.4 + (1.2 - 0.39) / 1.2
+    assert.ok(Math.abs(tallest + 0.2 + FRAME_CASING_WIDTH - (1.4 + (1.2 - 0.39) / 1.2)) < 1e-3, `${tallest}`);
+    assert.ok(Math.abs(shapeLimit(window, host, 'offset', 0, 5) - (1.2 - 0.39)) < 1e-3);
+    assert.equal(shapeLimit({ ...window, height: 3 }, host, 'height', 3, 4), 3, 'starting outside, it stays put');
+  });
+
+  it('builds on a real dormer, standing out from its face, and saves with it', () => {
+    const footprint = [[-6, -4], [6, -4], [6, 4], [-6, 4]];
+    const layout = computeFacadeLayout(footprint, { storyCount: 2, storyHeight: 3 });
+    const roofStructures = normalizeRoofStructures([{ id: 'd', kind: 'dormer', hostVolumeId: 'volume-0', hostSide: 'minZ', offset: 0, width: 2.4, setback: 0.6 }]);
+    const config = {
+      storyCount: 2, storyHeight: 3, foundationDepth: 0.6, roofType: 'gable', roofDirection: 'x', roofPitchRise: 10, roofPitchRun: 12,
+      roofHeight: (10 / 12) * 4, roofEaveDepth: 0.4, volumes: layout.volumes, facadeLayout: layout, roofStructures,
+    };
+    const face = createBuildingFromFootprint(footprint, config).structureFacades[0].wallRuns.find((run) => run.wall === 'front');
+    const window = fitOpening(createOpening('window', { hostWallRunId: face.id }), structureOpeningHost(face));
+    const built = createBuildingFromFootprint(footprint, { ...config, openings: [window] });
+    assert.deepEqual(built.openings[0].errors, []);
+    built.building.updateMatrixWorld(true);
+    let frame;
+    built.building.traverse((mesh) => { if (mesh.userData?.bodyPart === 'opening-frame') frame = mesh; });
+    const position = frame.geometry.getAttribute('position');
+    const outward = [];
+    const ys = [];
+    for (let i = 0; i < position.count; i += 1) {
+      const p = { x: position.getX(i), y: position.getY(i), z: position.getZ(i) };
+      const e = frame.matrixWorld.elements;
+      const world = [e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12], e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13], e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14]];
+      outward.push((world[0] - face.start[0]) * face.normal[0] + (world[2] - face.start[1]) * face.normal[1]);
+      ys.push(world[1]);
+    }
+    assert.ok(Math.min(...outward) > 0, 'the frame stands proud of the dormer face, not inside it');
+    assert.ok(Math.min(...ys) >= face.baseY - 1e-6, 'and sits on the dormer, not down on the house');
+
+    const saved = serializeBuildingState(layout, { roofStructures, openings: [window] });
+    assert.equal(deserializeBuildingState(saved).state.openings.length, 1);
+    const withoutDormer = deserializeBuildingState({ ...saved, roofStructures: [] });
+    assert.equal(withoutDormer.state.openings.length, 0);
+    assert.ok(withoutDormer.warnings.some((w) => w.includes(face.id)));
   });
 });

@@ -5,7 +5,9 @@
 import * as THREE from '../node_modules/three/build/three.module.js';
 import { createMaterials, MATERIAL_PALETTE, paletteMaterial, glazingMaterial } from './materials.js';
 import { roofAxisForDirection, findVolumeAdjacencies, wallRunFrame } from './facade.js';
-import { resolveOpening, openingOutline, FRAME_DEPTH, PANE_RECESS } from './openings.js';
+import {
+  resolveOpening, openingOutline, structureOpeningHost, FRAME_DEPTH, PANE_RECESS,
+} from './openings.js';
 import {
   normalizeTrim, hasTrim, courseProfile, profileExtent, subtractIntervals, sweepCourse, dentilSize, dentilTriangles, floorLines,
 } from './trim.js';
@@ -256,7 +258,7 @@ function buildOpeningMeshes(resolved, materials, glazing) {
 
 /**
  * Adds windows and doors (config.openings) to a built building, each
- * appliquéd onto its host footprint wall run — see js/openings.js. Mirrors
+ * appliquéd onto its host: a footprint wall run, or a roof structure's own wall (from this build's structure facades) — see js/openings.js. Mirrors
  * withRoofStructures' own shape: returns `{ ...result, openings: entries }`,
  * one entry per opening (built or not) so main.js can track build errors the
  * same way it already does for roof structures.
@@ -270,13 +272,15 @@ function withOpenings(result, config) {
   const { stories } = config.facadeLayout ?? {};
   const materials = createMaterials(config);
   const glazing = glazingMaterial();
+  const structureWalls = (result.structureFacades ?? []).flatMap((facade) => facade.wallRuns);
   const entries = openings.map((opening) => {
     const wallRun = wallRuns.find((run) => run.id === opening.hostWallRunId);
-    const host = wallRun && {
+    const structureWall = !wallRun && structureWalls.find((run) => run.id === opening.hostWallRunId);
+    const host = wallRun ? {
       ...wallRun,
       wallHeight: volumeWallHeight(wallRun.volumeId, config),
       baseY: volumeFoundationHeight(wallRun.volumeId, config),
-    };
+    } : structureWall && structureOpeningHost(structureWall);
     const { resolved, errors, warnings } = resolveOpening(opening, host, { siblings: openings, stories });
     if (resolved) {
       result.building.add(buildOpeningMeshes(resolved, materials, glazing));

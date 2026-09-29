@@ -14,7 +14,7 @@ import {
   computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades, angledWallProblem, wallRunFrame,
 } from './facade.js';
 import {
-  normalizeOpenings, createOpening, resolveOpening, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
+  normalizeOpenings, createOpening, fitOpening, structureOpeningHost, shapeLimit, resolveOpening, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
 } from './openings.js';
 import { normalizeTrim, TRIM_HEIGHT_RANGE, TRIM_PROJECTION_RANGE } from './trim.js';
 import { exportGlb } from './export.js';
@@ -1035,7 +1035,7 @@ const WALL_ROLE_LABELS = {
  */
 function renderWallInfoPanel(layout) {
   const run = layout ? findRun(selectedWallId, layout) : null;
-  if (!run || run.runType !== 'wall') {
+  if (!run || (run.runType !== 'wall' && run.runType !== 'structure-wall')) {
     wallInfoPanel.style.display = 'none';
     wallInfoSummary.innerHTML = '';
     wallPanelMaterialsBox.innerHTML = '';
@@ -1048,6 +1048,16 @@ function renderWallInfoPanel(layout) {
     return;
   }
   wallInfoPanel.style.display = '';
+  if (run.runType === 'structure-wall') {
+    // a structure's own wall: no stories or facade panels of its own, only its windows
+    const structure = structureRecord(run.structureId) ?? modelConfig.roofStructures.find((candidate) => run.structureId.startsWith(`${candidate.id}-`));
+    const owner = structure ? structureLabel(structure, modelConfig.frontSide, { withHost: false }) : run.structureId;
+    const wallName = `${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`;
+    wallInfoSummary.innerHTML = `<strong>${escapeHtml(wallName)}</strong> of the ${escapeHtml(owner.toLowerCase())}<br>Length: ${formatLength(run.length)}`;
+    wallPanelMaterialsBox.innerHTML = '';
+    renderOpeningsBox(run);
+    return;
+  }
   const name = disambiguatedWallLabel(run, layout);
   const volume = layout.volumes.find((candidate) => candidate.id === run.volumeId);
   const storyCount = volume ? modelConfig.volumeStoryOverrides[volume.id] ?? modelConfig.storyCount : modelConfig.storyCount;
@@ -1120,8 +1130,26 @@ function openingRecord(id) {
  * there's no fallback-vs-built branch to carry — only a defensive fallback
  * for the moment before any footprint has loaded at all.
  */
+/**
+ * An opening's host wall as resolveOpening sees it (see withOpenings in
+ * extrusion.js): a footprint wall run with its height and floor line, or a
+ * structure's own wall in the same frame, with its visible shape.
+ */
+function openingHost(hostWallRunId, layout = activeLayout) {
+  const wallRun = layout?.wallRuns.find((run) => run.id === hostWallRunId);
+  if (wallRun) {
+    return {
+      ...wallRun,
+      wallHeight: volumeWallHeight(wallRun.volumeId, modelConfig),
+      baseY: volumeFoundationHeight(wallRun.volumeId, modelConfig),
+    };
+  }
+  const structureWall = (layout?.structureWallRuns ?? []).find((run) => run.id === hostWallRunId);
+  return structureWall ? structureOpeningHost(structureWall) : null;
+}
+
 function openingPlacementLimits(opening) {
-  const host = activeLayout?.wallRuns.find((run) => run.id === opening.hostWallRunId);
+  const host = openingHost(opening.hostWallRunId);
   if (!host) {
     return {
       offsetMin: -FALLBACK_PLACEMENT_RANGE,
@@ -1134,7 +1162,7 @@ function openingPlacementLimits(opening) {
       sillHeightMax: FALLBACK_PLACEMENT_RANGE,
     };
   }
-  const wallHeight = volumeWallHeight(host.volumeId, modelConfig);
+  const { wallHeight } = host;
   const halfWidth = opening.width / 2;
   const halfTravel = Math.max(0, host.length / 2 - OPENING_EDGE_MARGIN - halfWidth);
   // width's own bound holds at offset 0, the same reasoning structurePlacementLimits
@@ -1145,7 +1173,7 @@ function openingPlacementLimits(opening) {
   const sillHeightMax = opening.kind === 'door'
     ? DOOR_SILL_MAX
     : Math.max(0, wallHeight - OPENING_EDGE_MARGIN - opening.height);
-  return {
+  const limits = {
     offsetMin: -halfTravel,
     offsetMax: halfTravel,
     widthMin: MIN_OPENING_SIZE,
@@ -1155,6 +1183,17 @@ function openingPlacementLimits(opening) {
     sillHeightMin: 0,
     sillHeightMax,
   };
+  if (host.shape) {
+    // a structure's wall (a dormer's gable face): keep every slider on its visible surface
+    const low = (field, from, to) => Math.min(from, shapeLimit(opening, host, field, from, to));
+    limits.offsetMin = low('offset', opening.offset, limits.offsetMin);
+    limits.offsetMax = Math.max(opening.offset, shapeLimit(opening, host, 'offset', opening.offset, limits.offsetMax));
+    limits.widthMax = Math.max(MIN_OPENING_SIZE, shapeLimit({ ...opening, offset: 0 }, host, 'width', MIN_OPENING_SIZE, limits.widthMax));
+    limits.heightMax = Math.max(MIN_OPENING_SIZE, shapeLimit(opening, host, 'height', MIN_OPENING_SIZE, limits.heightMax));
+    limits.sillHeightMin = Math.min(opening.sillHeight, shapeLimit(opening, host, 'sillHeight', opening.sillHeight, 0));
+    limits.sillHeightMax = Math.max(limits.sillHeightMin, shapeLimit(opening, host, 'sillHeight', opening.sillHeight, limits.sillHeightMax));
+  }
+  return limits;
 }
 
 function openingEditorHtml(opening) {
@@ -1239,7 +1278,8 @@ wallOpeningsBox.addEventListener('click', (event) => {
     if (!activeLayout || !selectedWallId) {
       return;
     }
-    const record = createOpening(addBtn.dataset.addOpening, { hostWallRunId: selectedWallId }, modelConfig.openings);
+    const created = createOpening(addBtn.dataset.addOpening, { hostWallRunId: selectedWallId }, modelConfig.openings);
+    const record = fitOpening(created, openingHost(selectedWallId));
     selectedOpeningId = record.id;
     rebuildWithOpenings([...modelConfig.openings, record]);
     return;
@@ -1283,11 +1323,11 @@ openingEditor.addEventListener('input', (event) => {
  * no resolved geometry to draw from.
  */
 function openingFailureRect(opening, layout) {
-  const wallRun = layout.wallRuns.find((run) => run.id === opening.hostWallRunId);
+  const wallRun = openingHost(opening.hostWallRunId, layout);
   if (!wallRun) {
     return null;
   }
-  const baseY = volumeFoundationHeight(wallRun.volumeId, modelConfig);
+  const { baseY } = wallRun;
   const halfWidth = Math.max(0.15, (opening.width ?? 1) / 2);
   const midX = (wallRun.start[0] + wallRun.end[0]) / 2;
   const midZ = (wallRun.start[1] + wallRun.end[1]) / 2;
@@ -3532,6 +3572,8 @@ function deleteStructure(id) {
   if (doomed.has(selectedStructureId)) {
     selectedStructureId = null;
   }
+  // and the windows and doors on its walls (`wall-run-<structure>-<wall>`, or a part of it: `wall-run-<structure>-<part>-<wall>`)
+  modelConfig.openings = modelConfig.openings.filter((opening) => ![...doomed].some((doomedId) => opening.hostWallRunId.startsWith(`wall-run-${doomedId}-`)));
   rebuildWithStructures(modelConfig.roofStructures.filter((structure) => !doomed.has(structure.id)));
 }
 

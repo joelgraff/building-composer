@@ -740,9 +740,12 @@ export function deserializeBuildingState(data) {
   // A footprint wall run's id is purely positional ('wall-run-<index>'), so
   // the valid set is cheap to recompute from the footprint alone — one per
   // edge, the same count computeFacadeLayout's own wallRuns would produce.
+  // A structure's walls only exist once it's built, so an opening on one is
+  // kept while its structure is (a wall it no longer has fails to build, with a reason).
   const wallRunIds = new Set(data.footprint.map((_, index) => `wall-run-${index}`));
+  const onKeptStructure = (hostId) => roofStructures.some((structure) => hostId.startsWith(`wall-run-${structure.id}-`));
   const openings = normalizeOpenings(Array.isArray(data.openings) ? data.openings : []).filter((opening) => {
-    const hostOk = wallRunIds.has(opening.hostWallRunId);
+    const hostOk = wallRunIds.has(opening.hostWallRunId) || onKeptStructure(opening.hostWallRunId);
     if (!hostOk) {
       warnings.push(`Dropped ${opening.kind} ${opening.id}: host wall ${opening.hostWallRunId} does not exist.`);
     }

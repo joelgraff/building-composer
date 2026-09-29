@@ -1,6 +1,7 @@
 /**
- * Windows and doors (Task 6): openings placed on a footprint wall run, the
- * way roof-structures.js places a structure on a volume side. Pure functions
+ * Windows and doors (Task 6): openings placed on a footprint wall run, or on
+ * a roof structure's own wall (a dormer's face, a tower's side), the way
+ * roof-structures.js places a structure on a volume side. Pure functions
  * with no THREE dependency — extrusion.js builds the actual geometry from
  * what this file resolves.
  */
@@ -34,8 +35,8 @@ const plainObject = (value) => (value && typeof value === 'object' && !Array.isA
  * the Add button), with the kind's preset filling anything missing. Returns
  * null when it cannot be placed at all (no host wall).
  *
- * - `hostWallRunId`: a footprint wall run's own id (`wall-run-N`) — not a
- *   volume+side pair, since the wall-selection UI already resolves a wall
+ * - `hostWallRunId`: a footprint wall run's own id (`wall-run-N`), or a
+ *   structure's (`wall-run-<structure>-<wall>`) — not a volume+side pair, since the wall-selection UI already resolves a wall
  *   run by id (see findRun in main.js) and an opening should address that
  *   same id space directly.
  * - `offset`: center along the wall from its own midpoint, meters.
@@ -144,6 +145,12 @@ export function resolveOpening(opening, hostWallRun, config = {}) {
   if (overlapsSibling) {
     errors.push(error('overlap', 'overlaps another opening on the same wall'));
   }
+  if (hostWallRun.shape && !errors.length) {
+    const casing = FRAME_CASING_WIDTH;
+    if (!rectInShape(u0 - casing, v0 - casing, u1 + casing, v1 + casing, hostWallRun.shape)) {
+      errors.push(error('outside-shape', "runs past the wall's visible face (into the roof or past its edge)"));
+    }
+  }
 
   // The wall is one solid mass with no real per-story seam, so this is only
   // a heads-up that the opening may cross a facade-panel color boundary —
@@ -192,4 +199,151 @@ export function openingOutline(resolved) {
     outer: rect(resolved.u0 - casing, resolved.v0 - casing, resolved.u1 + casing, resolved.v1 + casing),
     inner: rect(resolved.u0, resolved.v0, resolved.u1, resolved.v1),
   };
+}
+
+/**
+ * A roof structure's wall run (see facadeWallRun in roof-structures.js: u
+ * from its start, v from the structure's floor, its visible surface as
+ * `pieces`) as an opening host in the footprint walls' own frame: u from the
+ * midpoint, and the same left-handed (right, up, outward) orientation
+ * wallRunFrame gives a footprint wall — a structure wall's `right` runs the
+ * other way, so its ends are swapped and u mirrored. `shape` is the visible
+ * surface in that frame, which an opening's frame must stay inside; the
+ * wall's height is its highest visible point (a gable's peak).
+ */
+export function structureOpeningHost(run) {
+  const half = run.length / 2;
+  return {
+    ...run,
+    start: run.end,
+    end: run.start,
+    right: [-run.normal[1], run.normal[0]],
+    wallHeight: run.extent.maxV,
+    shape: run.pieces.map((triangle) => triangle.map(([u, v]) => [half - u, v])),
+  };
+}
+
+const SHAPE_EPSILON = 1e-4;
+
+function inTriangle([x, y], [a, b, c]) {
+  const side = (p, q) => (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0]);
+  const area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  if (Math.abs(area) < 1e-12) {
+    return false;
+  }
+  const sign = area > 0 ? 1 : -1;
+  const scale = (edge) => Math.hypot(edge[1][0] - edge[0][0], edge[1][1] - edge[0][1]) * SHAPE_EPSILON;
+  return [[a, b], [b, c], [c, a]].every((edge) => sign * side(edge[0], edge[1]) >= -scale(edge));
+}
+
+/** Whether (u, v) lies on a wall's visible surface (the union of its triangles). */
+export function pointInShape(point, shape) {
+  return shape.some((triangle) => inTriangle(point, triangle));
+}
+
+/**
+ * Whether the rectangle lies within a wall's visible surface. The surface is
+ * a wall's outline clipped by roofs — no holes — so the rectangle is inside
+ * when its whole boundary is (checked every few centimeters) and its middle is.
+ */
+export function rectInShape(u0, v0, u1, v1, shape) {
+  const step = 0.05;
+  const points = [[(u0 + u1) / 2, (v0 + v1) / 2]];
+  const edge = (a, b) => {
+    const count = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step));
+    for (let i = 0; i < count; i += 1) {
+      points.push([a[0] + (b[0] - a[0]) * (i / count), a[1] + (b[1] - a[1]) * (i / count)]);
+    }
+  };
+  edge([u0, v0], [u1, v0]);
+  edge([u1, v0], [u1, v1]);
+  edge([u1, v1], [u0, v1]);
+  edge([u0, v1], [u0, v0]);
+  return points.every((point) => pointInShape(point, shape));
+}
+
+/**
+ * A new opening fitted onto a small or shaped wall (a dormer's face): kept at
+ * its preset where that fits; otherwise centered, its sill (a window's) at
+ * the lowest height a window fits, and its width and height cut down to the
+ * largest that fit inside the visible surface, with the frame. Left as it
+ * was if even the smallest opening won't fit (it then reports why).
+ */
+export function fitOpening(opening, host) {
+  if (!host?.shape || resolveOpening(opening, host).resolved) {
+    return opening;
+  }
+  const casing = FRAME_CASING_WIDTH;
+  const vs = host.shape.flat().map(([, v]) => v);
+  const floor = Math.max(0, Math.min(...vs));
+  const top = Math.max(...vs);
+  // a window's sill: from just above the lowest visible point up, until one fits
+  // (a tower face half behind the house may only show above its roof); a door's stays put
+  const sills = [];
+  if (opening.kind === 'door') {
+    sills.push(opening.sillHeight);
+  } else {
+    for (let sill = floor + casing + 0.1; sill + MIN_OPENING_SIZE + casing <= top; sill += 0.1) {
+      sills.push(sill);
+    }
+  }
+  for (const sillHeight of sills) {
+    const fits = (width, height) => rectInShape(-width / 2 - casing, sillHeight - casing, width / 2 + casing, sillHeight + height + casing, host.shape);
+    let width = Math.min(opening.width, Math.max(MIN_OPENING_SIZE, host.length * 0.6));
+    while (width > MIN_OPENING_SIZE && !fits(width, MIN_OPENING_SIZE)) {
+      width = Math.max(MIN_OPENING_SIZE, width - 0.05);
+    }
+    if (fits(width, MIN_OPENING_SIZE)) {
+      let height = MIN_OPENING_SIZE;
+      while (height + 0.05 <= opening.height && fits(width, height + 0.05)) {
+        height += 0.05;
+      }
+      return {
+        ...opening, offset: 0, width, height, sillHeight,
+      };
+    }
+  }
+  return opening;
+}
+
+/** Whether an opening's frame lies on its host's visible surface (always, for a host without a shape). */
+export function openingFitsShape(opening, host) {
+  if (!host?.shape) {
+    return true;
+  }
+  const casing = FRAME_CASING_WIDTH;
+  const halfWidth = opening.width / 2;
+  return rectInShape(
+    opening.offset - halfWidth - casing,
+    opening.sillHeight - casing,
+    opening.offset + halfWidth + casing,
+    opening.sillHeight + opening.height + casing,
+    host.shape
+  );
+}
+
+/**
+ * The furthest `field` can go from `from` toward `to` with the opening still
+ * on its host's visible surface, every other field held (a bisection: the
+ * surface is convex enough along any one field for the fitting values to be
+ * one run). `from` itself when it doesn't fit.
+ */
+export function shapeLimit(opening, host, field, from, to) {
+  const fits = (value) => openingFitsShape({ ...opening, [field]: value }, host);
+  if (!fits(from)) {
+    return from;
+  }
+  if (fits(to)) {
+    return to;
+  }
+  let [good, bad] = [from, to];
+  for (let i = 0; i < 30; i += 1) {
+    const middle = (good + bad) / 2;
+    if (fits(middle)) {
+      good = middle;
+    } else {
+      bad = middle;
+    }
+  }
+  return good;
 }
