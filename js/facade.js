@@ -1,3 +1,12 @@
+import { normalizeRoofStructures } from './roof-structures.js';
+import { hasAngledWalls, rectilinearHull, cutVolumes, cutDistance } from './angled-walls.js';
+import { cutRole } from './cut-roofs.js';
+import { normalizeOpenings } from './openings.js';
+import { normalizeTrim, normalizeWallTrim } from './trim.js';
+import { normalizeRailing } from './railings.js';
+import { normalizeInterior } from './interior.js';
+import { normalizeChimneys } from './chimneys.js';
+
 /**
  * Facade subdivision helpers for Task 3.
  *
@@ -16,16 +25,19 @@ export function computeFacadeLayout(footprint, config = {}) {
   const storyCount = config.storyCount ?? 1;
   const storyHeight = config.storyHeight ?? 3.2;
   const panelsPerRun = Math.max(1, Math.floor(config.panelsPerRun ?? 2));
-  const totalHeight = storyCount * storyHeight;
+  // a half story: the top floor's walls rise only to a knee wall under the roof
+  const kneeWall = config.kneeWallHeight > 0 ? config.kneeWallHeight : 0;
+  const totalHeight = storyCount * storyHeight + kneeWall;
   const wallMaterial = config.wallMaterial ?? 'wood';
   const storyMaterials = config.storyMaterials ?? [];
   const panelMaterials = config.panelMaterials ?? [];
 
-  const stories = Array.from({ length: storyCount }, (_, index) => ({
+  const stories = Array.from({ length: storyCount + (kneeWall ? 1 : 0) }, (_, index) => ({
     id: `story-${index + 1}`,
     index,
     minY: index * storyHeight,
-    maxY: (index + 1) * storyHeight,
+    maxY: index < storyCount ? (index + 1) * storyHeight : storyCount * storyHeight + kneeWall,
+    ...(index >= storyCount ? { half: true } : {}),
     material: storyMaterials[index] ?? wallMaterial,
   }));
 
@@ -68,13 +80,14 @@ export function computeFacadeLayout(footprint, config = {}) {
     }
   });
 
-  const volumes = decomposeIntoVolumes(footprint);
+  const volumes = decomposeIntoVolumes(footprint, { split: config.volumeSplit });
   const roofGraph = buildRoofGraph(footprint, volumes, config);
 
   const enhancedWallRuns = wallRuns.map((wallRun, index) => {
     const edgeData = roofGraph.edges[index];
     return {
       ...wallRun,
+      ...wallRunFrame(wallRun.start, wallRun.end),
       orientation: edgeData?.orientation ?? 'horizontal',
       role: edgeData?.role ?? 'flat',
       pitchRise: edgeData?.pitchRise ?? 0,
@@ -100,6 +113,26 @@ export function computeFacadeLayout(footprint, config = {}) {
 }
 
 /**
+ * A facade layout with the facade surfaces of the building's roof structures
+ * (the `structureFacades` a build returns, see structureFacade in
+ * js/roof-structures.js) and the widow's walks (`roofWalks`, see roofWalkFacade)
+ * added alongside the footprint's: `structureWallRuns`, `structureStories`,
+ * `roofWalks` (each walk's flat top, for a deck), and `railRuns` (along
+ * structures' open sides and walks' edges). The footprint's own `wallRuns` are left
+ * as they are (they also define the footprint a `.bld` file saves). Addressing
+ * runs volume -> roof structure -> wall run -> facade panel -> story.
+ */
+export function withStructureFacades(layout, structureFacades = [], roofWalks = []) {
+  return {
+    ...layout,
+    structureWallRuns: structureFacades.flatMap((facade) => facade.wallRuns),
+    structureStories: structureFacades.flatMap((facade) => facade.stories),
+    roofWalks,
+    railRuns: [...structureFacades.flatMap((facade) => facade.railRuns), ...roofWalks.flatMap((walk) => walk.railRuns)],
+  };
+}
+
+/**
  * Decompose a rectilinear (axis-aligned) footprint into the minimal set of
  * non-overlapping rectangular volumes that exactly tile it, e.g. a U-shaped
  * footprint decomposes into 3 volumes (two legs + a base), an L-shape into 2.
@@ -115,10 +148,111 @@ export function computeFacadeLayout(footprint, config = {}) {
  * merge vertically-adjacent bands that share an identical X-run into a
  * single rectangle.
  *
+ * An L or T can be cut two ways, and which one matches the house depends on
+ * its massing: `split` picks the cut. `'z'` (the default, and what files
+ * saved before the choice existed use) cuts between Z coordinates, so each
+ * volume runs the full X width of its band; `'x'` cuts between X
+ * coordinates; `'auto'` picks whichever matches the massing (see
+ * pickVolumeSplit). Volume ids follow the decomposition, so changing the
+ * cut renumbers the volumes.
+ *
  * @param {Array<[number, number]>} footprint
+ * @param {{ split?: 'z'|'x'|'auto' }} [options]
  * @returns {Array<{ id: string, minX: number, maxX: number, minZ: number, maxZ: number, ridgeAxis: 'x'|'z', width: number, length: number }>}
  */
-export function decomposeIntoVolumes(footprint) {
+export function decomposeIntoVolumes(footprint, { split = 'z' } = {}) {
+  if (split === 'auto') {
+    return pickVolumeSplit(footprint);
+  }
+  if (hasAngledWalls(footprint)) {
+    // squared out to its rectilinear hull, then cut back by its angled walls
+    // (see js/angled-walls.js); the hull's volumes as they are if that fails
+    const { hull, cuts } = rectilinearHull(footprint);
+    const volumes = decomposeRectilinear(hull, split);
+    return cutVolumes(volumes, cuts, footprint) ?? volumes.map((volume) => ({ ...volume, uncut: true }));
+  }
+  return decomposeRectilinear(footprint, split);
+}
+
+/** Whether decomposeIntoVolumes could not follow a footprint's angled walls. */
+export function angledWallProblem(footprint) {
+  if (!hasAngledWalls(footprint)) {
+    return null;
+  }
+  return decomposeIntoVolumes(footprint).some((volume) => volume.uncut)
+    ? 'An angled wall reaches past another part of the building, so the footprint cannot be cut into volumes.'
+    : null;
+}
+
+function decomposeRectilinear(footprint, split) {
+  if (split === 'x') {
+    // cut the other way: decompose the footprint with x and z swapped, and swap back
+    const swapped = decomposeInBands(footprint.map(([x, z]) => [z, x]));
+    return swapped.map((volume) => withVolumeShape({
+      id: volume.id, minX: volume.minZ, maxX: volume.maxZ, minZ: volume.minX, maxZ: volume.maxX,
+    }));
+  }
+  return decomposeInBands(footprint);
+}
+
+/** A volume with its ridge axis and extents from its rectangle. */
+function withVolumeShape(volume) {
+  const width = volume.maxX - volume.minX;
+  const length = volume.maxZ - volume.minZ;
+  return {
+    ...volume,
+    ridgeAxis: length >= width ? 'z' : 'x',
+    width: Math.min(width, length),
+    length: Math.max(width, length),
+  };
+}
+
+/**
+ * The decomposition, of the two cut directions, that best matches how a
+ * house is massed: the fewest volumes; then, if only one cut leaves the
+ * largest block whole with a shallow projection along its side, that one;
+ * then no thin slivers (the largest smallest dimension of any volume); a tie
+ * keeps the Z bands. A wing
+ * beside a gable-front upright, or a projection in the middle of a side,
+ * comes out as its own volume with the main block whole, whichever way the
+ * house faces.
+ */
+function pickVolumeSplit(footprint) {
+  const candidates = ['z', 'x'].map((split) => decomposeIntoVolumes(footprint, { split }));
+  const depth = (volume) => Math.min(volume.maxX - volume.minX, volume.maxZ - volume.minZ);
+  const length = (volume) => Math.max(volume.maxX - volume.minX, volume.maxZ - volume.minZ);
+  // a shallow projection along a side (at most 3 m, and a quarter of its
+  // length, deep) is no sliver: it leaves the main block whole
+  const projection = (volume) => depth(volume) <= PROJECTION_DEPTH && depth(volume) <= length(volume) / 4;
+  const largest = (volumes) => Math.max(...volumes.map((volume) => (volume.maxX - volume.minX) * (volume.maxZ - volume.minZ)));
+  const [z, x] = candidates;
+  if (z.length === x.length && z.length > 1) {
+    const keepsBlock = (own, other) => own.some(projection) && largest(own) > largest(other) + 1e-6;
+    if (keepsBlock(z, x) !== keepsBlock(x, z)) {
+      return keepsBlock(z, x) ? z : x;
+    }
+  }
+  const score = (volumes) => [
+    -volumes.length,
+    Math.min(...volumes.map(depth)),
+  ];
+  const better = (a, b) => {
+    const [sa, sb] = [score(a), score(b)];
+    for (let k = 0; k < sa.length; k += 1) {
+      if (Math.abs(sa[k] - sb[k]) > 1e-6) {
+        return sa[k] > sb[k];
+      }
+    }
+    return false;
+  };
+  return better(candidates[1], candidates[0]) ? candidates[1] : candidates[0];
+}
+
+/** How deep a projection along a side may be and still leave the main block whole (see pickVolumeSplit). */
+const PROJECTION_DEPTH = 3;
+
+/** Row-run decomposition: bands between the footprint's z coordinates, merged where their x-runs match. */
+function decomposeInBands(footprint) {
   const xs = [...new Set(footprint.map(([x]) => x))].sort((a, b) => a - b);
   const zs = [...new Set(footprint.map(([, z]) => z))].sort((a, b) => a - b);
 
@@ -263,6 +397,21 @@ function interpolatePoint(start, end, amount) {
 }
 
 /**
+ * A footprint edge's own local frame: `right`, the unit vector from `start`
+ * toward `end` (the wall's own "u" axis), and `normal`, the outward unit
+ * vector (its "v"-facing direction) — rotating `right` -90°, which is
+ * outward for a footprint's own CCW winding (already guaranteed by
+ * normalizeFootprint/validateFootprint, unlike an arbitrary edge, so this
+ * needs no "inside point" the way roof-structures.js's edgeFrame/wallFrame do).
+ */
+export function wallRunFrame(start, end) {
+  const length = computeSegmentLength(start, end) || 1;
+  const right = [(end[0] - start[0]) / length, (end[1] - start[1]) / length];
+  const normal = [right[1], -right[0]];
+  return { right, normal };
+}
+
+/**
  * Maps direction string to primary ridge axis.
  *
  * @param {string} direction
@@ -325,6 +474,12 @@ export function classifyEdgeRole(edge, volumes, config = {}) {
     }
   }
 
+  // an angled wall belongs to the volume it cuts
+  const onCut = (candidate) => [edge.start, edge.end].every((point) => Math.abs(cutDistance(candidate, point)) < 1e-6);
+  const cutVolume = orientation === 'diagonal' ? volumes.find((candidate) => candidate.cuts?.some(onCut)) : null;
+  if (cutVolume) {
+    bestVol = cutVolume;
+  }
   const vol = bestVol ?? volumes[0];
   const roofType = (vol && config.volumeRoofTypes?.[vol.id]) ?? config.roofType ?? 'flat';
   const ridgeDirectionOverride = vol ? config.volumeRidgeDirections?.[vol.id] : undefined;
@@ -340,10 +495,10 @@ export function classifyEdgeRole(edge, volumes, config = {}) {
   if (roofType === 'flat') {
     role = 'flat';
     pitchRise = 0;
-  } else if (roofType === 'hip') {
+  } else if (roofType === 'hip' || roofType === 'mansard') {
     role = 'eave';
     pitchRise = defaultPitchRise;
-  } else if (roofType === 'gable') {
+  } else if (roofType === 'gable' || roofType === 'gambrel') {
     const isParallelToRidge = (orientation === 'horizontal' && ridgeAxis === 'x')
       || (orientation === 'vertical' && ridgeAxis === 'z');
     role = isParallelToRidge ? 'eave' : 'rake';
@@ -368,6 +523,14 @@ export function classifyEdgeRole(edge, volumes, config = {}) {
         role = 'rake';
       }
     }
+    pitchRise = role === 'eave' ? defaultPitchRise : 0;
+  }
+
+  if (cutVolume && roofType !== 'flat') {
+    // as its roof treats it (see cutRole in js/cut-roofs.js)
+    const cut = cutVolume.cuts.find(onCut);
+    const highEdgeForCut = roofType === 'shed' ? highEdge : undefined;
+    role = cutRole(cut, roofType, { ridgeAxis, roofHighEdge: highEdgeForCut, bounds: cutVolume }) === 'eave' ? 'eave' : 'rake';
     pitchRise = role === 'eave' ? defaultPitchRise : 0;
   }
 
@@ -489,7 +652,13 @@ export function serializeBuildingState(layout, modelConfig) {
     roofHeight: modelConfig.roofHeight,
     roofEaveDepth: modelConfig.roofEaveDepth,
     roofHeightMode: modelConfig.roofHeightMode,
+    volumeSplit: modelConfig.volumeSplit ?? 'z',
     volumeStoryOverrides: modelConfig.volumeStoryOverrides ?? {},
+    kneeWallHeight: modelConfig.kneeWallHeight,
+    volumeKneeWalls: modelConfig.volumeKneeWalls ?? {},
+    foundationDepth: modelConfig.foundationDepth,
+    volumeStoryHeights: modelConfig.volumeStoryHeights ?? {},
+    volumeFoundationHeights: modelConfig.volumeFoundationHeights ?? {},
     volumeRidgeDirections: modelConfig.volumeRidgeDirections ?? {},
     volumeRoofTypes: modelConfig.volumeRoofTypes ?? {},
     volumeRoofConnections: modelConfig.volumeRoofConnections ?? {},
@@ -500,15 +669,41 @@ export function serializeBuildingState(layout, modelConfig) {
     rakeSoffit: modelConfig.rakeSoffit,
     volumeEaves: modelConfig.volumeEaves ?? {},
     edgePitchOverrides: modelConfig.edgePitchOverrides ?? {},
+    roofBreakHeight: modelConfig.roofBreakHeight,
+    roofLowerPitchRise: modelConfig.roofLowerPitchRise,
+    roofUpperPitchRise: modelConfig.roofUpperPitchRise,
+    roofWalkHeight: modelConfig.roofWalkHeight,
+    roofStructures: modelConfig.roofStructures ?? [],
+    openings: modelConfig.openings ?? [],
+    trim: normalizeTrim(modelConfig.trim),
+    wallTrim: normalizeWallTrim(modelConfig.wallTrim),
+    volumeMaterials: modelConfig.volumeMaterials ?? {},
+    interior: normalizeInterior(modelConfig.interior),
+    chimneys: normalizeChimneys(modelConfig.chimneys),
+    walkRailings: normalizeRailing(modelConfig.walkRailings),
+    // where the footprint came from, to put the building back (see import.js)
+    placement: modelConfig.placement ?? null,
+    // the side the building fronts (walls are named from it)
+    frontSide: modelConfig.frontSide ?? 'maxZ',
     roofGraph: layout.roofGraph,
   };
+}
+
+/** Per-volume roof shapes, with a widow's walk saved under its old name (`deckHeight`) renamed. */
+function legacyRoofShapes(shapes) {
+  const out = {};
+  Object.entries(shapes && typeof shapes === 'object' ? shapes : {}).forEach(([volumeId, shape]) => {
+    const { deckHeight, ...rest } = shape ?? {};
+    out[volumeId] = Number.isFinite(deckHeight) && !Number.isFinite(rest.walkHeight) ? { ...rest, walkHeight: deckHeight } : rest;
+  });
+  return out;
 }
 
 /**
  * Validates and restores building configuration from a parsed .bld JSON payload.
  *
  * @param {object} data
- * @returns {{ valid: boolean, state?: object, errors?: string[] }}
+ * @returns {{ valid: boolean, state?: object, errors?: string[], warnings?: string[] }}
  */
 export function deserializeBuildingState(data) {
   if (!data || typeof data !== 'object') {
@@ -518,8 +713,70 @@ export function deserializeBuildingState(data) {
     return { valid: false, errors: ['Invalid file format: footprint array missing or incomplete.'] };
   }
 
+  // Structures are placed on a volume of the footprint's decomposition, or on
+  // another structure; one whose host is gone (the file was edited, or
+  // decomposition changed) is dropped rather than guessed onto another host,
+  // and so is anything standing on it.
+  // files saved before the cut could be chosen used Z bands; keep their volume ids
+  const volumeSplit = ['auto', 'x', 'z'].includes(data.volumeSplit) ? data.volumeSplit : 'z';
+  const volumeIds = new Set(decomposeIntoVolumes(data.footprint, { split: volumeSplit }).map((volume) => volume.id));
+  const warnings = [];
+  // a widow's walk was once a structure standing on a hip's flat top; it is
+  // now that flat top itself (roofWalkHeight), so the structure is dropped
+  const rawStructures = Array.isArray(data.roofStructures) ? data.roofStructures : [];
+  rawStructures.filter((raw) => raw?.kind === 'widows-walk').forEach((raw) => {
+    warnings.push(`Dropped roof structure ${raw.id ?? '(unnamed)'}: a widow's walk is now the flat top of a hip roof (its widow's walk height).`);
+  });
+  let roofStructures = normalizeRoofStructures(rawStructures.filter((raw) => raw?.kind !== 'widows-walk'));
+  let dropped = true;
+  while (dropped) {
+    const structureIds = new Set(roofStructures.map((structure) => structure.id));
+    const kept = roofStructures.filter((structure) => {
+      const hostOk = structure.hostStructureId
+        ? structureIds.has(structure.hostStructureId) && structure.hostStructureId !== structure.id
+        : volumeIds.has(structure.hostVolumeId);
+      if (!hostOk) {
+        const hostName = structure.hostStructureId ? `structure ${structure.hostStructureId}` : `volume ${structure.hostVolumeId}`;
+        warnings.push(`Dropped roof structure ${structure.id}: host ${hostName} does not exist.`);
+      }
+      return hostOk;
+    });
+    dropped = kept.length < roofStructures.length;
+    roofStructures = kept;
+  }
+
+  // A footprint wall run's id is purely positional ('wall-run-<index>'), so
+  // the valid set is cheap to recompute from the footprint alone — one per
+  // edge, the same count computeFacadeLayout's own wallRuns would produce.
+  // A structure's walls only exist once it's built, so an opening on one is
+  // kept while its structure is (a wall it no longer has fails to build, with a reason).
+  const wallRunIds = new Set(data.footprint.map((_, index) => `wall-run-${index}`));
+  const onKeptStructure = (hostId) => roofStructures.some((structure) => hostId.startsWith(`wall-run-${structure.id}-`));
+  const openings = normalizeOpenings(Array.isArray(data.openings) ? data.openings : []).filter((opening) => {
+    const hostOk = wallRunIds.has(opening.hostWallRunId) || onKeptStructure(opening.hostWallRunId);
+    if (!hostOk) {
+      warnings.push(`Dropped ${opening.kind} ${opening.id}: host wall ${opening.hostWallRunId} does not exist.`);
+    }
+    return hostOk;
+  });
+  // a volume's own wall material, kept for the volumes the footprint still cuts
+  const volumeMaterials = Object.fromEntries(Object.entries(data.volumeMaterials && typeof data.volumeMaterials === 'object' ? data.volumeMaterials : {})
+    .filter(([volumeId, key]) => volumeIds.has(volumeId) && typeof key === 'string'));
+  // chimneys stand on footprint walls: dropped, with a warning, where the wall's gone
+  const chimneys = normalizeChimneys(data.chimneys).filter((chimney) => {
+    const hostOk = wallRunIds.has(chimney.hostWallRunId);
+    if (!hostOk) {
+      warnings.push(`Dropped chimney ${chimney.id}: host wall ${chimney.hostWallRunId} does not exist.`);
+    }
+    return hostOk;
+  });
+  // per-wall trim, kept for the walls that still exist (a structure's while it does)
+  const wallTrim = Object.fromEntries(Object.entries(normalizeWallTrim(data.wallTrim))
+    .filter(([wallId]) => wallRunIds.has(wallId) || onKeptStructure(wallId)));
+
   return {
     valid: true,
+    warnings,
     state: {
       footprint: data.footprint,
       storyCount: data.storyCount ?? 1,
@@ -534,17 +791,44 @@ export function deserializeBuildingState(data) {
       roofHeight: data.roofHeight ?? 2,
       roofEaveDepth: data.roofEaveDepth ?? 0.35,
       roofHeightMode: data.roofHeightMode ?? 'slope',
+      volumeSplit,
       volumeStoryOverrides: data.volumeStoryOverrides ?? {},
+      // a half story's knee wall, for the building and by volume
+      kneeWallHeight: Number.isFinite(data.kneeWallHeight) && data.kneeWallHeight > 0 ? data.kneeWallHeight : undefined,
+      volumeKneeWalls: data.volumeKneeWalls ?? {},
+      // the foundation (floor level above grade), for the building and by volume, and story height by volume
+      foundationDepth: Number.isFinite(data.foundationDepth) && data.foundationDepth >= 0 ? data.foundationDepth : undefined,
+      volumeStoryHeights: data.volumeStoryHeights ?? {},
+      volumeFoundationHeights: data.volumeFoundationHeights ?? {},
       volumeRidgeDirections: data.volumeRidgeDirections ?? {},
       volumeRoofTypes: data.volumeRoofTypes ?? {},
       volumeRoofConnections: data.volumeRoofConnections ?? {},
-      volumeRoofShapes: data.volumeRoofShapes ?? {},
+      volumeRoofShapes: legacyRoofShapes(data.volumeRoofShapes),
       roofRakeDepth: data.roofRakeDepth ?? data.roofEaveDepth ?? 0.35,
       roofFasciaDepth: data.roofFasciaDepth ?? 0.1524,
       eaveSoffit: data.eaveSoffit ?? 'flat',
       rakeSoffit: data.rakeSoffit ?? 'sloped',
       volumeEaves: data.volumeEaves ?? {},
       edgePitchOverrides: data.edgePitchOverrides ?? {},
+      // mansard and gambrel settings; left unset, each type uses its own defaults
+      roofBreakHeight: Number.isFinite(data.roofBreakHeight) ? data.roofBreakHeight : undefined,
+      roofLowerPitchRise: Number.isFinite(data.roofLowerPitchRise) ? data.roofLowerPitchRise : undefined,
+      roofUpperPitchRise: Number.isFinite(data.roofUpperPitchRise) ? data.roofUpperPitchRise : undefined,
+      // a hip roof's widow's walk (its flat top), if any; older files called it a deck
+      roofWalkHeight: [data.roofWalkHeight, data.roofDeckHeight].find(Number.isFinite),
+      roofStructures,
+      openings,
+      // trim courses; an older file has none, so every course is off
+      trim: normalizeTrim(data.trim),
+      wallTrim,
+      volumeMaterials,
+      // a walk-in interior; an older file's building is solid
+      interior: normalizeInterior(data.interior),
+      chimneys,
+      // a widow's walk's railings; an older file's walk has the plain default
+      walkRailings: normalizeRailing(data.walkRailings),
+      placement: data.placement && typeof data.placement === 'object' ? data.placement : undefined,
+      frontSide: ['minX', 'maxX', 'minZ', 'maxZ'].includes(data.frontSide) ? data.frontSide : 'maxZ',
     },
   };
 }

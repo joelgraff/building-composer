@@ -1,0 +1,40 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A widow's walk: a hip roof cut flat 1.6 m above the plate in place of its ridge. The flat top and its edges are facade surfaces for a deck and railings.",
+  "footprint": [
+    [
+      -7,
+      -5.5
+    ],
+    [
+      7,
+      -5.5
+    ],
+    [
+      7,
+      5.5
+    ],
+    [
+      -7,
+      5.5
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 3.2,
+  "roofType": "hip",
+  "roofDirection": "z-min",
+  "roofPitchRise": 8,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.6,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofWalkHeight": 1.6,
+  "roofHeight": 3.6666666666666665,
+  "volumeStoryOverrides": {},
+  "roofStructures": []
+}

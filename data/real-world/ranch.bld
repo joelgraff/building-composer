@@ -1,0 +1,87 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and an entry recessed under the roof in the ell.",
+  "footprint": [
+    [
+      -10.21875,
+      -5.7734375
+    ],
+    [
+      7.78125,
+      -5.7734375
+    ],
+    [
+      7.78125,
+      9.2265625
+    ],
+    [
+      1.78125,
+      9.2265625
+    ],
+    [
+      1.78125,
+      2.7265625
+    ],
+    [
+      -10.21875,
+      2.7265625
+    ]
+  ],
+  "storyCount": 1,
+  "storyHeight": 2.7,
+  "roofType": "hip",
+  "roofDirection": "z-min",
+  "roofPitchRise": 4,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.6,
+  "roofRakeDepth": 0.6,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "volumeSplit": "auto",
+  "foundationDepth": 0.7,
+  "roofHeight": 1.4166666666666665,
+  "volumeStoryOverrides": {},
+  "volumeRidgeDirections": {},
+  "volumeRoofTypes": {},
+  "volumeRoofConnections": {},
+  "volumeKneeWalls": {},
+  "volumeStoryHeights": {
+    "volume-1": 3.4000000000000004
+  },
+  "volumeFoundationHeights": {
+    "volume-1": 0
+  },
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 1.5,
+      "width": 3,
+      "setback": 0,
+      "mount": "recess",
+      "depth": 1.8,
+      "wallHeight": 2.4,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front"
+      ],
+      "inset": 0,
+      "roofType": "flat",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "plan": null,
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

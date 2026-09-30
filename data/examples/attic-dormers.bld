@@ -1,0 +1,118 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "Key example: a story-and-a-half cottage. A long shed dormer lights the attic on one side, two gable dormers on the other.",
+  "footprint": [
+    [
+      -6,
+      -4.5
+    ],
+    [
+      6,
+      -4.5
+    ],
+    [
+      6,
+      4.5
+    ],
+    [
+      -6,
+      4.5
+    ]
+  ],
+  "storyCount": 1,
+  "storyHeight": 3.2,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 12,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofHeight": 4.5,
+  "volumeStoryOverrides": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "wall-dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 7,
+      "setback": 0,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.6,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 2
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "minZ",
+      "offset": -3,
+      "width": 2,
+      "setback": 0.9,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.4,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 12
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-3",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "minZ",
+      "offset": 3,
+      "width": 2,
+      "setback": 0.9,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.4,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 12
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

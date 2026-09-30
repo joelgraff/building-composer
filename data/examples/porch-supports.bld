@@ -1,0 +1,124 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "Second-floor porches and how they are held up: an open porch on posts, a shallow balcony on brackets, and an enclosed base (a two-story bay).",
+  "footprint": [
+    [
+      -9,
+      -4.5
+    ],
+    [
+      9,
+      -4.5
+    ],
+    [
+      9,
+      4.5
+    ],
+    [
+      -9,
+      4.5
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 3.2,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 8,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofHeight": 3,
+  "volumeStoryOverrides": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": -5.5,
+      "width": 3.6,
+      "setback": -2.4,
+      "mount": "join",
+      "depth": 2.4,
+      "wallHeight": 2.4,
+      "baseHeight": -3.2,
+      "support": "posts",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 1.5
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 3,
+      "setback": -1.2,
+      "mount": "join",
+      "depth": 1.2,
+      "wallHeight": 2.4,
+      "baseHeight": -3.2,
+      "support": "brackets",
+      "openSides": [
+        "front"
+      ],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 3
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-3",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 5.5,
+      "width": 3.6,
+      "setback": -1.8,
+      "mount": "join",
+      "depth": 1.8,
+      "wallHeight": 2.4,
+      "baseHeight": -3.2,
+      "support": "enclosed",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "hip",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 6
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

@@ -42,7 +42,7 @@ const LOW_SIDE_FOR_HIGH_EDGE = { 'x-min': 'maxX', 'x-max': 'minX', 'z-min': 'max
 export function sideOverhangs(roofType, { ridgeAxis = 'x', roofHighEdge }, eaves, zeroSides = new Set()) {
   const sides = ['minX', 'maxX', 'minZ', 'maxZ'];
   const roles = {};
-  if (roofType === 'gable') {
+  if (roofType === 'gable' || roofType === 'gambrel') {
     sides.forEach((side) => {
       const acrossX = side === 'minX' || side === 'maxX';
       // ridge along x: the z sides run parallel to it (eaves)

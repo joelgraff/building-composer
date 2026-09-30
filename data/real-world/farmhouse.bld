@@ -1,0 +1,123 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A two-story, one-room-deep I-house (common across northern Illinois from the 1850s) with a two-story rear ell, a full-width front porch, and a side porch along the ell.",
+  "footprint": [
+    [
+      -4.505524861878453,
+      -6.843922651933702
+    ],
+    [
+      0.494475138121547,
+      -6.843922651933702
+    ],
+    [
+      0.494475138121547,
+      -0.8439226519337016
+    ],
+    [
+      6.494475138121547,
+      -0.8439226519337016
+    ],
+    [
+      6.494475138121547,
+      4.656077348066298
+    ],
+    [
+      -4.505524861878453,
+      4.656077348066298
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 2.9,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 10,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "volumeSplit": "auto",
+  "foundationDepth": 0.7,
+  "roofHeight": 2.291666666666667,
+  "volumeStoryOverrides": {},
+  "volumeRidgeDirections": {
+    "volume-1": "z-min",
+    "volume-0": "x-min"
+  },
+  "volumeRoofTypes": {},
+  "volumeRoofConnections": {},
+  "volumeKneeWalls": {},
+  "volumeStoryHeights": {},
+  "volumeFoundationHeights": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "porch",
+      "hostVolumeId": "volume-1",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 11,
+      "setback": -2.4,
+      "mount": "join",
+      "depth": 2.4,
+      "wallHeight": 2.6,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 3
+      },
+      "join": "auto",
+      "plan": null,
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxX",
+      "offset": 0,
+      "width": 6,
+      "setback": -2.4,
+      "mount": "join",
+      "depth": 2.4,
+      "wallHeight": 2.6,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 3
+      },
+      "join": "auto",
+      "plan": null,
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

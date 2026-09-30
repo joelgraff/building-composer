@@ -1,0 +1,114 @@
+{
+  "italianate": {
+    "title": "Italianate (courthouse-square type)",
+    "note": "A two-story brick Italianate of the 1850s-60s, like the Van Epps and Brookner houses: a near-square block with tall 12 ft stories, a low hip roof on deep bracketed eaves, a belvedere, a flat-roofed entry porch, a side bay, and a one-story rear kitchen wing.",
+    "front": "maxZ",
+    "gaps": [
+      "The entry porch's flat roof usually carries a balustrade: a railing on a roof edge, not yet a facade element.",
+      "Paired brackets, tall arched windows, and hood molds are facade modifiers (not built yet)."
+    ],
+    "issues": [],
+    "refused": [],
+    "zones": 2,
+    "volumes": 2
+  },
+  "upright-and-wing": {
+    "title": "Upright-and-wing (gable-front-and-wing)",
+    "note": "The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front \"upright\" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing.",
+    "front": "maxZ",
+    "gaps": [],
+    "issues": [],
+    "refused": [],
+    "zones": 2,
+    "volumes": 2
+  },
+  "queen-anne": {
+    "title": "Gable-front Queen Anne (Reagan Boyhood Home type)",
+    "note": "A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner.",
+    "front": "maxZ",
+    "gaps": [
+      "Gable-end detailing (fish-scale shingles, spindlework, bargeboards) is facade work."
+    ],
+    "issues": [],
+    "refused": [],
+    "zones": 2,
+    "volumes": 2
+  },
+  "foursquare": {
+    "title": "American Foursquare",
+    "note": "The standard Midwestern house of 1900-1930: a two-and-a-half-story square box, a hip roof with hipped dormers, and a full-width front porch on columns.",
+    "front": "maxZ",
+    "gaps": [
+      "Porch columns on brick piers with a solid half wall between are facade/railing work; posts are plain boxes."
+    ],
+    "issues": [],
+    "refused": [
+      {
+        "label": "hip dormer 2.4 m wide, 1.1 m walls, under a 6:12 roof",
+        "errors": [
+          "The structure crosses a hip, ridge, or valley of the host roof; it must stand on one roof face. It fits at 1.70 m wide (0.70 m narrower)."
+        ],
+        "warnings": [
+          "The structure's roof was lowered to meet the host ridge."
+        ]
+      }
+    ],
+    "zones": 1,
+    "volumes": 1
+  },
+  "bungalow": {
+    "title": "Craftsman bungalow",
+    "note": "A story-and-a-half side-gabled bungalow of the 1910s-20s: a broad low roof on deep eaves, a wide shed dormer, and an integral porch recessed into the corner under the main roof.",
+    "front": "maxZ",
+    "gaps": [
+      "Exposed rafter tails, knee braces, and tapered piers are facade work."
+    ],
+    "issues": [],
+    "refused": [],
+    "zones": 1,
+    "volumes": 1
+  },
+  "dutch-colonial": {
+    "title": "Dutch Colonial Revival",
+    "note": "A 1910s-30s Dutch Colonial: a side-gabled gambrel whose steep lower slopes hold the second floor, a long shed dormer across the front, and a gabled entry hood.",
+    "front": "maxZ",
+    "gaps": [],
+    "issues": [],
+    "refused": [],
+    "zones": 1,
+    "volumes": 1
+  },
+  "farmhouse": {
+    "title": "I-house farmhouse with rear ell",
+    "note": "A two-story, one-room-deep I-house (common across northern Illinois from the 1850s) with a two-story rear ell, a full-width front porch, and a side porch along the ell.",
+    "front": "maxZ",
+    "gaps": [],
+    "issues": [],
+    "refused": [],
+    "zones": 2,
+    "volumes": 2
+  },
+  "cape-cod": {
+    "title": "Cape Cod (1940s)",
+    "note": "A 1940s story-and-a-half Cape Cod: a steep side-gabled roof with two gabled dormers and a small gabled entry.",
+    "front": "maxZ",
+    "gaps": [
+      "The entry is often an enclosed vestibule or just a hood; here it is an open stoop.",
+      "Dormer spacing is set by window bays; placing dormers by the facade layout is not linked yet."
+    ],
+    "issues": [],
+    "refused": [],
+    "zones": 1,
+    "volumes": 1
+  },
+  "ranch": {
+    "title": "L-shaped ranch (1950s)",
+    "note": "A 1950s one-story ranch: a long low hip roof over an L with a front-facing garage wing, and an entry recessed under the roof in the ell.",
+    "front": "maxZ",
+    "gaps": [],
+    "issues": [],
+    "refused": [],
+    "zones": 2,
+    "volumes": 2
+  }
+}

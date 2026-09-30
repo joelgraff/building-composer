@@ -1,0 +1,93 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "Key example: a sleeping porch standing on a flat-roofed ground porch. The ground porch is open with posts; the sleeping porch is enclosed, its shed roof tucked just under the main eave.",
+  "footprint": [
+    [
+      -8,
+      -4.5
+    ],
+    [
+      8,
+      -4.5
+    ],
+    [
+      8,
+      4.5
+    ],
+    [
+      -8,
+      4.5
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 3.2,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 8,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofHeight": 3,
+  "volumeStoryOverrides": {},
+  "roofStructures": [
+    {
+      "id": "ground-porch",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 7,
+      "setback": -2.4,
+      "mount": "join",
+      "depth": 2.4,
+      "wallHeight": 3.2,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "flat",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "sleeping-porch",
+      "kind": "porch",
+      "hostVolumeId": null,
+      "hostStructureId": "ground-porch",
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 7,
+      "setback": 0,
+      "mount": "join",
+      "depth": 2.4,
+      "wallHeight": 2.4,
+      "baseHeight": 0,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 1.5
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

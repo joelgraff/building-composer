@@ -29,6 +29,13 @@ Footprint (2D polygon)
   → Facade (the surface of the extrusion, subdivided)
 ```
 
+Each mass is a solid block by default. With a walk-in interior (a building
+setting) each is instead a hollow shell: walls of a set thickness built inward
+from the footprint line (so the exterior is unchanged), a floor on the
+foundation, a ceiling at the ground story's height (upper stories stay solid
+until there are stairs), passages between neighboring masses, and doors cut
+through (`js/interior.js`).
+
 Every structural and semi-structural feature is anchored to a defined envelope
 surface. Detached objects (appurtenances) and separate structures
 (substructures) are scene-graph children, not part of the primary envelope.
@@ -39,10 +46,13 @@ surface. Detached objects (appurtenances) and separate structures
 | ------- | ----------------- | ---------------- |
 | Footprint | 2D polygon (supplied by main model) | Vertices, area, perimeter segments |
 | Foundation | Base below/at grade | Depth, above-grade height, material |
-| Walls | Vertical extrusion | Story count, per-story height, wall thickness |
-| Roof | Top cap | Type (gable, hip, flat, mansard…), pitch, overhang/eave depth |
+| Walls | Vertical extrusion | Story count, per-story height, material (building or per volume); wall thickness with a walk-in interior |
+| Roof | Top cap | Type (flat, gable, hip, shed, mansard, gambrel), pitch, break height and lower/upper pitches (mansard, gambrel), widow's walk height (hip), overhang/eave depth |
 | Facade | Subdivided surface of the envelope | See §4 |
 | Substructure * | Associated separate footprint (shed, garage, gazebo) | Parent reference, relative transform, own extrusion params |
+| Floor level and story height | A volume's floor above grade (a garage on a slab) and its own story height (a kitchen wing with lower ceilings) | Foundation height and story height, for the building or a volume |
+| Half story | A top floor under the roof whose walls rise only a knee wall above the full stories (a story and a half) | Knee wall height, for the building or a volume |
+| Roof structure | Dormer or porch outside the footprint (an envelope modifier) | Host volume or structure and side, offset, width, setback, depth, wall height, base height, own roof and eaves, open sides, support |
 | Appurtenance * | Detached object in the building's immediate vicinity | Type, relative placement (face + offset + distance), scale, mesh reference |
 
 \* Post-MVP (bonus features).
@@ -93,7 +103,13 @@ rectangular-footprint-only.
 
 **Independent roof zones.** A rectilinear footprint is automatically
 decomposed into its minimal set of rectangular volumes (`decomposeIntoVolumes`
-in `js/facade.js`), each with its own longitudinal ridge axis. For a
+in `js/facade.js`), each with its own longitudinal ridge axis. An L or T can
+be cut two ways, and the right one depends on the massing (a gable-front
+upright beside its wing, or a main block with a projection in the middle of a
+side). The **Volumes** control picks the cut: automatic (the fewest volumes,
+then no thin slivers, a tie keeping the Z bands), or bands along either axis.
+Files saved before the choice existed keep the Z bands, so their volume ids
+are unchanged. For a
 multi-volume hip roof, the roof is resolved as one continuous surface across
 the footprint, allowing side ridges to project into the spanning roof rather
 than stopping at internal walls. The **Multi-volume ridge** control selects
@@ -132,7 +148,19 @@ clutter. Massing volumes and roof zones are currently a deliberate one-to-one
 pair; separate roof-zone partitioning is deferred. Volumes are also direct
 manipulation targets in the 3D view: hovering highlights the volume and its
 roof perimeter in amber, while clicking makes it the selected cyan target and
-synchronizes the property controls.
+synchronizes the property controls. Roof structures are picked the same way on
+their own meshes (the nearest of a volume or structure wins), and edited in the
+**Roof structures** panel: add from presets onto the selected volume, see each
+structure's validation inline, and edit the selected one's placement, base,
+roof, open sides, support, and materials. Selecting a structure also selects
+the volume it stands on, which the volume controls then edit. Pick targets
+are editor-only and left out of the GLB export.
+
+**Roofs meeting their neighbors.** A gable's end meeting a neighbor's roof
+merges into it by default (its ridge runs into the neighbor's slope with
+valleys), unless set to a standalone shell. A roof over a lower neighbor keeps
+its eave along the shared side, cut only where the lower roof passes through
+it.
 
 **Roof shell connections.** Every roof must form a closed shell: boundaries
 that do not connect to another roof face receive fascia, gable-end, or vertical
@@ -158,9 +186,93 @@ shed 1, gable 2, hip 4) so neighbors can be intersected analytically:
   interacts with a taller neighbor, and only above that neighbor's eave; below
   it the roof butts the wall as a standalone roof.
 
+**Mansard and gambrel roofs.** Two-slope roofs: on each sloped side a steep
+lower plane rises to a break (curb) and a shallow upper plane carries on above
+it, and the roof is the min of these planes (so dormers, zone descriptors, and
+structures treat them like any other roof). A mansard slopes on all four sides,
+a gambrel on its two eave sides with gable ends. Their eaves are horizontal
+cornice boxes at the plate rather than the steep slope carried past the wall;
+a gambrel's rakes follow its broken profile. On a multi-volume footprint each
+volume gets its own two-slope roof, with sides fully covered by a neighbor left
+unsloped and closed with an end face clipped outside the neighbor; a continuous
+mansard around an L or U is later work. A hip roof can have a widow's walk: it is
+cut flat (an added level plane) at a height above the plate, and the flat top
+replaces its ridge. A continuous (straight-skeleton) hip over an L or U is cut
+flat at one height, leaving one walk of that shape. The walk is part of the
+roof; a deck on it and its railings are facade modifiers.
+
 **Standalone shed shell.** Shed roofs emit a sloped roof plane, vertical
 high-side return, and triangular end closures down to the supporting wall top.
 A shed is the half-gable special case: one of a gable's two slopes.
+
+**Roof structures.** Dormers, porches, and cupolas change the
+roof shell and have their own walls, but are not part of the footprint (`js/roof-structures.js`; built by
+`withRoofStructures` in `js/extrusion.js`). They are envelope modifiers (§5). A
+structure is a small rectangle placed in the frame of one side of its host (a
+volume, or another structure): offset along the side, width, setback from the
+wall (0 = flush, negative = projecting), depth, wall height, and either no base
+(a *dormer*, rising out of the roof) or a base height (a *standing* structure,
+a porch). It has its own roof (flat, gable, hip, shed, or none) and eave settings, open
+sides, an optional inset (the front wall set back behind an open porch under
+its roof: a recessed porch), and, when projecting, a support (deck, posts,
+ground-level porch, brackets, or an enclosed base).
+
+It relates to the building through convex solids. Every volume's resolved
+roof (its *zone descriptor*: wall and roof rectangles, final planes after
+merges, plate elevation) gives a convex solid: the wall box capped by the roof
+planes. A structure's walls and roof are built too large and clipped to what
+lies outside every volume's solid, and every roof is clipped to what lies
+outside the structure's solid; the cuts are exact, so the two meet along the
+same lines as one closed shell (valleys, ridge ends, and wall-on-roof seams
+come out of the clip for every roof type). The rules that follow:
+
+- A dormer stands on one roof face and its roof never passes the host ridge.
+  On a mansard or gambrel it may run from the lower slope on into the upper
+  slope of the same side (a full shed dormer), but not round a hip.
+  It faces down its slope, square to the host ridge (its own ridge always
+  runs into the roof): if the host ridge turns, a dormer on what becomes a
+  gable end faces the slope at that end instead.
+- A structure rising through the roof (`mount: 'through'`: a cupola,
+  belvedere, or rooftop pavilion) does neither: it may straddle the ridge, its
+  wall height is measured from the highest point of the roof under it, and it
+  leaves the host roof whole. It may stand on a widow's walk (a belvedere).
+- A flush front wall carries its host wall up through the eave: the eave is
+  cut away across it and capped either side, unless the host is open on that
+  side (then the eave runs on as a beam).
+- A hip porch projecting from a wall is a hipped shed: level along the wall,
+  sloping from its front and ends; an end standing against a wall runs level
+  into it, so no hip drains toward the house. A porch roof rising through the
+  host eave is flagged (usually kept below it). A porch roof that rises through the host
+  eave meets the host roof in valleys (the eave is cut only where the porch
+  roof is above it); only walls rising past the host's wall top notch the
+  eave.
+- A standing structure replaces the host roof inside its footprint (one convex
+  piece per host face); its walls run down to the host wall top there, and
+  knee walls close the attic around it.
+- A structure can stand on another; hosts are resolved first.
+- A structure on a base or rising through the roof can be canted (a bay
+  window or oriel) or polygonal (an octagonal or round tower) in plan: its
+  roof is a polygonal hip or cone (planes may rise in any direction), and its
+  walls are one facade surface per facet.
+- A recessed structure (`mount: 'recess'`: an integral porch, recessed
+  entry, or loggia) lives inside its host, under the host roof: the host's
+  walls are cut away across it, and it adds its own back and side walls,
+  ceiling, and posts at open corners.
+- A projecting porch reaching the end of its wall can wrap around the corner:
+  it is built as two segments (past the corner, and back along the adjacent
+  wall) under one hip roof that turns the corner, with no walls, posts, or
+  railings where the segments meet.
+- A continuous (straight-skeleton) hip has eaves all round: it is solved on
+  the footprint pushed out to the eave line, with a fascia and soffit.
+- On a straight-skeleton hip (one hip over several volumes) a volume's roof is
+  not one convex solid, so its descriptor lists the roof as convex pieces, each
+  under one face's plane, and its solid is the union of a prism per piece.
+  Every kind of structure stands there; a dormer must stay within one face.
+- Structures refer to volumes by id, so footprints are assumed fixed once
+  structures are placed; editing the footprint can renumber its volumes.
+
+The porch arrangements are provisional: they were developed without real
+buildings to model against, and are expected to be revisited with actual cases.
 
 The skeleton path applies when equal-height multi-volume hip roofs are rendered.
 Independent story-height overrides still use separate roofs because their
@@ -211,6 +323,23 @@ This hierarchy (Volume → Roof zones → Wall runs → Facade panels → Storie
 supports addressing such as *"the second story on the east wall run of the
 main volume."*
 
+**Roof structure surfaces.** A roof structure (dormer, porch, cupola) adds a
+level: Volume → Roof structure → Wall runs → Stories. Its wall runs
+(`wall-run-<structure>-<wall>`: `front`, `left`, `right`, `back`, `inner` for a
+recess's set-back wall, `base-<wall>` for an enclosed base) carry their visible
+shape, as clipped against the roof, as convex pieces in wall-local
+coordinates: *u* across the wall from the left as seen from outside, *v* up
+from the structure's floor. Windows and trim are placed within those pieces.
+Each structure has a story (`story-<structure>-1`, plus `-base` under an
+enclosed base) and railing runs (`rail-run-<structure>-<wall>`) along its open
+sides at floor level, where they stand clear of the building, with a railing
+height. A widow's walk (`roof-walk-<volume>`, or `roof-walk-main` on a
+continuous hip) has its flat top in plan (`pieces`, at elevation `y`) for a
+deck, and railing runs (`rail-run-<walk>-<n>`) along each edge where the roof
+slopes away, stopping at anything standing on it. These come from the build
+and sit beside the footprint's own wall runs in the layout
+(`structureWallRuns`, `structureStories`, `roofWalks`, `railRuns`).
+
 **MVP addressing** is `story + wallRun`, with optional `facadePanel` detail.
 Volumes and roof zones are explicit metadata rather than inferred from
 perimeter order.
@@ -231,9 +360,9 @@ the building. Three categories, distinguished by a two-step test:
 
 | Category | Test | Examples |
 |----------|------|----------|
-| Facade modifier | Surface-applied; no functional space | Windows, doors, dentil courses, water table, window casings, cornices, gutters, eave depth, widow's walks |
+| Facade modifier | Surface-applied; no functional space | Windows, doors, dentil courses, water table, window casings, cornices, gutters, eave depth, railings, a widow's walk's deck and railings |
 | Footprint modifier | Extends the plan; no functional space | Exterior steps, basement window wells, freestanding stoops, open porches |
-| Envelope modifier | Creates/extends functional space (regardless of enclosure) | Attached porches, bay windows, towers (Queen Anne), enclosed verandas |
+| Envelope modifier | Creates/extends functional space (regardless of enclosure) | Attached porches, bay windows, towers (Queen Anne), enclosed verandas, dormers, cupolas |
 
 **The test:**
 1. Does it share a boundary with the footprint polygon?
@@ -253,6 +382,10 @@ factor; functional contribution is.
 (`shape: tower`). If it is not in the footprint → it is an envelope modifier.
 No special category is needed.
 
+**Dormers and upper-story porches** are envelope modifiers that are not in the
+footprint: they add functional space in or on the roof (see *Roof structures*
+in §2).
+
 ## 6. Materials & Textures
 
 Each facade panel, wall run, story, volume, and roof zone can be assigned a material. Standard material set
@@ -269,9 +402,12 @@ surface. The facade subdivision is what makes per-region material assignment
 possible without breaking the envelope geometry.
 
 **Material precedence.** A facade-panel assignment overrides a wall-run,
-volume, or story assignment when both target the same surface region. If no
-panel assignment exists, the most specific applicable structural assignment is
-used, followed by the story assignment and facade-wide default.
+roof structure, volume, or story assignment when both target the same surface
+region. If no panel assignment exists, the most specific applicable structural
+assignment is used (wall run, then roof structure, then volume), followed by
+the story assignment and facade-wide default. A roof structure's own wall and
+roof materials (`materials.wall`, `materials.roof`) are applied today; the
+finer levels come with facade modifiers.
 
 **PBR forward note.** The output targets GLB/GLTF, which uses PBR (albedo,
 normal, roughness, metallic). The v1 material model should map to these
@@ -303,7 +439,16 @@ A 3D model suitable for:
 - Export for rendering or game engines
 
 **Formats:** GLB/GLTF for interchange; native scene format (`.bld` or
-equivalent) for in-app persistence.
+equivalent) for in-app persistence; and the game file for the Dixon project
+(`js/game-export.js`, `format: 'dixon-composed'`): triangles in game space
+grouped by game material (`near`), the outline's convex hull and height range
+for collision, and, for a walk-in building (version 2), the surfaces to
+collide with (`collision.faces`).
+
+**Detail levels (planned).** Parts are tagged by what they are (balusters,
+dentils, grilles, sills, gutters), so the game file can carry simpler levels
+for distance and graphics quality (`near`, `mid`, `far`), simplified by what a
+part is rather than by generic decimation.
 
 ## 9. Entity Classification
 
