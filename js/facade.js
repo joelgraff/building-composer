@@ -279,6 +279,90 @@ export function roofAxisForDirection(direction) {
 }
 
 /**
+ * Resolves the effective ridge axis/high-edge for every volume, mirroring the
+ * direction the roof builder (`createBuildingFromFootprint` /
+ * `createRoofGeometry` in js/extrusion.js) actually uses:
+ * - A per-volume `config.volumeRidgeDirections` override always wins.
+ * - A single-rectangle footprint (exactly one volume) has no independent
+ *   massing to derive a ridge from, so the builder's single-field roof path
+ *   uses the building-level `config.roofDirection` directly rather than the
+ *   volume's automatic (aspect-ratio) axis.
+ * - Otherwise (multiple volumes, no override) the volume keeps its own
+ *   automatic longitudinal axis, same as `applyVolumeRidgeDirections`.
+ * - If any volume in the building is a gable, `resolveGableRidgeDirections`
+ *   then forces a same-axis, boundary-touching secondary volume perpendicular
+ *   to the largest ("primary") volume, so its gable end doesn't run into the
+ *   primary's ridge; this mirrors that pass exactly.
+ *
+ * @param {Array<object>} volumes
+ * @param {object} [config]
+ * @returns {Map<string, { ridgeAxis: 'x'|'z', highEdge: string }>}
+ */
+function resolveVolumeRidgeDirections(volumes, config = {}) {
+  const overrides = config.volumeRidgeDirections ?? {};
+  const highEdgeForAxis = (axis) => (axis === 'x' ? 'z-min' : 'x-min');
+
+  const directed = volumes.map((volume) => {
+    const override = overrides[volume.id];
+    if (override) {
+      return {
+        ...volume, ridgeAxis: roofAxisForDirection(override), roofHighEdge: override, ridgeDirectionOverride: true,
+      };
+    }
+    if (volumes.length === 1) {
+      const buildingDirection = config.roofDirection ?? 'z';
+      return {
+        ...volume, ridgeAxis: roofAxisForDirection(buildingDirection), roofHighEdge: buildingDirection, ridgeDirectionOverride: false,
+      };
+    }
+    return volume;
+  });
+
+  const hasGableVolume = directed.some((volume) => (config.volumeRoofTypes?.[volume.id] ?? config.roofType) === 'gable');
+  const resolved = hasGableVolume ? resolveGableRidgeDirections(directed) : directed;
+
+  return new Map(resolved.map((volume) => [
+    volume.id,
+    { ridgeAxis: volume.ridgeAxis, highEdge: volume.roofHighEdge ?? highEdgeForAxis(volume.ridgeAxis) },
+  ]));
+}
+
+/**
+ * Forces a same-axis volume that touches the building's largest ("primary")
+ * volume onto the perpendicular ridge axis, mirroring
+ * `resolveGableRidgeDirections` in js/extrusion.js exactly, so a wing whose
+ * gable end would otherwise run straight into the primary block's ridge
+ * instead turns to meet it properly.
+ *
+ * @param {Array<object>} volumes - directed volumes (ridgeAxis/ridgeDirectionOverride already resolved)
+ * @returns {Array<object>}
+ */
+function resolveGableRidgeDirections(volumes) {
+  const primary = volumes.reduce((largest, volume) => {
+    const area = (volume.maxX - volume.minX) * (volume.maxZ - volume.minZ);
+    const largestArea = (largest.maxX - largest.minX) * (largest.maxZ - largest.minZ);
+    return area > largestArea ? volume : largest;
+  }, volumes[0]);
+  const epsilon = 1e-6;
+
+  return volumes.map((volume) => {
+    if (volume.id === primary.id || volume.ridgeDirectionOverride || volume.ridgeAxis !== primary.ridgeAxis) {
+      return volume;
+    }
+    const sharesHorizontalBoundary = (Math.abs(volume.maxZ - primary.minZ) < epsilon
+      || Math.abs(volume.minZ - primary.maxZ) < epsilon)
+      && Math.min(volume.maxX, primary.maxX) - Math.max(volume.minX, primary.minX) > epsilon;
+    const sharesVerticalBoundary = (Math.abs(volume.maxX - primary.minX) < epsilon
+      || Math.abs(volume.minX - primary.maxX) < epsilon)
+      && Math.min(volume.maxZ, primary.maxZ) - Math.max(volume.minZ, primary.minZ) > epsilon;
+    if (!sharesHorizontalBoundary && !sharesVerticalBoundary) {
+      return volume;
+    }
+    return { ...volume, ridgeAxis: primary.ridgeAxis === 'x' ? 'z' : 'x' };
+  });
+}
+
+/**
  * Classify a footprint wall run edge against rectilinear volumes and roof parameters.
  *
  * @param {{ id?: string, start: [number, number], end: [number, number] }} edge
@@ -327,9 +411,9 @@ export function classifyEdgeRole(edge, volumes, config = {}) {
 
   const vol = bestVol ?? volumes[0];
   const roofType = (vol && config.volumeRoofTypes?.[vol.id]) ?? config.roofType ?? 'flat';
-  const ridgeDirectionOverride = vol ? config.volumeRidgeDirections?.[vol.id] : undefined;
-  const ridgeAxis = ridgeDirectionOverride ? roofAxisForDirection(ridgeDirectionOverride) : (vol?.ridgeAxis ?? 'z');
-  const highEdge = ridgeDirectionOverride ?? (ridgeAxis === 'x' ? 'z-min' : 'x-min');
+  const resolvedDirection = vol ? resolveVolumeRidgeDirections(volumes, config).get(vol.id) : undefined;
+  const ridgeAxis = resolvedDirection?.ridgeAxis ?? 'z';
+  const highEdge = resolvedDirection?.highEdge ?? (ridgeAxis === 'x' ? 'z-min' : 'x-min');
 
   const defaultPitchRise = config.roofPitchRise ?? 6;
   const defaultPitchRun = config.roofPitchRun ?? 12;
@@ -406,11 +490,10 @@ export function buildRoofGraph(footprint, volumes, config = {}) {
     };
   });
 
+  const ridgeDirections = resolveVolumeRidgeDirections(volumes, config);
   const zones = volumes.map((volume) => {
     const roofType = config.volumeRoofTypes?.[volume.id] ?? config.roofType ?? 'flat';
-    const directionOverride = config.volumeRidgeDirections?.[volume.id];
-    const ridgeAxis = directionOverride ? roofAxisForDirection(directionOverride) : volume.ridgeAxis;
-    const highEdge = directionOverride ?? (ridgeAxis === 'x' ? 'z-min' : 'x-min');
+    const { ridgeAxis, highEdge } = ridgeDirections.get(volume.id);
     const pitchRise = config.roofPitchRise ?? 6;
     const pitchRun = config.roofPitchRun ?? 12;
 
