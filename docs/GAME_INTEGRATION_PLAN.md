@@ -2,7 +2,7 @@
 
 Composer and the Dixon game (`dixon_dem`) already exchange buildings in both directions. This plan finishes that exchange: one material vocabulary owned by the game, the game editor's choices carried into Composer, and the loose ends in the round trip. Footprint correction is its own plan: [FOOTPRINT_EDITING_PLAN.md](FOOTPRINT_EDITING_PLAN.md).
 
-Status: Phases 1–3 done (2026-09-30): dixon_dem `composer-integration` branch, Composer `game-materials` branch. Phases 4–5 planned. Decisions in [Decisions](#decisions) were made with the project owner.
+Status: Phases 1–4 done (2026-09-30): dixon_dem `composer-integration` branch, Composer `game-materials` branch. Phase 5 planned. Decisions in [Decisions](#decisions) were made with the project owner.
 
 ## Where it stands
 
@@ -90,7 +90,15 @@ As built:
 - Before Send to game: check every group name against the manifest. If any is unknown, refuse and name the surfaces (e.g. "doors use door_oak, which the game doesn't have"). The download fallback applies the same check.
 - Tests: manifest loading and fallback; finish resolution (building, volume, structure precedence); export uses explicit finishes; an unknown name is refused; `.bld` round trip keeps finishes.
 
-### Phase 4 — Carry the game editor's choices into Composer
+### Phase 4 — Carry the game editor's choices into Composer — done
+
+As built:
+- `_record` is the template index entry, which is resolved with the overrides as of the last bake, plus this session's edits.
+- `composer_hints(record)` (static, self-tested) sends `form`, `storeys`, `roof`, `roof_axis`, `material`, `color` (not `auto`), `dressing`, `porch`, `ground`, and `awnings`. Composer maps `storeys`, `roof`, `material`, `color`, and `roof_axis`, and ignores the rest for now.
+- `roof_axis` sets the building's `roofDirection` from the imported front side. A footprint cut into several volumes keeps each volume's own ridge.
+- `composer_server.py` now sends `Cache-Control: no-cache` on every file. Without it, a browser kept running an older Composer module after an update.
+- Follow-up: a gabled roof exports four small upward strips at the eaves (hidden under the rake overhang) as `roof_membrane`. They should be trim.
+
 
 - dixon_dem `building_edit.gd` `_export_composer()`: add `hints` from the building's resolved record (`_record`): `form`, `storeys`, `roof`, `roof_axis`, `material`, `color`, `dressing`, `porch`, and `awnings`. Confirm `_record` is the resolved template including overrides, not only the override.
 - `js/import.js` `settingsFromHints()`:

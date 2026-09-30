@@ -2916,6 +2916,7 @@ function openPayload(payload) {
     storyCountInput.value = modelConfig.storyCount;
     wallMaterialSelect.value = modelConfig.wallMaterial;
     roofTypeSelect.value = modelConfig.roofType;
+    roofDirectionSelect.value = modelConfig.roofDirection;
     renderGameFinishControls();
     syncLengthInputs();
     updateRoofPitchDisplay();

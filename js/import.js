@@ -14,6 +14,7 @@
  * exactly: game point = center + R(rotation) * Composer point.
  */
 import { angledWallProblem } from './facade.js';
+import { familyOf, finishesFor } from './game-materials.js';
 
 /** A wall within this of the building's main axes (or within MIN_EDGE of square) is squared to them; one further off is kept angled. */
 export const MAX_SKEW_DEGREES = 5;
@@ -284,7 +285,10 @@ export function importDixonFootprint(payload) {
       center: squared.center,
       groundY: Number.isFinite(payload.ground_y_min) ? payload.ground_y_min : null,
     },
-    settings: { ...settingsFromHints(payload.hints ?? {}, payload), ...frontFrom(payload.front, squared.rotation) },
+    settings: (() => {
+      const front = frontFrom(payload.front, squared.rotation);
+      return { ...settingsFromHints(payload.hints ?? {}, payload, { frontSide: front.frontSide, warnings }), ...front };
+    })(),
     warnings,
   };
 }
@@ -312,10 +316,16 @@ function frontFrom(front, rotation) {
 }
 
 /**
- * Composer settings the game's building editor fields suggest: storeys (a
- * half is a knee wall), roof type, and wall material.
+ * Composer settings the game's building editor fields suggest (its
+ * composer_hints: the building's resolved template): storeys (a half is a
+ * knee wall), roof type, the ridge's direction from `roof_axis` (`front`:
+ * the gable faces the street, so the ridge runs away from the front wall;
+ * `side`: the ridge runs along it), and wall material, or, from `color`,
+ * the exact game wall finish. A `color` the game's manifest doesn't list is
+ * left out, with a warning. The game's other fields (form, dressing, porch,
+ * ground, awnings) have no Composer setting yet.
  */
-export function settingsFromHints(hints, payload = {}) {
+export function settingsFromHints(hints, payload = {}, { frontSide, warnings = [] } = {}) {
   const settings = {};
   const storeys = Number(hints.storeys ?? payload.tags?.levels);
   if (storeys > 0) {
@@ -333,6 +343,20 @@ export function settingsFromHints(hints, payload = {}) {
   }[hints.material ?? payload.tags?.building_material];
   if (material) {
     settings.wallMaterial = material;
+  }
+  if (typeof hints.color === 'string' && hints.color !== 'auto') {
+    if (finishesFor('wall').some((m) => m.name === hints.color)) {
+      settings.gameFinishes = { wall: hints.color };
+      settings.wallMaterial = familyOf(hints.color) ?? settings.wallMaterial;
+    } else {
+      warnings.push(`The game's color ${hints.color} isn't one of its wall materials Composer knows; the walls use ${settings.wallMaterial ?? 'the default'}.`);
+    }
+  }
+  if (['front', 'side'].includes(hints.roof_axis) && frontSide) {
+    // a direction is a high edge: one on an x side puts the ridge along z
+    const frontAlongX = frontSide === 'minX' || frontSide === 'maxX';
+    const ridgeAlongX = (hints.roof_axis === 'front') === frontAlongX;
+    settings.roofDirection = ridgeAlongX ? 'z-min' : 'x-min';
   }
   return settings;
 }

@@ -104,6 +104,37 @@ describe('hints from the game', () => {
     assert.equal(settingsFromHints({ roof: 'flat_parapet' }).roofType, 'flat');
   });
 
+  it('a game color is the exact wall finish, and brings its Composer material', () => {
+    const settings = settingsFromHints({ material: 'clapboard', color: 'brick_buff' });
+    assert.deepEqual(settings.gameFinishes, { wall: 'brick_buff' });
+    assert.equal(settings.wallMaterial, 'brick');
+    assert.equal(settingsFromHints({ color: 'auto' }).gameFinishes, undefined);
+  });
+
+  it('a color the game\'s manifest doesn\'t list is left out, with a warning', () => {
+    const warnings = [];
+    const settings = settingsFromHints({ material: 'brick', color: 'brick_plaid' }, {}, { warnings });
+    assert.equal(settings.gameFinishes, undefined);
+    assert.equal(settings.wallMaterial, 'brick');
+    assert.match(warnings[0], /brick_plaid/);
+  });
+
+  it('the roof axis sets the ridge against the street front', () => {
+    // a direction names a high edge: x-min puts the ridge along z
+    const ridge = (roofAxis, frontSide) => settingsFromHints({ roof: 'gable', roof_axis: roofAxis }, {}, { frontSide }).roofDirection;
+    assert.equal(ridge('front', 'maxZ'), 'x-min', 'gable to a street on z: ridge along z');
+    assert.equal(ridge('side', 'maxZ'), 'z-min');
+    assert.equal(ridge('front', 'minX'), 'z-min');
+    assert.equal(ridge('side', 'maxX'), 'x-min');
+    assert.equal(ridge('front', undefined), undefined, 'no front, no direction');
+  });
+
+  it('an import passes its front to the roof axis', () => {
+    const { settings } = importDixonFootprint({ ...DIXON, front: [0, 1], hints: { ...DIXON.hints, roof_axis: 'front' } });
+    const alongZ = ['minZ', 'maxZ'].includes(settings.frontSide);
+    assert.equal(settings.roofDirection, alongZ ? 'x-min' : 'z-min');
+  });
+
   it('the placement is saved with the project', () => {
     const { footprint, placement } = importDixonFootprint(DIXON);
     const saved = serializeBuildingState(computeFacadeLayout(footprint, {}), { placement });
