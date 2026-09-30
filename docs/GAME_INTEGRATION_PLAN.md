@@ -2,7 +2,7 @@
 
 Composer and the Dixon game (`dixon_dem`) already exchange buildings in both directions. This plan finishes that exchange: one material vocabulary owned by the game, the game editor's choices carried into Composer, and the loose ends in the round trip. Footprint correction is its own plan: [FOOTPRINT_EDITING_PLAN.md](FOOTPRINT_EDITING_PLAN.md).
 
-Status: Phases 1–4 done (2026-09-30): dixon_dem `composer-integration` branch, Composer `game-materials` branch. Phase 5 planned. Decisions in [Decisions](#decisions) were made with the project owner.
+Status: Phases 1–5 done (2026-09-30): dixon_dem `composer-integration` branch, Composer `game-materials` branch. Not yet checked end to end in a baked game (see [Verification](#verification)). Decisions in [Decisions](#decisions) were made with the project owner.
 
 ## Where it stands
 
@@ -108,7 +108,14 @@ As built:
 - A building sent back and reopened keeps its finishes through `project`, as today.
 - Tests (`tests/import.test.js`): each hint field; a `color` not in the manifest is ignored with a warning.
 
-### Phase 5 — Round-trip robustness
+### Phase 5 — Round-trip robustness — done
+
+As built:
+- `outlineHash` fingerprints the outline to the millimeter, whatever corner it starts at and whichever way it runs. `sameGameOutline` compares fingerprints, and falls back to the old placement comparison for a design saved without one.
+- The footprint editor's write-back must set the design's `placement.sourceHash` to the fingerprint of the outline it writes, so the design reopens on the edited outline.
+- There is no version 3. `materials_version` is an extra key in version 1 and 2 files, which older loaders ignore. `composed.build` prints a warning when it differs from the palette's hash.
+- Collision faces are chunk-local like the hulls. `build_buildings.gd` uses them when present. Only its parse is checked; the bake itself isn't run in tests.
+
 
 - **Identity by outline, not placement.** At import, store `placement.sourceHash`, a hash of the game outline as exported, rounded to the millimeter. Reopen `payload.project` when its `sourceHash` matches the export's outline hash, and keep the center/rotation comparison only for designs saved before this change. This is needed once outlines can be corrected, because an edited outline re-squares to a slightly different center. Shared with the footprint plan.
 - **Walk-in collision.** `composed.py` passes `collision.faces` through, and `build_buildings.gd` builds a `ConcavePolygonShape3D` (double-sided) from it, falling back to the hull when absent. Test with a version 2 file.

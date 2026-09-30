@@ -28,7 +28,7 @@ import { buildGameFile, gameFileProblems } from './game-export.js';
 import {
   FINISH_SLOTS, colorOf, familyOf, finishesFor, gameManifest, loadGameManifest,
 } from './game-materials.js';
-import { importDixonFootprint } from './import.js';
+import { importDixonFootprint, sameGameOutline } from './import.js';
 import { toGameFrame, toComposerFrame, recenter, openRing } from './footprint-editor.js';
 import { openFootprintView } from './footprint-view.js';
 import { porchStructures } from './footprint-porch.js';
@@ -2893,11 +2893,11 @@ function openPayload(payload) {
     }
     const saved = payload.project?.format === 'building-composer' ? deserializeBuildingState(payload.project) : undefined;
     if (saved?.valid) {
-      const was = saved.state.placement;
       const now = imported.placement;
-      const [dx, dz] = was ? [was.center[0] - now.center[0], was.center[1] - now.center[1]] : [Infinity, Infinity];
-      if (Math.hypot(dx, dz) < 0.05 && Math.abs(Math.atan2(Math.sin(was.rotation - now.rotation), Math.cos(was.rotation - now.rotation))) < 0.005) {
+      if (sameGameOutline(saved.state.placement, now)) {
         openPayload(payload.project);
+        // (a design saved before outline fingerprints gets one now)
+        modelConfig.placement = { ...modelConfig.placement, sourceHash: modelConfig.placement?.sourceHash ?? now.sourceHash };
         setStatus(`Building ${now.id}: the design saved from the game is open. ${imported.warnings.join(' ')}`.trim());
         return;
       }

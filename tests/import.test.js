@@ -1,6 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { squareFootprint, importDixonFootprint, settingsFromHints } from '../js/import.js';
+import {
+  squareFootprint, importDixonFootprint, settingsFromHints, outlineHash, sameGameOutline,
+} from '../js/import.js';
 import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState } from '../js/facade.js';
 
 const near = (a, b, tolerance, message) => assert.ok(Math.abs(a - b) < tolerance, `${message ?? ''} expected ${b}, got ${a}`);
@@ -148,5 +150,35 @@ describe('hints from the game', () => {
     assert.equal(importDixonFootprint({ ...DIXON, front: [0, 1] }).settings.frontSide, 'maxZ');
     assert.equal(importDixonFootprint({ ...DIXON, front: 90 }).settings.frontSide, 'maxX', 'a bearing: east');
     assert.equal(importDixonFootprint(DIXON).settings.frontSide, undefined);
+  });
+});
+
+describe('knowing a design made on the game\'s outline', () => {
+  const square = [[0, 0], [10, 0], [10, 8], [0, 8]];
+
+  it('fingerprints an outline whatever corner it starts at or way it runs, to the millimeter', () => {
+    const hash = outlineHash(square);
+    assert.equal(outlineHash([[10, 8], [0, 8], [0, 0], [10, 0]]), hash);
+    assert.equal(outlineHash([...square].reverse()), hash);
+    assert.equal(outlineHash([...square, [0, 0]]), hash, 'a closing corner');
+    assert.equal(outlineHash([[0, 0], [10.0004, 0], [10, 8], [0, 8]]), hash);
+    assert.notEqual(outlineHash([[0, 0], [10.2, 0], [10.2, 8], [0, 8]]), hash);
+    assert.equal(importDixonFootprint({ ...DIXON }).placement.sourceHash, outlineHash(DIXON.footprint));
+  });
+
+  it('reopens a design on the same outline, and not on a changed one', () => {
+    const now = importDixonFootprint(DIXON).placement;
+    assert.ok(sameGameOutline({ ...now }, now));
+    // a small bump-out moves the squared center less than 5 cm; the fingerprint still tells
+    const bumped = importDixonFootprint({ ...DIXON, footprint: [...DIXON.footprint.slice(0, 1), ...DIXON.footprint.slice(1)].map((p, i) => (i === 0 ? [p[0] + 0.01, p[1]] : p)) }).placement;
+    assert.ok(!sameGameOutline(now, bumped));
+  });
+
+  it('falls back to the placement for a design saved before fingerprints', () => {
+    const now = importDixonFootprint(DIXON).placement;
+    const { sourceHash, ...older } = now;
+    assert.ok(sameGameOutline(older, now));
+    assert.ok(!sameGameOutline({ ...older, center: [older.center[0] + 1, older.center[1]] }, now));
+    assert.ok(!sameGameOutline(undefined, now));
   });
 });
