@@ -148,8 +148,12 @@ deepest selection wins: a wall shows the wall's panel, not its mass's. Each
 sidebar part names the targets it serves (`data-inspector` in `index.html`),
 and `syncInspector` in `js/main.js` shows only those and titles the inspector.
 Building and mass settings sit in accordion sections, one open at a time: the
-building has Massing, Roof, Finish, and Info; a mass has Massing (its own
-overrides, empty for the building's), Roof, and Add a roof structure. A wall
+building has Massing, Roof, Finish, and Info; a mass has Massing, Roof, and
+Add a roof structure. Every setting a mass can hold its own value for is
+tagged beside its label, "building's" or "this mass's", and clicking the
+latter drops the mass's value for the building's (`MASS_OVERRIDES` in
+`js/main.js`). Roof shape and eave settings are a mass's own only on a
+building of several masses; on one mass they edit the building. A wall
 shows its facade panels, trim, chimneys, and windows and doors in one scroll. A
 structure shows its editor, whose field groups (Placement, Footprint, Height,
 Roof, Openings, Posts, Railings, Steps, Materials) are accordions too, the open

@@ -750,6 +750,111 @@ function inspectorHeading(kind, layout) {
   return ['Building', `${masses} ${masses === 1 ? 'mass' : 'masses'}, ${structures} ${structures === 1 ? 'structure' : 'structures'}`];
 }
 
+/** Removes a volume's own entry from one of the modelConfig maps it can override the building in. */
+function dropOwn(mapKey, volumeId) {
+  const own = { ...(modelConfig[mapKey] ?? {}) };
+  delete own[volumeId];
+  modelConfig[mapKey] = own;
+}
+
+/** Removes keys from a volume's own record in a modelConfig map (roof shape, eaves), dropping the record once empty. */
+function dropOwnKeys(mapKey, volumeId, keys) {
+  const own = { ...(modelConfig[mapKey]?.[volumeId] ?? {}) };
+  keys.forEach((key) => delete own[key]);
+  const map = { ...(modelConfig[mapKey] ?? {}) };
+  if (Object.keys(own).length) {
+    map[volumeId] = own;
+  } else {
+    delete map[volumeId];
+  }
+  modelConfig[mapKey] = map;
+}
+
+/**
+ * The settings a mass can hold its own value for, in place of the
+ * building's: whether it does (`own`), and how to drop that value
+ * (`reset`). `field` names a static roof field (by its input's id) the tag
+ * goes on; the massing fields are rendered with theirs (see
+ * renderVolumeControls). `shape` settings (roof shape and eaves) are only a
+ * mass's own on a building of several masses (see volumeShapeTarget); on a
+ * single mass they edit the building.
+ */
+const shapeKeys = (keys) => ({
+  own: (id) => keys.some((key) => modelConfig.volumeRoofShapes[id]?.[key] !== undefined),
+  reset: (id) => dropOwnKeys('volumeRoofShapes', id, keys),
+});
+const eaveKey = (key) => ({
+  own: (id) => modelConfig.volumeEaves[id]?.[key] !== undefined,
+  reset: (id) => dropOwnKeys('volumeEaves', id, [key]),
+});
+const ownIn = (mapKey) => ({
+  own: (id) => modelConfig[mapKey]?.[id] !== undefined,
+  reset: (id) => dropOwn(mapKey, id),
+});
+const MASS_OVERRIDES = {
+  stories: ownIn('volumeStoryOverrides'),
+  storyHeight: ownIn('volumeStoryHeights'),
+  kneeWall: ownIn('volumeKneeWalls'),
+  foundation: ownIn('volumeFoundationHeights'),
+  material: ownIn('volumeMaterials'),
+  roofType: { ...ownIn('volumeRoofTypes'), field: 'roof-type' },
+  roofDirection: { ...ownIn('volumeRidgeDirections'), field: 'roof-direction' },
+  roofConnection: { ...ownIn('volumeRoofConnections'), field: 'roof-connection' },
+  pitch: { ...shapeKeys(['mode', 'pitchRise', 'height']), field: 'roof-pitch-rise', shape: true },
+  rise: { ...shapeKeys(['mode', 'pitchRise', 'height']), field: 'roof-height', shape: true },
+  breakHeight: { ...shapeKeys(['breakHeight']), field: 'roof-break-height', shape: true },
+  lowerPitch: { ...shapeKeys(['lowerPitchRise']), field: 'roof-lower-pitch', shape: true },
+  upperPitch: { ...shapeKeys(['upperPitchRise']), field: 'roof-upper-pitch', shape: true },
+  walk: { ...shapeKeys(['walkHeight']), field: 'roof-walk-enabled', shape: true },
+  eaveDepth: { ...eaveKey('eaveDepth'), field: 'roof-eave-depth', shape: true },
+  rakeDepth: { ...eaveKey('rakeDepth'), field: 'roof-rake-depth', shape: true },
+  fasciaDepth: { ...eaveKey('fasciaDepth'), field: 'roof-fascia-depth', shape: true },
+  eaveSoffit: { ...eaveKey('eaveSoffit'), field: 'eave-soffit', shape: true },
+  rakeSoffit: { ...eaveKey('rakeSoffit'), field: 'rake-soffit', shape: true },
+};
+
+/** The tag beside a mass setting's label: the building's value, or the mass's own with a reset. */
+function overrideTagHtml(key, volumeId) {
+  return MASS_OVERRIDES[key].own(volumeId)
+    ? `<button type="button" class="override-tag own" data-reset-override="${key}" title="Set on this mass. Click to use the building's value.">this mass's ↺</button>`
+    : '<span class="override-tag" title="The building\'s value. Change it to set this mass\'s own.">building\'s</span>';
+}
+
+/** Tags the static roof fields' labels for the selected mass (see MASS_OVERRIDES), or clears them when the building is selected. */
+function syncOverrideTags(kind) {
+  const volumeId = kind === 'mass' ? selectedElementId : null;
+  const shapeTarget = volumeShapeTarget();
+  Object.entries(MASS_OVERRIDES).forEach(([key, entry]) => {
+    if (!entry.field) {
+      return;
+    }
+    const label = document.getElementById(entry.field)?.closest('.field')?.querySelector('label');
+    if (!label) {
+      return;
+    }
+    let slot = label.querySelector(':scope > .override-slot');
+    if (!slot) {
+      slot = document.createElement('span');
+      slot.className = 'override-slot';
+      label.append(slot);
+    }
+    const applies = volumeId && (!entry.shape || shapeTarget === volumeId);
+    slot.innerHTML = applies ? overrideTagHtml(key, volumeId) : '';
+  });
+}
+
+document.querySelector('.sidebar').addEventListener('click', (event) => {
+  const reset = event.target.closest('[data-reset-override]');
+  if (!reset || selectedElementId === 'building-defaults') {
+    return;
+  }
+  event.preventDefault();
+  MASS_OVERRIDES[reset.dataset.resetOverride].reset(selectedElementId);
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
+
 /**
  * Shows only the sidebar parts for what's selected (each part names the
  * kinds it serves in data-inspector) and titles the inspector. When none of
@@ -771,6 +876,7 @@ function syncInspector(layout = activeLayout) {
     }
   }
   structureAddSummary.textContent = kind === 'structure' ? 'Add a structure' : 'Add a roof structure';
+  syncOverrideTags(kind);
 }
 
 /** A mass's name for the scope control: its size, and which side of the building it sits on. */
@@ -1183,7 +1289,7 @@ function adjacentVolumeForHighEdge(volume, volumes, highEdge) {
 function renderVolumeControls(layout) {
   updateRoofHeightModeVisibility(layout.volumes.length);
   if (layout.volumes.length <= 1) {
-    volumeControlsBox.innerHTML = 'This footprint is a single volume; no independent massing to configure.';
+    volumeControlsBox.innerHTML = '<div class="field-note">This building is one mass, so its massing is the building\'s: select Building to change it.</div>';
     return;
   }
 
@@ -1193,25 +1299,23 @@ function renderVolumeControls(layout) {
     return;
   }
 
-  const width = formatLength(Math.min(volume.maxX - volume.minX, volume.maxZ - volume.minZ));
-  const length = formatLength(Math.max(volume.maxX - volume.minX, volume.maxZ - volume.minZ));
   const currentValue = modelConfig.volumeStoryOverrides[volume.id] ?? modelConfig.storyCount;
   // lengths this volume can set for itself, each empty for the building's
-  const lengthField = (key, label, own, fallback, id) => `
+  const lengthField = (key, label, own, fallback, id, tag) => `
     <div class="field">
-      <label for="${volume.id}-${id}">${label} (${unitLabel()}; empty for the building's)</label>
+      <label for="${volume.id}-${id}">${label} (${unitLabel()}) ${overrideTagHtml(tag, volume.id)}</label>
       <input type="number" min="0" max="20" step="0.1" value="${Number.isFinite(own) ? (own * unitFactor()).toFixed(1) : ''}" placeholder="${Number.isFinite(fallback) ? (fallback * unitFactor()).toFixed(1) : 'none'}" data-volume-length="${key}" data-volume="${volume.id}" id="${volume.id}-${id}" />
     </div>`;
   volumeControlsBox.innerHTML = `
     <div class="field">
-      <label for="${volume.id}-stories">${volume.id.replace('-', ' ')} (${width} × ${length})</label>
+      <label for="${volume.id}-stories">Stories ${overrideTagHtml('stories', volume.id)}</label>
       <input type="number" min="1" max="12" step="1" value="${currentValue}" data-volume-id="${volume.id}" id="${volume.id}-stories" />
     </div>
-    ${lengthField('volumeStoryHeights', 'Story height', modelConfig.volumeStoryHeights[volume.id], modelConfig.storyHeight, 'story-height')}
-    ${lengthField('volumeKneeWalls', 'Half story above: knee wall', modelConfig.volumeKneeWalls[volume.id], modelConfig.kneeWallHeight, 'knee')}
-    ${lengthField('volumeFoundationHeights', 'Floor above grade (foundation)', modelConfig.volumeFoundationHeights[volume.id], modelConfig.foundationDepth ?? 0.7, 'foundation')}
+    ${lengthField('volumeStoryHeights', 'Story height', modelConfig.volumeStoryHeights[volume.id], modelConfig.storyHeight, 'story-height', 'storyHeight')}
+    ${lengthField('volumeKneeWalls', 'Half story above: knee wall', modelConfig.volumeKneeWalls[volume.id], modelConfig.kneeWallHeight, 'knee', 'kneeWall')}
+    ${lengthField('volumeFoundationHeights', 'Floor above grade (foundation)', modelConfig.volumeFoundationHeights[volume.id], modelConfig.foundationDepth ?? 0.7, 'foundation', 'foundation')}
     <div class="field">
-      <label for="${volume.id}-material">Wall material</label>
+      <label for="${volume.id}-material">Wall material ${overrideTagHtml('material', volume.id)}</label>
       <select data-volume-material="${volume.id}" id="${volume.id}-material">
         <option value="">The building's</option>
         ${createMaterialOptions(modelConfig.volumeMaterials?.[volume.id] ?? '')}
