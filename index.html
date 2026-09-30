@@ -89,25 +89,6 @@
         overflow: auto;
       }
 
-      .metrics {
-        display: grid;
-        gap: 10px;
-        margin-top: 14px;
-      }
-
-      .metrics .metric:nth-child(1),
-      .metrics .metric:nth-child(2),
-      .metrics .metric:nth-child(n + 6) {
-        display: none;
-      }
-
-      .metric {
-        background: rgba(255, 255, 255, 0.72);
-        border: 1px solid rgba(17, 32, 51, 0.08);
-        border-radius: 10px;
-        padding: 10px 12px;
-      }
-
       .metric-label {
         font-size: 0.76rem;
         text-transform: uppercase;
@@ -116,9 +97,84 @@
         margin-bottom: 4px;
       }
 
-      .metric-value {
+      .scope-label {
+        font-size: 0.72rem;
         font-weight: 700;
-        font-size: 1.1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+
+      .inspector-head {
+        margin: 14px 0 4px;
+      }
+
+      .inspector-title {
+        font-size: 1.15rem;
+        font-weight: 700;
+      }
+
+      .inspector-sub {
+        font-size: 0.82rem;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+
+      .sidebar > [data-inspector][hidden] {
+        display: none !important;
+      }
+
+      .section {
+        margin-top: 10px;
+        border: 1px solid rgba(17, 32, 51, 0.08);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .section > summary {
+        cursor: pointer;
+        padding: 10px 12px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .section[open] > summary {
+        color: var(--text);
+        border-bottom: 1px solid rgba(17, 32, 51, 0.08);
+      }
+
+      .section-body {
+        padding: 12px;
+      }
+
+      .field-note {
+        font-size: 0.8rem;
+        line-height: 1.4;
+        color: var(--muted);
+      }
+
+      .info-grid {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 4px 12px;
+        font-size: 0.85rem;
+        align-items: baseline;
+      }
+
+      .info-grid .metric-label {
+        margin-bottom: 0;
+      }
+
+      .toolbar-select {
+        padding: 7px 8px;
+        border-radius: 8px;
+        border: 1px solid rgba(17, 32, 51, 0.12);
+        background: #fff;
+        font: inherit;
+        font-weight: 600;
       }
 
       .scope-panel {
@@ -284,31 +340,6 @@
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: var(--muted);
-      }
-
-      .advanced-panel {
-        margin-top: 12px;
-        border: 1px solid rgba(17, 32, 51, 0.08);
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.42);
-      }
-
-      .advanced-panel summary {
-        cursor: pointer;
-        padding: 10px 12px;
-        font-size: 0.8rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-      }
-
-      .advanced-panel .panel {
-        margin: 0;
-        border: 0;
-        border-top: 1px solid rgba(17, 32, 51, 0.08);
-        border-radius: 0 0 8px 8px;
-        background: transparent;
       }
 
       .field {
@@ -481,143 +512,92 @@
         <button id="export-btn">Export GLB</button>
         <button id="send-btn">Send to game</button>
         <button id="reset-view-btn">Reset view</button>
+        <select id="unit-select" class="toolbar-select" aria-label="Display units">
+          <option value="imperial" selected>Feet</option>
+          <option value="metric">Meters</option>
+        </select>
       </div>
     </div>
 
     <div class="layout">
       <aside class="sidebar">
-        <h2>Building</h2>
         <div class="scope-panel">
-          <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted);">Editing</div>
+          <div class="scope-label">Editing</div>
           <div id="scope-crumbs"></div>
         </div>
-        <div class="metrics">
-          <div class="metric">
-            <div class="metric-label">Status</div>
-            <div class="metric-value" id="status-value">Waiting</div>
-          </div>
-
-          <div class="metric">
-            <div class="metric-label">Expected winding</div>
-            <div class="metric-value">
-              <select id="winding-select" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid rgba(17,32,51,0.12); background:#fff; font:inherit;">
-                <option value="CCW">CCW</option>
-                <option value="CW">CW</option>
-              </select>
-            </div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">Footprint type</div>
-            <div class="metric-value">
-              <select id="footprint-select" aria-label="Footprint type" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid rgba(17,32,51,0.12); background:#fff; font:inherit;">
-                <option value="sample" selected>Rectangle</option>
-                <option value="u">U shape</option>
-                <option value="l">L shape</option>
-                <option value="narrow-lean-to">Narrow rear lean-to</option>
-                <option value="wide-wing">Wider attached wing</option>
-              </select>
-            </div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">Display units</div>
-            <div class="metric-value">
-              <select id="unit-select" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid rgba(17,32,51,0.12); background:#fff; font:inherit;">
-                <option value="imperial" selected>Imperial (feet)</option>
-                <option value="metric">Metric (meters)</option>
-              </select>
-            </div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">Front of the building</div>
-            <div class="metric-value">
-              <select id="front-select" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid rgba(17,32,51,0.12); background:#fff; font:inherit;">
-                <option value="maxZ" selected>The +Z side</option>
-                <option value="minZ">The −Z side</option>
-                <option value="maxX">The +X side</option>
-                <option value="minX">The −X side</option>
-              </select>
-              <div style="color:var(--muted); font-size:0.78rem; margin-top:4px;">Marked FRONT in the views. Walls are named from it.</div>
-            </div>
-          </div>
-
-          <div class="metric">
-            <div class="metric-label">Facade</div>
-            <div class="metric-value" id="facade-value">—</div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">Area</div>
-            <div class="metric-value" id="area-value">—</div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">Perimeter</div>
-            <div class="metric-value" id="perimeter-value">—</div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">Centroid</div>
-            <div class="metric-value" id="centroid-value">—</div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">Bounding box</div>
-            <div class="metric-value" id="bbox-value">—</div>
-          </div>
+        <div class="inspector-head">
+          <div class="inspector-title" id="inspector-title">Building</div>
+          <div class="inspector-sub" id="inspector-sub"></div>
         </div>
 
-        <details class="advanced-panel" id="facade-defaults-panel">
-          <summary>Facade defaults</summary>
-        <div class="panel">
-          <h3>Facade controls</h3>
+        <div class="panel" data-inspector="building">
           <div class="field">
-            <label for="story-count">Stories</label>
-            <input id="story-count" type="number" min="1" max="12" step="1" value="2" />
-          </div>
-          <div class="field">
-            <label for="story-height">Story height (<span id="story-height-unit">feet</span>)</label>
-            <input id="story-height" type="number" min="0.1" max="100" step="0.1" />
-          </div>
-          <div class="field">
-            <label for="foundation-height">Floor above grade: foundation (<span class="unit-label">feet</span>)</label>
-            <input id="foundation-height" type="number" min="0" max="10" step="0.1" />
-          </div>
-          <div class="field">
-            <label class="field-inline"><input type="checkbox" id="interior-enabled" />Walk-in interior (ground floor)</label>
-          </div>
-          <div class="field" id="interior-thickness-field" style="display:none;">
-            <label for="interior-thickness">Wall thickness (<span class="unit-label">feet</span>)</label>
-            <input id="interior-thickness" type="number" min="0.3" max="1.4" step="0.05" />
-          </div>
-          <div class="field">
-            <label for="knee-wall-height">Half story above: knee wall (<span class="unit-label">feet</span>; empty for none)</label>
-            <input id="knee-wall-height" type="number" min="0" max="10" step="0.1" placeholder="none" />
-          </div>
-          <div class="field">
-            <label for="panels-per-run">Facade panels per wall run</label>
-            <input id="panels-per-run" type="number" min="1" max="8" step="1" value="2" />
-          </div>
-          <div class="field">
-            <label for="wall-material">Facade material</label>
-            <select id="wall-material">
-              <option value="wood" selected>Wood</option>
-              <option value="brick">Brick</option>
-              <option value="stucco">Stucco</option>
-              <option value="metal">Metal</option>
-              <option value="stone">Stone</option>
-              <option value="paint">Painted white</option>
+            <label for="footprint-select">Footprint type</label>
+            <select id="footprint-select" aria-label="Footprint type">
+              <option value="sample" selected>Rectangle</option>
+              <option value="u">U shape</option>
+              <option value="l">L shape</option>
+              <option value="narrow-lean-to">Narrow rear lean-to</option>
+              <option value="wide-wing">Wider attached wing</option>
             </select>
           </div>
+          <div class="field">
+            <label for="front-select">Front of the building</label>
+            <select id="front-select">
+              <option value="maxZ" selected>The +Z side</option>
+              <option value="minZ">The −Z side</option>
+              <option value="maxX">The +X side</option>
+              <option value="minX">The −X side</option>
+            </select>
+            <div class="field-note">Marked FRONT in the views. Walls are named from it.</div>
+          </div>
         </div>
-        </details>
 
-        <details class="advanced-panel" id="trim-panel">
-          <summary>Trim</summary>
-          <div class="panel">
-            <div id="trim-controls"></div>
+        <details class="section" name="inspector-section" data-inspector="building" data-default open>
+          <summary>Massing</summary>
+          <div class="section-body">
+            <div class="field">
+              <label for="story-count">Stories</label>
+              <input id="story-count" type="number" min="1" max="12" step="1" value="2" />
+            </div>
+            <div class="field">
+              <label for="story-height">Story height (<span id="story-height-unit">feet</span>)</label>
+              <input id="story-height" type="number" min="0.1" max="100" step="0.1" />
+            </div>
+            <div class="field">
+              <label for="foundation-height">Floor above grade: foundation (<span class="unit-label">feet</span>)</label>
+              <input id="foundation-height" type="number" min="0" max="10" step="0.1" />
+            </div>
+            <div class="field">
+              <label for="knee-wall-height">Half story above: knee wall (<span class="unit-label">feet</span>; empty for none)</label>
+              <input id="knee-wall-height" type="number" min="0" max="10" step="0.1" placeholder="none" />
+            </div>
+            <div class="field">
+              <label for="panels-per-run">Facade panels per wall run</label>
+              <input id="panels-per-run" type="number" min="1" max="8" step="1" value="2" />
+            </div>
+            <div class="field">
+              <label class="field-inline"><input type="checkbox" id="interior-enabled" />Walk-in interior (ground floor)</label>
+            </div>
+            <div class="field" id="interior-thickness-field" style="display:none;">
+              <label for="interior-thickness">Wall thickness (<span class="unit-label">feet</span>)</label>
+              <input id="interior-thickness" type="number" min="0.3" max="1.4" step="0.05" />
+            </div>
           </div>
         </details>
 
-        <div class="panel" id="volume-config-panel">
-          <h3>Volume Configuration</h3>
-          <div id="roof-zone-target" style="font-size:0.8rem; line-height:1.4; color:var(--muted); margin-bottom:8px;"></div>
-          <div id="roof-support-note" style="font-size:0.8rem; line-height:1.4; color:var(--muted); margin-bottom:10px;"></div>
+        <details class="section" name="inspector-section" data-inspector="mass" data-default>
+          <summary>Massing</summary>
+          <div class="section-body">
+            <div id="volume-controls"></div>
+          </div>
+        </details>
+
+        <details class="section" name="inspector-section" data-inspector="building mass" id="volume-config-panel">
+          <summary>Roof</summary>
+          <div class="section-body">
+            <div id="roof-zone-target" class="field-note" style="margin-bottom:8px;"></div>
+            <div id="roof-support-note" class="field-note" style="margin-bottom:10px;"></div>
           <div class="field">
             <label for="roof-type">Roof type</label>
             <select id="roof-type">
@@ -721,36 +701,36 @@
               <option value="merge-plane">Merge into adjacent roof</option>
             </select>
           </div>
-          <div style="font-size:0.8rem; line-height:1.4; color:var(--muted); margin-bottom:10px;">
-            Selected volume massing
           </div>
-          <div id="volume-controls"></div>
-        </div>
+        </details>
 
-        <div class="panel">
-          <h3>Roof structures</h3>
-          <div class="field">
-            <label for="structure-preset">Add</label>
-            <select id="structure-preset"></select>
+        <details class="section" name="inspector-section" data-inspector="building">
+          <summary>Finish</summary>
+          <div class="section-body">
+            <div class="field">
+              <label for="wall-material">Facade material</label>
+              <select id="wall-material">
+                <option value="wood" selected>Wood</option>
+                <option value="brick">Brick</option>
+                <option value="stucco">Stucco</option>
+                <option value="metal">Metal</option>
+                <option value="stone">Stone</option>
+                <option value="paint">Painted white</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <div class="field-group-label">Story materials</div>
+              <div id="story-materials"></div>
+            </div>
+            <div class="field-group">
+              <div class="field-group-label">Trim</div>
+              <div id="trim-controls"></div>
+            </div>
           </div>
-          <div class="field">
-            <label for="structure-side">Facing</label>
-            <select id="structure-side">
-              <option value="minZ">Z-min side</option>
-              <option value="maxZ">Z-max side</option>
-              <option value="minX">X-min side</option>
-              <option value="maxX">X-max side</option>
-            </select>
-          </div>
-          <div class="actions" style="margin-bottom:10px;">
-            <button id="structure-add-btn">Add</button>
-          </div>
-          <div id="structure-editor"></div>
-        </div>
+        </details>
 
-        <div class="panel" id="wall-info-panel" style="display:none;">
-          <h3>Selected wall</h3>
-          <div id="wall-info-summary" style="font-size:0.9rem; line-height:1.6; color:var(--text); margin-bottom:12px;"></div>
+        <div class="panel" id="wall-info-panel" data-inspector="wall">
+          <div id="wall-info-summary" class="field-note" style="margin-bottom:12px;"></div>
           <div id="wall-panel-materials"></div>
           <div id="wall-trim-box"></div>
           <div id="wall-chimneys-box"></div>
@@ -761,30 +741,60 @@
           </div>
         </div>
 
-        <details class="advanced-panel">
-          <summary>Roof graph & edge roles</summary>
-          <div class="panel">
-            <div id="roof-graph-summary" style="font-size:0.85rem; line-height:1.4; color:var(--text); margin-bottom:8px;">No roof graph computed.</div>
-            <div id="roof-graph-edges" style="font-size:0.8rem; line-height:1.6; color:var(--muted); max-height:180px; overflow-y:auto;"></div>
+        <div id="structure-editor" data-inspector="structure"></div>
+
+        <details class="section" name="inspector-section" data-inspector="mass structure">
+          <summary id="structure-add-summary">Add a roof structure</summary>
+          <div class="section-body">
+            <div class="field">
+              <label for="structure-preset">Add</label>
+              <select id="structure-preset"></select>
+            </div>
+            <div class="field">
+              <label for="structure-side">Facing</label>
+              <select id="structure-side">
+                <option value="minZ">Z-min side</option>
+                <option value="maxZ">Z-max side</option>
+                <option value="minX">X-min side</option>
+                <option value="maxX">X-max side</option>
+              </select>
+            </div>
+            <div class="actions">
+              <button id="structure-add-btn">Add</button>
+            </div>
           </div>
         </details>
 
-        <details class="advanced-panel">
-          <summary>Facade summary</summary>
-          <div class="panel">
-          <div id="facade-summary-box" style="font-size:0.9rem; line-height:1.5; color:var(--text);">
-            No footprint loaded.
-          </div>
+        <details class="section" name="inspector-section" data-inspector="building">
+          <summary>Info</summary>
+          <div class="section-body">
+            <div class="info-grid">
+              <div class="metric-label">Facade</div><div id="facade-value">—</div>
+              <div class="metric-label">Area</div><div id="area-value">—</div>
+              <div class="metric-label">Perimeter</div><div id="perimeter-value">—</div>
+              <div class="metric-label">Centroid</div><div id="centroid-value">—</div>
+              <div class="metric-label">Bounding box</div><div id="bbox-value">—</div>
+            </div>
+            <div class="field" style="margin-top:12px;">
+              <label for="winding-select">Expected winding</label>
+              <select id="winding-select">
+                <option value="CCW">CCW</option>
+                <option value="CW">CW</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <div class="field-group-label">Facade summary</div>
+              <div id="facade-summary-box" style="font-size:0.85rem; line-height:1.5;">No footprint loaded.</div>
+            </div>
+            <div class="field-group">
+              <div class="field-group-label">Roof graph and edge roles</div>
+              <div id="roof-graph-summary" style="font-size:0.85rem; line-height:1.4; margin-bottom:8px;">No roof graph computed.</div>
+              <div id="roof-graph-edges" style="font-size:0.8rem; line-height:1.6; color:var(--muted); max-height:180px; overflow-y:auto;"></div>
+            </div>
           </div>
         </details>
 
-        <details class="advanced-panel">
-          <summary>Story materials</summary>
-          <div class="panel">
-            <div id="story-materials"></div>
-          </div>
-        </details>
-
+        <span id="status-value" hidden>Waiting</span>
         <div class="status" id="status-box">
           Load a closed, CCW footprint to generate the base massing.
         </div>
@@ -817,6 +827,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=76"></script>
+    <script type="module" src="./js/main.js?v=77"></script>
   </body>
 </html>

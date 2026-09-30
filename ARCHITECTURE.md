@@ -135,26 +135,28 @@ control through its selected Roof zone. Auto applies the valley-avoidance rule;
 an explicit axis takes precedence for both equal-height and independent-story
 roof assemblies.
 
-**Selected-element editing.** Roof and massing properties are edited through a
-single selected target rather than repeated panels. The **Selected element**
-picker selects Building defaults or a volume's massing/roof-zone pair. A
-selected volume exposes its own story count in **Massing volumes** and its own
-roof form, ridge direction, pitch, and roof rise in **Roof zone** (a volume
-without its own pitch/rise follows the building default; eave depth remains a
-building-level control). The selected volume is shown in the 3D and top
-views with a subtle translucent cyan tint and a cyan roof-perimeter outline;
-the volume's internal box edges are intentionally omitted to avoid visual
-clutter. Massing volumes and roof zones are currently a deliberate one-to-one
-pair; separate roof-zone partitioning is deferred. Volumes are also direct
-manipulation targets in the 3D view: hovering highlights the volume and its
-roof perimeter in amber, while clicking makes it the selected cyan target and
-synchronizes the property controls. Roof structures are picked the same way on
-their own meshes (the nearest of a volume or structure wins), and edited in the
-**Roof structures** panel: add from presets onto the selected volume, see each
-structure's validation inline, and edit the selected one's placement, base,
-roof, open sides, support, and materials. Selecting a structure also selects
-the volume it stands on, which the volume controls then edit. Pick targets
-are editor-only and left out of the GLB export.
+**Selected-element editing.** The sidebar is an inspector for one selected
+target: the building, a mass (volume), a wall, or a roof structure. The scope
+control at its top picks the target (Building, each mass, then the selected
+mass's walls and structures); a click in the 3D, plan, or elevation view picks
+the same targets, and a click on empty ground goes back to the building. The
+deepest selection wins: a wall shows the wall's panel, not its mass's. Each
+sidebar part names the targets it serves (`data-inspector` in `index.html`),
+and `syncInspector` in `js/main.js` shows only those and titles the inspector.
+Building and mass settings sit in accordion sections, one open at a time: the
+building has Massing, Roof, Finish, and Info; a mass has Massing (its own
+overrides, empty for the building's), Roof, and Add a roof structure. A wall
+shows its facade panels, trim, chimneys, and windows and doors in one scroll. A
+structure shows its editor, whose field groups (Placement, Footprint, Height,
+Roof, Openings, Posts, Railings, Steps, Materials) are accordions too, the open
+one kept across edits. Massing volumes and roof zones are a deliberate
+one-to-one pair; separate roof-zone partitioning is deferred. The selected
+volume is shown in the 3D and top views with a subtle translucent cyan tint
+and a cyan roof-perimeter outline; hovering a volume, wall, or structure (in a
+view or in the scope control) highlights it in amber. Roof structures are
+picked on their own meshes (the nearest of a volume, wall, or structure wins)
+and show their validation inline. Pick targets are editor-only and left out of
+the GLB export.
 
 **Roofs meeting their neighbors.** A gable's end meeting a neighbor's roof
 merges into it by default (its ridge runs into the neighbor's slope with

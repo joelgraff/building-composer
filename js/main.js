@@ -71,7 +71,6 @@ const roofSupportNote = document.getElementById('roof-support-note');
 const roofZoneTarget = document.getElementById('roof-zone-target');
 const wallMaterialSelect = document.getElementById('wall-material');
 const storyMaterialsBox = document.getElementById('story-materials');
-const wallInfoPanel = document.getElementById('wall-info-panel');
 const wallInfoSummary = document.getElementById('wall-info-summary');
 const wallPanelMaterialsBox = document.getElementById('wall-panel-materials');
 const wallOpeningsBox = document.getElementById('wall-openings-box');
@@ -80,10 +79,11 @@ const wallTrimBox = document.getElementById('wall-trim-box');
 const wallChimneysBox = document.getElementById('wall-chimneys-box');
 const volumeControlsBox = document.getElementById('volume-controls');
 const scopeCrumbs = document.getElementById('scope-crumbs');
-const facadeDefaultsPanel = document.getElementById('facade-defaults-panel');
-const trimPanel = document.getElementById('trim-panel');
 const trimControls = document.getElementById('trim-controls');
-const volumeConfigPanel = document.getElementById('volume-config-panel');
+const inspectorTitle = document.getElementById('inspector-title');
+const inspectorSub = document.getElementById('inspector-sub');
+const inspectorParts = [...document.querySelectorAll('.sidebar > [data-inspector]')];
+const structureAddSummary = document.getElementById('structure-add-summary');
 const facadeSummaryBox = document.getElementById('facade-summary-box');
 const roofGraphSummary = document.getElementById('roof-graph-summary');
 const roofGraphEdges = document.getElementById('roof-graph-edges');
@@ -695,10 +695,82 @@ function syncSelectionValidity(layout) {
   if (selectedWallId && !wallStillExists) {
     selectedWallId = null;
   }
-  // a structure's own editor stands alone: the mass it stands on isn't shown alongside it
-  facadeDefaultsPanel.style.display = selectedElementId === 'building-defaults' && !selectedStructureId ? '' : 'none';
-  trimPanel.style.display = facadeDefaultsPanel.style.display;
-  volumeConfigPanel.style.display = selectedStructureId ? 'none' : '';
+}
+
+/**
+ * What the sidebar is inspecting: the deepest selection. A wall (a
+ * footprint wall run or a structure's own wall) wins over the structure or
+ * mass it belongs to; a railing run has no panel of its own, so it shows the
+ * structure whose editor holds its railings.
+ */
+function inspectorKind(layout) {
+  const run = layout && selectedWallId ? findRun(selectedWallId, layout) : null;
+  if (run && (run.runType === 'wall' || run.runType === 'structure-wall')) {
+    return 'wall';
+  }
+  if (selectedStructureId && structureRecord(selectedStructureId)) {
+    return 'structure';
+  }
+  if (layout?.volumes.some((volume) => volume.id === selectedElementId)) {
+    return 'mass';
+  }
+  return 'building';
+}
+
+/** The inspector's title and one line of facts for what's selected. */
+function inspectorHeading(kind, layout) {
+  if (kind === 'wall') {
+    const run = findRun(selectedWallId, layout);
+    if (run.runType === 'structure-wall') {
+      const structure = structureRecord(run.structureId) ?? modelConfig.roofStructures.find((candidate) => run.structureId.startsWith(`${candidate.id}-`));
+      const owner = structure ? structureLabel(structure, modelConfig.frontSide, { withHost: false }) : run.structureId;
+      return [`${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`, `Of the ${owner.toLowerCase()}`];
+    }
+    const volume = layout.volumes.find((candidate) => candidate.id === run.volumeId);
+    return [`${disambiguatedWallLabel(run, layout)} wall`, volume && layout.volumes.length > 1 ? `Of the mass ${massName(volume, layout.volumes)}` : 'Of the building'];
+  }
+  if (kind === 'structure') {
+    const structure = structureRecord(selectedStructureId);
+    const hostId = structureHostVolumeId(structure);
+    const host = layout.volumes.find((volume) => volume.id === hostId);
+    const on = structure.hostStructureId
+      ? `On ${structureLabel(structureRecord(structure.hostStructureId) ?? { id: structure.hostStructureId }, modelConfig.frontSide, { withHost: false }).toLowerCase()}`
+      : host && layout.volumes.length > 1 ? `On the mass ${massName(host, layout.volumes)}` : 'On the building';
+    return [structureLabel(structure, modelConfig.frontSide, { withHost: false }), on];
+  }
+  if (kind === 'mass') {
+    const volume = layout.volumes.find((candidate) => candidate.id === selectedElementId);
+    return ['Mass', massName(volume, layout.volumes)];
+  }
+  if (!layout) {
+    return ['Building', 'No footprint loaded'];
+  }
+  const masses = layout.volumes.length;
+  const structures = modelConfig.roofStructures.length;
+  return ['Building', `${masses} ${masses === 1 ? 'mass' : 'masses'}, ${structures} ${structures === 1 ? 'structure' : 'structures'}`];
+}
+
+/**
+ * Shows only the sidebar parts for what's selected (each part names the
+ * kinds it serves in data-inspector) and titles the inspector. When none of
+ * the shown accordion sections is open, the one marked data-default opens.
+ */
+function syncInspector(layout = activeLayout) {
+  const kind = inspectorKind(layout);
+  const [title, sub] = inspectorHeading(kind, layout);
+  inspectorTitle.textContent = title;
+  inspectorSub.textContent = sub;
+  inspectorParts.forEach((part) => {
+    part.hidden = !part.dataset.inspector.split(' ').includes(kind);
+  });
+  const sections = inspectorParts.filter((part) => !part.hidden && part.matches('details[name="inspector-section"]'));
+  if (!sections.some((section) => section.open)) {
+    const fallback = sections.find((section) => 'default' in section.dataset);
+    if (fallback) {
+      fallback.open = true;
+    }
+  }
+  structureAddSummary.textContent = kind === 'structure' ? 'Add a structure' : 'Add a roof structure';
 }
 
 /** A mass's name for the scope control: its size, and which side of the building it sits on. */
@@ -1072,7 +1144,6 @@ const WALL_ROLE_LABELS = {
 function renderWallInfoPanel(layout) {
   const run = layout ? findRun(selectedWallId, layout) : null;
   if (!run || (run.runType !== 'wall' && run.runType !== 'structure-wall')) {
-    wallInfoPanel.style.display = 'none';
     wallInfoSummary.innerHTML = '';
     wallPanelMaterialsBox.innerHTML = '';
     wallOpeningsBox.innerHTML = '';
@@ -1085,13 +1156,10 @@ function renderWallInfoPanel(layout) {
     selectedOpeningId = null;
     return;
   }
-  wallInfoPanel.style.display = '';
   if (run.runType === 'structure-wall') {
-    // a structure's own wall: no stories or facade panels of its own, only its windows
-    const structure = structureRecord(run.structureId) ?? modelConfig.roofStructures.find((candidate) => run.structureId.startsWith(`${candidate.id}-`));
-    const owner = structure ? structureLabel(structure, modelConfig.frontSide, { withHost: false }) : run.structureId;
-    const wallName = `${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`;
-    wallInfoSummary.innerHTML = `<strong>${escapeHtml(wallName)}</strong> of the ${escapeHtml(owner.toLowerCase())}<br>Length: ${formatLength(run.length)}`;
+    // a structure's own wall: no stories or facade panels of its own, only its
+    // windows (its name and owner head the inspector: see inspectorHeading)
+    wallInfoSummary.innerHTML = `Length: ${formatLength(run.length)}`;
     wallPanelMaterialsBox.innerHTML = '';
     wallChimneysBox.innerHTML = '';
     renderWallTrimBox(run);
@@ -1102,8 +1170,7 @@ function renderWallInfoPanel(layout) {
   const volume = layout.volumes.find((candidate) => candidate.id === run.volumeId);
   const storyCount = volume ? modelConfig.volumeStoryOverrides[volume.id] ?? modelConfig.storyCount : modelConfig.storyCount;
   const roleLabel = WALL_ROLE_LABELS[run.role] ?? run.role;
-  wallInfoSummary.innerHTML = `<strong>${escapeHtml(name)} wall</strong><br>`
-    + `Length: ${formatLength(run.length)}<br>Stories: ${storyCount}<br>Roof edge: ${escapeHtml(roleLabel)}`;
+  wallInfoSummary.innerHTML = `Length: ${formatLength(run.length)} · Stories: ${storyCount} · Roof edge: ${escapeHtml(roleLabel)}`;
   const panels = layout.facadePanels.filter((panel) => panel.wallRunId === run.id);
   wallPanelMaterialsBox.innerHTML = panels.map((panel) => `
     <div class="field">
@@ -1955,6 +2022,7 @@ async function loadFootprint(footprintData, preserveView = true) {
   renderOpeningFailureMarkers(activeLayout);
   renderScopeControl(activeLayout);
   renderWallInfoPanel(activeLayout);
+  syncInspector(activeLayout);
   if (normalized.length === 4) {
     renderFootprintPreview(normalized);
     renderFrontMarker(normalized);
@@ -3944,16 +4012,34 @@ function structureEditorHtml(structure) {
     ? `<div class="structure-editor-error">Not built: ${escapeHtml(nameSides(buildError.message))}</div>`
     : '';
 
-  return `<div class="structure-editor-head"><span>Editing ${escapeHtml(structure.id)}</span></div>${errorBanner}`
-    + fieldGroup('Placement', placement)
-    + fieldGroup('Footprint', footprint)
-    + fieldGroup('Height', height)
-    + fieldGroup('Roof', roof)
-    + fieldGroup('Openings', openings)
-    + fieldGroup('Posts', postFields)
-    + fieldGroup('Railings', railingFields)
-    + fieldGroup('Steps', stepsFields)
-    + fieldGroup('Materials', materials);
+  // the structure's name heads the inspector (see inspectorHeading); its groups are accordions, one open
+  return errorBanner + structureSectionsHtml([
+    ['Placement', placement],
+    ['Footprint', footprint],
+    ['Height', height],
+    ['Roof', roof],
+    ['Openings', openings],
+    ['Posts', postFields],
+    ['Railings', railingFields],
+    ['Steps', stepsFields],
+    ['Materials', materials],
+  ]);
+}
+
+// The structure editor's open section, kept across its re-renders (every edit
+// rewrites the editor's HTML) and from one structure to the next.
+let openStructureSection = 'Placement';
+
+/**
+ * A structure's field groups as accordion sections, one open at a time (the
+ * shared `name` makes the browser close the others). Empty groups are left
+ * out; when the remembered section isn't among them, the first one opens.
+ */
+function structureSectionsHtml(groups) {
+  const shown = groups.filter(([, parts]) => parts.length);
+  const open = shown.some(([label]) => label === openStructureSection) ? openStructureSection : shown[0]?.[0];
+  return shown.map(([label, parts]) => `<details class="section" name="structure-section" data-structure-section="${label}"${label === open ? ' open' : ''}>`
+    + `<summary>${escapeHtml(label)}</summary><div class="section-body">${parts.join('')}</div></details>`).join('');
 }
 
 function rebuildWithStructures(structures) {
@@ -4264,6 +4350,13 @@ function applyStructureFieldEdit(input) {
   }
 }
 
+// toggle doesn't bubble, so the editor listens in the capture phase
+structureEditor.addEventListener('toggle', (event) => {
+  if (event.target.open && event.target.dataset.structureSection) {
+    openStructureSection = event.target.dataset.structureSection;
+  }
+}, true);
+
 structureEditor.addEventListener('change', (event) => {
   applyStructureFieldEdit(event.target.closest('[data-field]'));
 });
@@ -4319,6 +4412,7 @@ function animate() {
 window.addEventListener('resize', resizeRenderer);
 resizeRenderer();
 animate();
+syncInspector(null);
 
 // a footprint handed over in the address opens once the skeleton library
 // is ready (hips need it); otherwise the sample shows, rebuilt when it is
