@@ -238,7 +238,7 @@ Requirements:
 ### Phase 8 — Footprint modifiers
 
 #### Task 8: Steps, window wells, stoops
-Status: Entry steps done: a door in the house's walls whose threshold is above grade gets a flight down to the ground (even risers, a landing at the door), part of the door record and switchable per door, and left off where a porch or bay stands in front of it; a ground-level porch gets a flight from its open front (one per wall of a wraparound), its posts framing the opening. Every flight's width, tread depth, and riser height or number of steps can be set. Window wells and freestanding stoops are not done yet.
+Status: Entry steps done: a door in the house's walls whose threshold is above grade gets a flight down to the ground (even risers, a landing at the door), part of the door record and switchable per door, and left off where a porch or bay stands in front of it; a ground-level porch gets a flight from its open front (one per wall of a wraparound), its posts framing the opening, which can be moved along the front. Every flight's width, tread depth, and riser height or number of steps can be set. Window wells and freestanding stoops are not done yet.
 
 Requirements:
 - Add non-functional plan extensions that share the footprint boundary.

@@ -372,6 +372,9 @@ export function shapeLimit(opening, host, field, from, to) {
  * - `riser`: the height each step aims for; the number of steps follows from
  *   the rise, rounded so every riser comes out the same.
  * - `count`: instead, this many steps exactly (null to size by `riser`).
+ * - `offset`: a porch's steps' center along its front, from the front's
+ *   middle, to the right as seen from outside (a door's steps stay centered
+ *   on the door).
  */
 export function normalizeSteps(raw) {
   const source = raw === false ? { enabled: false } : raw && typeof raw === 'object' ? raw : {};
@@ -383,6 +386,7 @@ export function normalizeSteps(raw) {
     tread: inRange(source.tread, STEP_TREAD_RANGE) ?? STEP_TREAD,
     riser: inRange(source.riser, STEP_RISER_RANGE) ?? STEP_RISER,
     count: count === null ? null : Math.round(count),
+    offset: Number.isFinite(source.offset) ? source.offset : 0,
   };
 }
 

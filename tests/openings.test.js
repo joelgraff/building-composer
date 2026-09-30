@@ -270,7 +270,7 @@ describe('windows on a roof structure\'s own walls', () => {
 describe('entry steps', () => {
   it('a door has steps unless turned off; a window never does', () => {
     assert.deepEqual(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door' }).steps, {
-      enabled: true, width: null, tread: STEP_TREAD, riser: 0.18, count: null,
+      enabled: true, width: null, tread: STEP_TREAD, riser: 0.18, count: null, offset: 0,
     });
     assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door', steps: false }).steps.enabled, false, 'an older file\'s plain off');
     assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door', steps: true }).steps.enabled, true);
@@ -370,7 +370,9 @@ describe('entry steps', () => {
 
   it('keeps sizes in range; a count of steps is whole', () => {
     const steps = normalizeSteps({ width: 20, tread: 0.1, riser: 0.4, count: 3.6 });
-    assert.deepEqual(steps, { enabled: true, width: 8, tread: 0.2, riser: 0.25, count: 4 });
+    assert.deepEqual(steps, {
+      enabled: true, width: 8, tread: 0.2, riser: 0.25, count: 4, offset: 0,
+    });
   });
 
   it('sizes a flight by its riser height, or by a number of steps', () => {

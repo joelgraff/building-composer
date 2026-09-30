@@ -278,7 +278,7 @@ function doorStepsBlocked(resolved, flight, half, plans) {
 }
 
 /** Porch steps are this wide unless set otherwise, and never wider than the porch's open front. */
-const PORCH_STEP_WIDTH = 1.5;
+export const PORCH_STEP_WIDTH = 1.5;
 
 /**
  * Steps from each ground-level porch's deck (a porch standing on a solid deck
@@ -339,7 +339,11 @@ function porchStepOpening(resolved) {
   if (width < 0.6) {
     return null;
   }
-  const mid = (a + b) / 2;
+  // moved along the front (to the right as seen from outside), kept within it
+  const [nx, nz] = PORCH_OUTWARD[side];
+  const rightward = Math.sign([nz, -nx][k]);
+  const travel = porchStepTravel(b - a, width);
+  const mid = (a + b) / 2 + rightward * Math.min(Math.max(steps.offset, -travel), travel);
   return {
     side,
     flight,
@@ -1400,6 +1404,11 @@ function openSidePostPoints(resolved, solids) {
     });
   });
   return [...points.values()];
+}
+
+/** How far a porch's steps can move either way from the middle of a front `length` long, `width` wide, staying 0.1 m clear of its ends. */
+export function porchStepTravel(length, width) {
+  return Math.max(0, (length - width) / 2 - 0.1);
 }
 
 /**

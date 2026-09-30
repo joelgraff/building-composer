@@ -143,6 +143,43 @@ describe('railings on a built building', () => {
     assert.ok(railing.every(([, y]) => y <= 0.7 + 1 + 1e-6), 'no newels: the posts frame the opening');
   });
 
+  it('moves a porch\'s steps along its front, its framing posts and the railing\'s opening with them', () => {
+    const frontPosts = (built) => {
+      const xs = [];
+      built.building.traverse((mesh) => {
+        if (mesh.userData?.structurePart === 'posts') {
+          const p = mesh.geometry.getAttribute('position');
+          for (let i = 0; i < p.count; i += 1) {
+            if (p.getZ(i) > 7.2) xs.push(p.getX(i));
+          }
+        }
+      });
+      return xs;
+    };
+    const stepsX = (built) => {
+      let center = null;
+      built.building.traverse((mesh) => {
+        if (mesh.userData?.bodyPart === 'porch-steps') {
+          mesh.geometry.computeBoundingBox();
+          const box = mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
+          center = (box.min.x + box.max.x) / 2;
+        }
+      });
+      return center;
+    };
+    // the porch faces +z: seen from outside (looking toward -z), its right is +x
+    const moved = build({ roofStructures: normalizeRoofStructures([porch({ steps: { offset: 1.5 } })]) });
+    assert.ok(Math.abs(stepsX(moved) - 1.5) < 1e-6, `${stepsX(moved)}`);
+    const xs = frontPosts(moved);
+    assert.ok(xs.some((x) => Math.abs(x - (1.5 - 0.75)) < 1e-6) && xs.some((x) => Math.abs(x - (1.5 + 0.75)) < 1e-6), 'framed where the steps are');
+    assert.ok(xs.every((x) => x <= 0.75 + 1e-6 || x >= 2.25 - 1e-6), 'nothing stands in the opening');
+    const inGap = railingPoints(moved).filter(([x, y, z]) => Math.abs(z - 7.3) < 0.1 && x > 0.8 && x < 2.2 && y > 0.75);
+    assert.equal(inGap.length, 0, 'the railing opens there');
+    // kept within the front, 0.1 m short of its end
+    const far = build({ roofStructures: normalizeRoofStructures([porch({ steps: { offset: 10 } })]) });
+    assert.ok(Math.abs(stepsX(far) - (3 - 0.75 - 0.1)) < 1e-6);
+  });
+
   it('a narrow porch leaves the framing to its corner posts', () => {
     const built = build({ roofStructures: normalizeRoofStructures([porch({ width: 1.8 })]) });
     let posts = 0;

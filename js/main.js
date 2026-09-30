@@ -2,7 +2,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import { validateFootprint, normalizeFootprint, computeFootprintMetrics } from './footprint.js';
 import {
-  createBuildingFromFootprint, volumeWallHeight, volumeFoundationHeight, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS,
+  createBuildingFromFootprint, volumeWallHeight, volumeFoundationHeight, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS, porchStepTravel, PORCH_STEP_WIDTH,
 } from './extrusion.js';
 import {
   normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS, structureFrame, structureWallSides, resolveRoofStructure, MAX_BRACKET_PROJECTION, hostEaveProfile,
@@ -1238,10 +1238,14 @@ function doorFlight(opening) {
  * to fit the door or porch), tread depth, and either a riser height the
  * number of steps follows from, or the number of steps.
  */
-function stepsFieldsHtml(steps, flight) {
+function stepsFieldsHtml(steps, flight, { travel = null } = {}) {
   const parts = [checkField('Steps down to the ground', 'steps.enabled', steps.enabled)];
   if (!steps.enabled) {
     return parts;
+  }
+  if (travel !== null) {
+    // a porch's steps can move along its front (a door's stay on the door)
+    parts.push(sliderField('Along the front (from its middle)', 'steps.offset', steps.offset, -travel, travel));
   }
   parts.push(numberField('Width (empty to fit)', 'steps.width', steps.width, { step: 0.1, placeholder: 'fit' }));
   parts.push(numberField('Tread depth', 'steps.tread', steps.tread, { step: 0.05 }));
@@ -1255,6 +1259,14 @@ function stepsFieldsHtml(steps, flight) {
   return parts;
 }
 
+/** How far a porch's steps can move along its front either way (see porchStepOpening in extrusion.js). */
+function porchStepsTravel(structure, built) {
+  const along = built.frame.along;
+  const length = along === 'x' ? built.bounds.maxX - built.bounds.minX : built.bounds.maxZ - built.bounds.minZ;
+  const width = Math.min(normalizeSteps(structure.steps).width ?? PORCH_STEP_WIDTH, length - 0.2);
+  return porchStepTravel(length, width);
+}
+
 /** A steps record with one edited field applied (see stepsFieldsHtml); switching to a count starts from the steps it has now. */
 function applyStepsField(steps, input, flight) {
   const next = { ...normalizeSteps(steps) };
@@ -1266,6 +1278,7 @@ function applyStepsField(steps, input, flight) {
     case 'tread': if (given) { next.tread = meters; } break;
     case 'riser': if (given) { next.riser = meters; } break;
     case 'count': if (given) { next.count = Number(input.value); } break;
+    case 'offset': if (given) { next.offset = meters; } break;
     case 'sizeBy': next.count = input.value === 'count' ? (flight?.built ?? 3) : null; break;
     default: break;
   }
@@ -3563,7 +3576,7 @@ function structureEditorHtml(structure) {
   // a ground-level porch deck open at the front has steps down to grade (see withPorchSteps in extrusion.js)
   const built = activeStructureEntries.find((candidate) => candidate.id === structure.id)?.resolved;
   const stepsFields = structure.kind === 'porch' && built && ['deck', 'porch'].includes(built.support) && structure.openSides.includes('front')
-    ? stepsFieldsHtml(normalizeSteps(structure.steps), flightFor(normalizeSteps(structure.steps), built.sillY, { deck: true }))
+    ? stepsFieldsHtml(normalizeSteps(structure.steps), flightFor(normalizeSteps(structure.steps), built.sillY, { deck: true }), { travel: porchStepsTravel(structure, built) })
     : [];
 
   const materials = [selectField('Wall material', 'wallMaterial', MATERIAL_OPTIONS, structure.materials?.wall ?? '')];
