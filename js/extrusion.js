@@ -12,6 +12,9 @@ import {
   normalizeTrim, hasTrim, courseProfile, profileExtent, subtractIntervals, sweepCourse, dentilSize, dentilTriangles, floorLines,
 } from './trim.js';
 import {
+  normalizeRailing, railingParts, partTriangles, TOP_RAIL,
+} from './railings.js';
+import {
   resolveVolumeEaves, sideOverhangs, buildGableTrim, buildHipTrim, buildShedTrim, buildPartialEaveStrips,
 } from './eaves.js';
 import {
@@ -305,12 +308,95 @@ function withPorchSteps(result, config) {
     }
     const normal = PORCH_OUTWARD[front.side];
     const center = [(front.start[0] + front.end[0]) / 2, (front.start[2] + front.end[2]) / 2];
+    // the front railing opens where the steps come up
+    result.railGaps = result.railGaps ?? new Map();
+    result.railGaps.set(front.id, [[length / 2 - width / 2, length / 2 + width / 2]]);
     result.building.add(buildStepsAt(center, normal, width, flight, material, { structureId: resolved.id, bodyPart: 'porch-steps' }));
   });
   return result;
 }
 
 const PORCH_OUTWARD = { minX: [-1, 0], maxX: [1, 0], minZ: [0, -1], maxZ: [0, 1] };
+
+/** Where posts (plan rectangles) stand across a railing run's line, as [from, to] along it. */
+function postSpans(run, rects) {
+  const [dx, dz] = [run.end[0] - run.start[0], run.end[2] - run.start[2]];
+  const length = Math.hypot(dx, dz);
+  const along = [dx / length, dz / length];
+  const across = [-along[1], along[0]];
+  const eps = 1e-6;
+  return rects.flatMap((rect) => {
+    const corners = [[rect.minX, rect.minZ], [rect.maxX, rect.minZ], [rect.maxX, rect.maxZ], [rect.minX, rect.maxZ]]
+      .map(([x, z]) => [(x - run.start[0]) * along[0] + (z - run.start[2]) * along[1], (x - run.start[0]) * across[0] + (z - run.start[2]) * across[1]]);
+    const cs = corners.map(([, c]) => c);
+    if (Math.min(...cs) > eps || Math.max(...cs) < -eps) {
+      return [];
+    }
+    const us = corners.map(([u]) => u);
+    return Math.max(...us) < -eps || Math.min(...us) > length + eps ? [] : [[Math.min(...us), Math.max(...us)]];
+  });
+}
+
+/**
+ * Railings (js/railings.js) along every porch's open sides and every widow's
+ * walk's edges, in the building's trim material: a porch's as its record
+ * sets them (`railings`, no higher than its ceiling), on its posts' center
+ * line and stopping at their faces, opening at its steps with newels either
+ * side; a walk's as
+ * the building sets them (`walkRailings`), with newels at its ends.
+ */
+function addRailings(result, config, roofWalks) {
+  const records = new Map((config.roofStructures ?? []).map((record) => [record.id, record]));
+  const resolvedById = new Map((result.roofStructures ?? []).filter((entry) => entry.resolved).map((entry) => [entry.resolved.id, entry.resolved]));
+  const runs = [];
+  (result.structureFacades ?? []).forEach((facade) => {
+    const resolved = resolvedById.get(facade.structureId);
+    const settings = normalizeRailing(records.get(resolved?.recordId ?? facade.structureId)?.railings);
+    if (!resolved || !settings.enabled) {
+      return;
+    }
+    const height = Math.min(settings.height, resolved.plateY - resolved.sillY);
+    const postRects = openSidePostPoints(resolved, []).map((point) => postRect(resolved.bounds, point));
+    facade.railRuns.forEach((edge) => {
+      // on the posts' center line: they stand inside the porch, flush with its side
+      const [ox, oz] = PORCH_OUTWARD[edge.side].map((c) => -c * (POST_SIZE / 2));
+      const run = {
+        ...edge, start: [edge.start[0] + ox, edge.start[1], edge.start[2] + oz], end: [edge.end[0] + ox, edge.end[1], edge.end[2] + oz],
+      };
+      runs.push({
+        run, settings, height, posts: false, obstacles: postSpans(run, postRects),
+      });
+    });
+  });
+  const walkSettings = normalizeRailing(config.walkRailings);
+  if (walkSettings.enabled) {
+    roofWalks.flatMap((walk) => walk.railRuns ?? []).forEach((run) => runs.push({
+      run, settings: walkSettings, height: walkSettings.height, posts: true, obstacles: [],
+    }));
+  }
+  const triangles = [];
+  runs.forEach(({
+    run, settings, height, posts, obstacles,
+  }) => {
+    const [dx, dz] = [run.end[0] - run.start[0], run.end[2] - run.start[2]];
+    const length = Math.hypot(dx, dz);
+    if (length < 1e-6 || !(height > TOP_RAIL.height)) {
+      return;
+    }
+    const along = [dx / length, dz / length];
+    const across = [-along[1], along[0]];
+    const toWorld = ([u, c, y]) => [run.start[0] + along[0] * u + across[0] * c, run.start[1] + y, run.start[2] + along[1] * u + across[1] * c];
+    railingParts(length, settings, {
+      height, gaps: result.railGaps?.get(run.id) ?? [], posts: posts ? [0, length] : [], obstacles,
+    })
+      .forEach((part) => partTriangles(part).forEach((triangle) => triangles.push(triangle.map(toWorld))));
+  });
+  if (triangles.length) {
+    const mesh = new THREE.Mesh(trianglesToGeometry(triangles), paletteMaterial(normalizeTrim(config.trim).material, 'trim'));
+    mesh.userData = { bodyPart: 'railing' };
+    result.building.add(mesh);
+  }
+}
 
 /**
  * A flight of steps in world space: its profile's "out" along `normal` (in
@@ -720,7 +806,10 @@ function withStructuresAndWalks(built, config, skeletonWalks = []) {
   // railings stop at anything standing on the walk
   const standing = result.structureSolids ?? [];
   delete result.structureSolids;
-  return { ...result, roofWalks: walks.map((walk) => roofWalkFacade(walk, standing)) };
+  const roofWalks = walks.map((walk) => roofWalkFacade(walk, standing));
+  addRailings(result, config, roofWalks);
+  delete result.railGaps;
+  return { ...result, roofWalks };
 }
 
 /**
@@ -1235,12 +1324,9 @@ function spacedPositions(a, b, span) {
  * A square post standing at plan point `at`, pushed inside the structure's
  * rectangle so its faces are flush with the rectangle's sides, from `y0` to `y1`.
  */
-function postBox(bounds, [x, z], y0, y1) {
-  const s = POST_SIZE;
-  const clampTo = (value, lo, hi) => Math.min(Math.max(value - s / 2, lo), hi - s);
-  const px = clampTo(x, bounds.minX, bounds.maxX);
-  const pz = clampTo(z, bounds.minZ, bounds.maxZ);
-  return boxTriangles([px, y0, pz], [px + s, y1, pz + s]);
+function postBox(bounds, at, y0, y1) {
+  const rect = postRect(bounds, at);
+  return boxTriangles([rect.minX, y0, rect.minZ], [rect.maxX, y1, rect.maxZ]);
 }
 
 /**
@@ -1250,6 +1336,11 @@ function postBox(bounds, [x, z], y0, y1) {
  * roof bears on that wall), gets no post.
  */
 function openSidePosts(resolved, solids, bottomY = resolved.sillY) {
+  return openSidePostPoints(resolved, solids).flatMap((point) => postBox(resolved.bounds, point, bottomY, resolved.plateY));
+}
+
+/** Where openSidePosts stands its posts, as plan points (each post pushed inside the rectangle, see postBox). */
+function openSidePostPoints(resolved, solids) {
   const sides = structureWallSides(resolved.frame);
   const { bounds, sillY, plateY } = resolved;
   const closedSides = Object.entries(sides).filter(([wallName]) => !resolved.openSides.includes(wallName)).map(([, side]) => side);
@@ -1271,7 +1362,18 @@ function openSidePosts(resolved, solids, bottomY = resolved.sillY) {
       }
     });
   });
-  return [...points.values()].flatMap((point) => postBox(bounds, point, bottomY, plateY));
+  return [...points.values()];
+}
+
+/** The plan rectangle a post at `point` covers (as postBox places it). */
+function postRect(bounds, [x, z]) {
+  const s = POST_SIZE;
+  const clampTo = (value, lo, hi) => Math.min(Math.max(value - s / 2, lo), hi - s);
+  const minX = clampTo(x, bounds.minX, bounds.maxX);
+  const minZ = clampTo(z, bounds.minZ, bounds.maxZ);
+  return {
+    minX, maxX: minX + s, minZ, maxZ: minZ + s,
+  };
 }
 
 /**

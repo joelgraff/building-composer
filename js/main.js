@@ -17,6 +17,7 @@ import {
   normalizeOpenings, createOpening, fitOpening, structureOpeningHost, shapeLimit, normalizeSteps, flightFor, resolveOpening, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
 } from './openings.js';
 import { normalizeTrim, TRIM_HEIGHT_RANGE, TRIM_PROJECTION_RANGE } from './trim.js';
+import { normalizeRailing } from './railings.js';
 import { exportGlb } from './export.js';
 import { buildGameFile } from './game-export.js';
 import { importDixonFootprint } from './import.js';
@@ -91,6 +92,7 @@ const roofLowerPitchInput = document.getElementById('roof-lower-pitch');
 const roofUpperPitchInput = document.getElementById('roof-upper-pitch');
 const roofWalkField = document.getElementById('roof-walk-field');
 const roofWalkHeightInput = document.getElementById('roof-walk-height');
+const walkRailingControls = document.getElementById('walk-railing-controls');
 const roofWalkSize = document.getElementById('roof-walk-size');
 const structurePresetSelect = document.getElementById('structure-preset');
 const structureSideSelect = document.getElementById('structure-side');
@@ -437,6 +439,8 @@ let modelConfig = {
   openings: [],
   // water table, belt courses, cornice (see js/trim.js)
   trim: normalizeTrim(),
+  // a widow's walk's railings (see js/railings.js)
+  walkRailings: normalizeRailing(),
   // where an imported footprint came from, to put the building back (see import.js)
   placement: undefined,
   // the side the building fronts: walls are named from it (see wallNames)
@@ -1659,6 +1663,7 @@ async function loadFootprint(footprintData, preserveView = true) {
     roofStructures: modelConfig.roofStructures,
     openings: modelConfig.openings,
     trim: modelConfig.trim,
+    walkRailings: modelConfig.walkRailings,
     roofBreakHeight: modelConfig.roofBreakHeight,
     roofLowerPitchRise: modelConfig.roofLowerPitchRise,
     roofUpperPitchRise: modelConfig.roofUpperPitchRise,
@@ -2672,6 +2677,47 @@ function showWalkSize(roofWalks) {
       return `Walk: ${size(0).toFixed(1)} × ${size(1).toFixed(1)} ${label}${walk.pieces.length > 1 ? ' overall' : ''}`;
     }).join('; ')
     : height > 0 ? 'At or above the ridge: no flat top.' : '';
+  walkRailingControls.innerHTML = roofWalks.length ? fieldGroup('Walk railing', railingFieldsHtml(normalizeRailing(modelConfig.walkRailings), 'Railing round the walk')) : '';
+}
+
+walkRailingControls.addEventListener('change', (event) => {
+  const input = event.target.closest('[data-field^="railing."]');
+  if (!input) {
+    return;
+  }
+  modelConfig.walkRailings = applyRailingField(modelConfig.walkRailings, input);
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
+
+/** A railing's fields (see normalizeRailing): on/off, style, height, and spacing (none for a solid panel). */
+function railingFieldsHtml(railing, label) {
+  const styles = [['square', 'Square balusters'], ['turned', 'Turned balusters'], ['flat', 'Flat sawn boards'], ['panel', 'Solid panel'], ['bars', 'Horizontal bars']];
+  const parts = [checkField(label, 'railing.enabled', railing.enabled)];
+  if (!railing.enabled) {
+    return parts;
+  }
+  parts.push(selectField('Style', 'railing.style', styles, railing.style));
+  parts.push(numberField('Height', 'railing.height', railing.height, { step: 0.05 }));
+  if (railing.style !== 'panel') {
+    parts.push(numberField(railing.style === 'bars' ? 'Bar spacing' : 'Baluster spacing', 'railing.spacing', railing.spacing, { step: 0.01 }));
+  }
+  return parts;
+}
+
+/** A railing record with one edited field applied (see railingFieldsHtml). */
+function applyRailingField(railing, input) {
+  const next = { ...normalizeRailing(railing) };
+  const given = input.value !== '' && Number.isFinite(Number(input.value));
+  switch (input.dataset.field.slice('railing.'.length)) {
+    case 'enabled': next.enabled = input.checked; break;
+    case 'style': next.style = input.value; break;
+    case 'height': if (given) { next.height = Number(input.value) / unitFactor(); } break;
+    case 'spacing': if (given) { next.spacing = Number(input.value) / unitFactor(); } break;
+    default: break;
+  }
+  return normalizeRailing(next);
 }
 
 function setRoofShapeValue(key, buildingKey, value) {
@@ -3510,6 +3556,9 @@ function structureEditorHtml(structure) {
 
   const openings = ['<div class="field"><label>Open sides</label>'
     + STRUCTURE_WALLS.map((wall) => checkField(wall, `open:${wall}`, structure.openSides.includes(wall))).join('') + '</div>'];
+  const railingFields = structure.kind === 'porch' && structure.openSides.length && type !== 'hood'
+    ? railingFieldsHtml(normalizeRailing(structure.railings), 'Railings along the open sides')
+    : [];
 
   // a ground-level porch deck open at the front has steps down to grade (see withPorchSteps in extrusion.js)
   const built = activeStructureEntries.find((candidate) => candidate.id === structure.id)?.resolved;
@@ -3534,6 +3583,7 @@ function structureEditorHtml(structure) {
     + fieldGroup('Height', height)
     + fieldGroup('Roof', roof)
     + fieldGroup('Openings', openings)
+    + fieldGroup('Railings', railingFields)
     + fieldGroup('Steps', stepsFields)
     + fieldGroup('Materials', materials);
 }
@@ -3676,6 +3726,8 @@ function applyStructureFieldEdit(input) {
       edited.wrap.endLength = span(walls[walls.length - 1]);
     }
     edited.hostSide = walls[0];
+  } else if (field.startsWith('railing.')) {
+    edited.railings = applyRailingField(record.railings, input);
   } else if (field.startsWith('steps.')) {
     const built = activeStructureEntries.find((candidate) => candidate.id === record.id)?.resolved;
     edited.steps = applyStepsField(record.steps, input, built ? flightFor(normalizeSteps(record.steps), built.sillY, { deck: true }) : null);

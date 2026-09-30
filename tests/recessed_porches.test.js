@@ -51,8 +51,8 @@ describe('porches recessed into the house', () => {
     assert.deepEqual(entry.errors, []);
     const { resolved } = entry;
     assert.deepEqual(resolved.bounds, { minX: -1.5, maxX: 1.5, minZ: 2.6, maxZ: 5 });
-    // sample the opening: no host wall or facade panel covers any point of it
-    const hostBody = trianglesOf(result, (data) => Boolean(data.bodyPart));
+    // sample the opening: no host wall or facade panel covers any point of it (the porch's own railing stands in it)
+    const hostBody = trianglesOf(result, (data) => Boolean(data.bodyPart) && data.bodyPart !== 'railing');
     const covers = ([a, b, c], [x, y]) => {
       if (![a, b, c].every((p) => Math.abs(p[2] - 5) < 0.1)) return false;
       const d = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);

@@ -3,6 +3,7 @@ import { hasAngledWalls, rectilinearHull, cutVolumes, cutDistance } from './angl
 import { cutRole } from './cut-roofs.js';
 import { normalizeOpenings } from './openings.js';
 import { normalizeTrim } from './trim.js';
+import { normalizeRailing } from './railings.js';
 
 /**
  * Facade subdivision helpers for Task 3.
@@ -673,6 +674,7 @@ export function serializeBuildingState(layout, modelConfig) {
     roofStructures: modelConfig.roofStructures ?? [],
     openings: modelConfig.openings ?? [],
     trim: normalizeTrim(modelConfig.trim),
+    walkRailings: normalizeRailing(modelConfig.walkRailings),
     // where the footprint came from, to put the building back (see import.js)
     placement: modelConfig.placement ?? null,
     // the side the building fronts (walls are named from it)
@@ -798,6 +800,8 @@ export function deserializeBuildingState(data) {
       openings,
       // trim courses; an older file has none, so every course is off
       trim: normalizeTrim(data.trim),
+      // a widow's walk's railings; an older file's walk has the plain default
+      walkRailings: normalizeRailing(data.walkRailings),
       placement: data.placement && typeof data.placement === 'object' ? data.placement : undefined,
       frontSide: ['minX', 'maxX', 'minZ', 'maxZ'].includes(data.frontSide) ? data.frontSide : 'maxZ',
     },
