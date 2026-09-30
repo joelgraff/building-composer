@@ -2,7 +2,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import { validateFootprint, normalizeFootprint, computeFootprintMetrics } from './footprint.js';
 import {
-  createBuildingFromFootprint, volumeWallHeight, volumeFoundationHeight, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS, porchStepTravel, PORCH_STEP_WIDTH, volumeStories,
+  createBuildingFromFootprint, volumeWallHeight, volumeFoundationHeight, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS, porchStepTravel, PORCH_STEP_WIDTH, volumeStories, evalZoneHeight,
 } from './extrusion.js';
 import {
   normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS, structureFrame, structureWallSides, resolveRoofStructure, MAX_BRACKET_PROJECTION, hostEaveProfile,
@@ -102,6 +102,9 @@ const roofLowerPitchInput = document.getElementById('roof-lower-pitch');
 const roofUpperPitchInput = document.getElementById('roof-upper-pitch');
 const roofWalkField = document.getElementById('roof-walk-field');
 const roofWalkHeightInput = document.getElementById('roof-walk-height');
+const roofWalkEnabledInput = document.getElementById('roof-walk-enabled');
+const roofWalkSlider = document.getElementById('roof-walk-slider');
+const roofWalkHeightRow = document.getElementById('roof-walk-height-row');
 const walkRailingControls = document.getElementById('walk-railing-controls');
 const roofWalkSize = document.getElementById('roof-walk-size');
 const structurePresetSelect = document.getElementById('structure-preset');
@@ -2940,8 +2943,63 @@ function syncRoofShapeFields(roofType) {
     roofLowerPitchInput.value = String(pick('lowerPitchRise', 'roofLowerPitchRise'));
     roofUpperPitchInput.value = String(pick('upperPitchRise', 'roofUpperPitchRise'));
   }
-  const walk = own.walkHeight ?? modelConfig.roofWalkHeight;
-  roofWalkHeightInput.value = Number.isFinite(walk) ? (walk * unitFactor()).toFixed(1) : '';
+  syncWalkControls();
+}
+
+/** The lowest a widow's walk can be set (meters above the plate). */
+const MIN_WALK_HEIGHT = 0.3;
+
+/** The widow's walk height for the selected volume, or the building's; undefined for none. */
+function walkHeightSetting() {
+  const target = volumeShapeTarget();
+  const own = target ? modelConfig.volumeRoofShapes[target]?.walkHeight : undefined;
+  const walk = own ?? modelConfig.roofWalkHeight;
+  return walk > 0 ? walk : undefined;
+}
+
+/**
+ * How high the hip rises without a walk (its ridge, above the plate), for
+ * the selected volume or the whole building: from the built roof's own
+ * slopes (its flat walk left aside), or the building's roof rise.
+ */
+function hipRidgeHeight() {
+  const target = volumeShapeTarget();
+  const peaks = activeRoofZones.filter((zone) => zone.roofType === 'hip' && (!target || zone.volumeId === target) && zone.bounds).map((zone) => {
+    const slopes = (zone.planes ?? []).filter((plane) => plane.tier !== 'walk' && !Number.isFinite(plane.constantHeight));
+    return slopes.length ? evalZoneHeight(slopes, (zone.bounds.minX + zone.bounds.maxX) / 2, (zone.bounds.minZ + zone.bounds.maxZ) / 2) : 0;
+  });
+  // (a continuous hip's zones may carry no slopes to read: then the building's rise)
+  const found = peaks.filter((peak) => Number.isFinite(peak) && peak > 0);
+  return Math.max(MIN_WALK_HEIGHT + 0.2, ...(found.length ? found : [modelConfig.roofHeight ?? 0]));
+}
+
+/** The widow's walk switch, and its height's slider and box (from just above the plate to just under the ridge). */
+function syncWalkControls() {
+  const walk = walkHeightSetting();
+  const factor = unitFactor();
+  const max = hipRidgeHeight() - 0.05;
+  roofWalkEnabledInput.checked = walk !== undefined;
+  roofWalkHeightRow.style.display = walk !== undefined ? '' : 'none';
+  roofWalkSlider.min = (MIN_WALK_HEIGHT * factor).toFixed(2);
+  roofWalkSlider.max = (max * factor).toFixed(2);
+  roofWalkHeightInput.min = roofWalkSlider.min;
+  roofWalkHeightInput.max = roofWalkSlider.max;
+  if (walk !== undefined) {
+    roofWalkSlider.value = String(walk * factor);
+    // (the box shows the value the slider stands at; left alone while it's being typed in)
+    if (document.activeElement !== roofWalkHeightInput) {
+      roofWalkHeightInput.value = (walk * factor).toFixed(2);
+    }
+  }
+}
+
+/** Sets the walk height (display units in), kept between just above the plate and just under the ridge. */
+function setWalkHeight(displayValue) {
+  const meters = Number(displayValue) / unitFactor();
+  if (!Number.isFinite(meters)) {
+    return;
+  }
+  setRoofShapeValue('walkHeight', 'roofWalkHeight', Math.min(Math.max(meters, MIN_WALK_HEIGHT), hipRidgeHeight() - 0.05));
 }
 
 /** Under the widow's walk height: the size of the flat top it makes (for the selected volume, or all). */
@@ -2960,6 +3018,8 @@ function showWalkSize(roofWalks) {
     }).join('; ')
     : height > 0 ? 'At or above the ridge: no flat top.' : '';
   walkRailingControls.innerHTML = roofWalks.length ? fieldGroup('Walk railing', railingFieldsHtml(normalizeRailing(modelConfig.walkRailings), 'Railing round the walk')) : '';
+  // the ridge the walk has to stay under is known now the roof is built
+  syncWalkControls();
 }
 
 walkRailingControls.addEventListener('change', (event) => {
@@ -3029,9 +3089,17 @@ roofLowerPitchInput.addEventListener('change', () => {
 roofUpperPitchInput.addEventListener('change', () => {
   setRoofShapeValue('upperPitchRise', 'roofUpperPitchRise', Math.max(0, Number(roofUpperPitchInput.value) || 0));
 });
+roofWalkEnabledInput.addEventListener('change', () => {
+  // turned on, the walk starts two thirds of the way up to the ridge
+  setRoofShapeValue('walkHeight', 'roofWalkHeight', roofWalkEnabledInput.checked ? Math.max(MIN_WALK_HEIGHT, hipRidgeHeight() * (2 / 3)) : undefined);
+});
+roofWalkSlider.addEventListener('input', () => {
+  roofWalkHeightInput.value = Number(roofWalkSlider.value).toFixed(2);
+  setWalkHeight(roofWalkSlider.value);
+});
 roofWalkHeightInput.addEventListener('change', () => {
-  const value = Number(roofWalkHeightInput.value);
-  setRoofShapeValue('walkHeight', 'roofWalkHeight', roofWalkHeightInput.value === '' || !(value > 0) ? undefined : value / unitFactor());
+  setWalkHeight(roofWalkHeightInput.value);
+  roofWalkHeightInput.value = ((walkHeightSetting() ?? 0) * unitFactor()).toFixed(2);
 });
 
 // --- Roof structures -----------------------------------------------------------
