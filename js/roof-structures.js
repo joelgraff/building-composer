@@ -17,6 +17,7 @@ import {
 } from './roof-planes.js';
 import { normalizeSteps } from './openings.js';
 import { normalizeRailing } from './railings.js';
+import { normalizePostStyle } from './posts.js';
 
 /** Default tolerance: faces within this distance of a solid's boundary count as inside. */
 export const SOLID_EPSILON = 1e-4;
@@ -342,6 +343,7 @@ function normalizeRoofShape(shape) {
  *   seen from outside, facing the front wall).
  * - `steps` (a porch's only): its steps from the deck down to grade, see
  *   normalizeSteps in js/openings.js.
+ * - `postStyle` (a porch's only): its posts' style, see js/posts.js.
  * - `railings` (a porch's only): the railings along its open sides (on
  *   unless turned off; style, height, spacing: see normalizeRailing in
  *   js/railings.js).
@@ -409,7 +411,7 @@ export function normalizeRoofStructure(raw) {
     eaves: plainObject(raw.eaves),
     materials: plainObject(raw.materials),
     // a porch's steps from its deck to grade (built for a ground-level deck open at the front)
-    ...(kind === 'porch' ? { steps: normalizeSteps(raw.steps), railings: normalizeRailing(raw.railings) } : {}),
+    ...(kind === 'porch' ? { steps: normalizeSteps(raw.steps), railings: normalizeRailing(raw.railings), postStyle: normalizePostStyle(raw.postStyle) } : {}),
   };
 }
 
@@ -1044,6 +1046,7 @@ function resolveStructureOnce(structure, host, config = {}) {
       materials: structure.materials,
       // a porch's steps (where its posts frame their opening; see porchStepOpening in extrusion.js)
       steps: structure.steps,
+      postStyle: structure.postStyle,
     },
     errors,
     warnings,

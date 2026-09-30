@@ -31,6 +31,7 @@ import {
   normalizeChimneys, chimneyPlan, chimneyParts, partTriangles as chimneyPartTriangles, CHIMNEY_REACH,
 } from './chimneys.js';
 import { gutterRing, downspoutParts, GUTTER_PROFILE } from './gutters.js';
+import { postTriangles } from './posts.js';
 import {
   normalizeInterior, insetOutline, shellTriangles, apertureSolid, apertureReveals, doorLeaf, CEILING_BAND,
 } from './interior.js';
@@ -1819,9 +1820,10 @@ function spacedPositions(a, b, span) {
  * A square post standing at plan point `at`, pushed inside the structure's
  * rectangle so its faces are flush with the rectangle's sides, from `y0` to `y1`.
  */
-function postBox(bounds, at, y0, y1) {
+function postBox(bounds, at, y0, y1, style = 'square') {
   const rect = postRect(bounds, at);
-  return boxTriangles([rect.minX, y0, rect.minZ], [rect.maxX, y1, rect.maxZ]);
+  // a styled post (js/posts.js) stands in the same square
+  return style && style !== 'square' ? postTriangles(style, rect, y0, y1) : boxTriangles([rect.minX, y0, rect.minZ], [rect.maxX, y1, rect.maxZ]);
 }
 
 /**
@@ -1831,7 +1833,7 @@ function postBox(bounds, at, y0, y1) {
  * roof bears on that wall), gets no post.
  */
 function openSidePosts(resolved, solids, bottomY = resolved.sillY) {
-  return openSidePostPoints(resolved, solids).flatMap((point) => postBox(resolved.bounds, point, bottomY, resolved.plateY));
+  return openSidePostPoints(resolved, solids).flatMap((point) => postBox(resolved.bounds, point, bottomY, resolved.plateY, resolved.postStyle));
 }
 
 /** Where openSidePosts stands its posts, as plan points (each post pushed inside the rectangle, see postBox). */

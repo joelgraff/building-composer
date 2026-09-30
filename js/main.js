@@ -3851,6 +3851,10 @@ function structureEditorHtml(structure) {
 
   const openings = ['<div class="field"><label>Open sides</label>'
     + STRUCTURE_WALLS.map((wall) => checkField(wall, `open:${wall}`, structure.openSides.includes(wall))).join('') + '</div>'];
+  // a porch's posts stand along its open sides
+  const postFields = structure.kind === 'porch' && structure.openSides.length && type !== 'hood'
+    ? [selectField('Posts', 'postStyle', [['square', 'Square'], ['tapered', 'Tapered (craftsman)'], ['round', 'Round columns'], ['turned', 'Turned']], structure.postStyle ?? 'square')]
+    : [];
   const railingFields = structure.kind === 'porch' && structure.openSides.length && type !== 'hood'
     ? railingFieldsHtml(normalizeRailing(structure.railings), 'Railings along the open sides')
     : [];
@@ -3878,6 +3882,7 @@ function structureEditorHtml(structure) {
     + fieldGroup('Height', height)
     + fieldGroup('Roof', roof)
     + fieldGroup('Openings', openings)
+    + fieldGroup('Posts', postFields)
     + fieldGroup('Railings', railingFields)
     + fieldGroup('Steps', stepsFields)
     + fieldGroup('Materials', materials);
@@ -4145,6 +4150,7 @@ function applyStructureFieldEdit(input) {
       case 'pitch': edited.roofShape = input.value === '' ? null : { mode: 'slope', pitchRise: Math.max(0, Number(input.value) || 0) }; break;
       case 'join': edited.join = input.value; break;
       case 'support': edited.support = input.value; break;
+      case 'postStyle': edited.postStyle = input.value; break;
       case 'planShape': edited.plan = input.value ? { shape: input.value } : null; break;
       case 'planAngle': edited.plan = { ...edited.plan, angle: Number(input.value) || 45 }; break;
       case 'planSides': edited.plan = { ...edited.plan, sides: clamp(Math.round(Number(input.value) || 8), 5, 32) }; break;
