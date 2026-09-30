@@ -8,6 +8,7 @@ import {
 import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState } from '../js/facade.js';
 import { createBuildingFromFootprint } from '../js/extrusion.js';
 import { normalizeRoofStructures } from '../js/roof-structures.js';
+import { RAILING_DEFAULTS, NEWEL } from '../js/railings.js';
 
 const wallRun = (overrides = {}) => ({
   id: 'wall-run-0',
@@ -270,7 +271,7 @@ describe('windows on a roof structure\'s own walls', () => {
 describe('entry steps', () => {
   it('a door has steps unless turned off; a window never does', () => {
     assert.deepEqual(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door' }).steps, {
-      enabled: true, width: null, tread: STEP_TREAD, riser: 0.18, count: null, offset: 0, landing: null, direction: 'front',
+      enabled: true, width: null, tread: STEP_TREAD, riser: 0.18, count: null, offset: 0, landing: null, direction: 'front', railings: { ...RAILING_DEFAULTS, enabled: false },
     });
     assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door', steps: false }).steps.enabled, false, 'an older file\'s plain off');
     assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door', steps: true }).steps.enabled, true);
@@ -373,7 +374,7 @@ describe('entry steps', () => {
       width: 20, tread: 0.1, riser: 0.4, count: 3.6, landing: 9, direction: 'up',
     });
     assert.deepEqual(steps, {
-      enabled: true, width: 8, tread: 0.2, riser: 0.25, count: 4, offset: 0, landing: 4, direction: 'front',
+      enabled: true, width: 8, tread: 0.2, riser: 0.25, count: 4, offset: 0, landing: 4, direction: 'front', railings: { ...RAILING_DEFAULTS, enabled: false },
     });
   });
 
@@ -432,6 +433,51 @@ describe('entry steps', () => {
       if (wx > left.box.max.x - 0.2) farTop = Math.max(farTop, wy);
     }
     assert.ok(Math.abs(farTop - 0.7 / 4) < 1e-6, `${farTop}`);
+  });
+
+  const railingOf = (built) => {
+    const points = [];
+    built.building.updateMatrixWorld(true);
+    built.building.traverse((mesh) => {
+      if (mesh.userData?.bodyPart === 'railing') {
+        const p = mesh.geometry.getAttribute('position');
+        for (let i = 0; i < p.count; i += 1) points.push([p.getX(i), p.getY(i), p.getZ(i)]);
+      }
+    });
+    return points;
+  };
+
+  it('rails a door\'s flight when asked: level along the landing, sloping down the flight, a newel at its foot', () => {
+    assert.equal(railingOf(build([{ kind: 'door', hostWallRunId: 'wall-run-0', offset: 1 }])).length, 0, 'off unless turned on');
+    const points = railingOf(build([{ kind: 'door', hostWallRunId: 'wall-run-0', offset: 1, steps: { railings: { enabled: true } } }]));
+    assert.ok(points.length > 0);
+    // wall-run-0 faces -z from z = -4: the flight's foot is at z = -4 - (0.9 + 3 * 0.28)
+    const foot = -4 - (STEP_LANDING + 3 * STEP_TREAD);
+    assert.ok(Math.abs(Math.min(...points.map(([, , z]) => z)) - (foot - NEWEL.width / 2)) < 0.06, 'down to the flight\'s foot');
+    const topAt = (z) => Math.max(...points.filter(([, , pz]) => Math.abs(pz - z) < 0.05).map(([, y]) => y));
+    // (a rail's corners are at its ends: sample by the wall, where the landing's rail starts)
+    assert.ok(Math.abs(topAt(-4.02) - (0.7 + 1)) < 1e-6, 'level along the landing');
+    assert.ok(topAt(-5.2) < 0.7 + 1 - 0.1, 'sloping down the flight');
+  });
+
+  it('rails a stoop round its landing and down its flight\'s outer side, not against the wall', () => {
+    const points = railingOf(build([{
+      kind: 'door', hostWallRunId: 'wall-run-0', offset: 1, steps: { landing: 1.5, direction: 'left', railings: { enabled: true } },
+    }]));
+    assert.ok(points.length > 0);
+    // the flight runs toward +x off the landing; its only railing is along the landing's front edge line
+    const alongFlight = points.filter(([x]) => x > 1 + 0.9 / 2 + FRAME_CASING_WIDTH + STEP_SIDE_MARGIN + 0.1);
+    assert.ok(alongFlight.length > 0 && alongFlight.every(([, , z]) => z < -5.3), 'on its outer side only');
+  });
+
+  it('rails a porch\'s steps down both sides when asked', () => {
+    const points = railingOf(build([], {
+      roofStructures: normalizeRoofStructures([porch({ railings: { enabled: false }, steps: { railings: { enabled: true, style: 'bars' } } })]),
+    }));
+    // the flight comes down from the porch front at z = -6.4, 1.5 m wide round x = 1
+    assert.ok(points.length > 0);
+    assert.ok(points.every(([x, , z]) => z <= -6.4 + 1e-6 && Math.abs(x - 1) <= 0.75 + 1e-6));
+    assert.ok(points.some(([x]) => x < 1 - 0.6) && points.some(([x]) => x > 1 + 0.6), 'both sides');
   });
 
   it('saves whether a door has steps', () => {

@@ -1300,6 +1300,7 @@ function stepsFieldsHtml(steps, flight, { travel = null, door = false } = {}) {
     const runs = door && steps.direction !== 'front' ? 'along the wall' : 'out';
     parts.push(`<div class="scope-empty">${flight.built} ${flight.built === 1 ? 'step' : 'steps'}, ${formatLength(flight.riser, 2)} risers, running ${runs} ${formatLength(flight.depth, 1)}</div>`);
   }
+  parts.push(...railingFieldsHtml(steps.railings, 'Railings on the steps', 'steps.railing'));
   return parts;
 }
 
@@ -1314,6 +1315,9 @@ function porchStepsTravel(structure, built) {
 /** A steps record with one edited field applied (see stepsFieldsHtml); switching to a count starts from the steps it has now. */
 function applyStepsField(steps, input, flight) {
   const next = { ...normalizeSteps(steps) };
+  if (input.dataset.field.startsWith('steps.railing.')) {
+    return normalizeSteps({ ...next, railings: applyRailingField(next.railings, input, 'steps.railing') });
+  }
   const meters = Number(input.value) / unitFactor();
   const given = input.value !== '' && Number.isFinite(Number(input.value));
   switch (input.dataset.field.slice('steps.'.length)) {
@@ -2758,25 +2762,25 @@ walkRailingControls.addEventListener('change', (event) => {
 });
 
 /** A railing's fields (see normalizeRailing): on/off, style, height, and spacing (none for a solid panel). */
-function railingFieldsHtml(railing, label) {
+function railingFieldsHtml(railing, label, prefix = 'railing') {
   const styles = [['square', 'Square balusters'], ['turned', 'Turned balusters'], ['flat', 'Flat sawn boards'], ['panel', 'Solid panel'], ['bars', 'Horizontal bars']];
-  const parts = [checkField(label, 'railing.enabled', railing.enabled)];
+  const parts = [checkField(label, `${prefix}.enabled`, railing.enabled)];
   if (!railing.enabled) {
     return parts;
   }
-  parts.push(selectField('Style', 'railing.style', styles, railing.style));
-  parts.push(numberField('Height', 'railing.height', railing.height, { step: 0.05 }));
+  parts.push(selectField('Style', `${prefix}.style`, styles, railing.style));
+  parts.push(numberField('Height', `${prefix}.height`, railing.height, { step: 0.05 }));
   if (railing.style !== 'panel') {
-    parts.push(numberField(railing.style === 'bars' ? 'Bar spacing' : 'Baluster spacing', 'railing.spacing', railing.spacing, { step: 0.01 }));
+    parts.push(numberField(railing.style === 'bars' ? 'Bar spacing' : 'Baluster spacing', `${prefix}.spacing`, railing.spacing, { step: 0.01 }));
   }
   return parts;
 }
 
 /** A railing record with one edited field applied (see railingFieldsHtml). */
-function applyRailingField(railing, input) {
+function applyRailingField(railing, input, prefix = 'railing') {
   const next = { ...normalizeRailing(railing) };
   const given = input.value !== '' && Number.isFinite(Number(input.value));
-  switch (input.dataset.field.slice('railing.'.length)) {
+  switch (input.dataset.field.slice(`${prefix}.`.length)) {
     case 'enabled': next.enabled = input.checked; break;
     case 'style': next.style = input.value; break;
     case 'height': if (given) { next.height = Number(input.value) / unitFactor(); } break;

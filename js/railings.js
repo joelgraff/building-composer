@@ -68,17 +68,25 @@ export function normalizeRailing(raw) {
  * long, left out across `gaps` ([from, to] along the run), with newel posts
  * at `posts` and just outside each gap (where no post stands already). Rails and balusters stop at the
  * faces of every post: its newels, and `obstacles` ([from, to] along the
- * run) standing there already (a porch's own posts). A part is a box ({ u0,
- * u1, c0, c1, y0, y1 }) or a turned baluster ({ turned: true, u, y0, y1 });
- * `part` names which piece of the railing it is.
+ * run) standing there already (a porch's own posts). A run that falls
+ * `drop` from its start to its end (a stair's) keeps the same height above
+ * its sloping line: its rails, bars, and panel slope with it, its balusters
+ * and newels stand plumb. A part is a box ({ u0, u1, c0, c1, y0, y1 }, raised
+ * `lift0` at u0 and `lift1` at u1) or a turned baluster ({ turned: true, u,
+ * y0, y1, lift0 }); `part` names which piece of the railing it is.
  */
 export function railingParts(length, settings, {
-  height = settings.height, gaps = [], posts = [], obstacles = [],
+  height = settings.height, gaps = [], posts = [], obstacles = [], drop = 0,
 } = {}) {
   const parts = [];
-  const box = (part, u0, u1, width, y0, y1) => parts.push({
-    part, u0, u1, c0: -width / 2, c1: width / 2, y0, y1,
-  });
+  const liftAt = (u) => (length > 0 ? -drop * (u / length) : 0);
+  // rails, bars, and panels slope; balusters and newels stand plumb at their center
+  const box = (part, u0, u1, width, y0, y1, plumb = part === 'baluster' || part === 'newel') => {
+    const [lift0, lift1] = plumb ? [liftAt((u0 + u1) / 2), liftAt((u0 + u1) / 2)] : [liftAt(u0), liftAt(u1)];
+    parts.push({
+      part, u0, u1, c0: -width / 2, c1: width / 2, y0, y1, lift0, lift1,
+    });
+  };
   const railBottom = height - TOP_RAIL.height;
   const lowTop = BOTTOM_RAIL.lift + BOTTOM_RAIL.height;
   // a gap's newels stand just outside it, unless a post already stands there
@@ -114,11 +122,11 @@ export function railingParts(length, settings, {
       const u = a + space * (i + 0.5);
       if (settings.style === 'turned') {
         parts.push({
-          part: 'baluster', turned: true, u, y0: lowTop, y1: railBottom,
+          part: 'baluster', turned: true, u, y0: lowTop, y1: railBottom, lift0: liftAt(u),
         });
       } else if (settings.style === 'flat') {
         parts.push({
-          part: 'baluster', u0: u - FLAT_BOARD.width / 2, u1: u + FLAT_BOARD.width / 2, c0: -FLAT_BOARD.thickness / 2, c1: FLAT_BOARD.thickness / 2, y0: lowTop, y1: railBottom,
+          part: 'baluster', u0: u - FLAT_BOARD.width / 2, u1: u + FLAT_BOARD.width / 2, c0: -FLAT_BOARD.thickness / 2, c1: FLAT_BOARD.thickness / 2, y0: lowTop, y1: railBottom, lift0: liftAt(u), lift1: liftAt(u),
         });
       } else {
         box('baluster', u - SQUARE_WIDTH / 2, u + SQUARE_WIDTH / 2, SQUARE_WIDTH, lowTop, railBottom);
@@ -137,11 +145,11 @@ export function partTriangles(part) {
     return turnedTriangles(part);
   }
   const {
-    u0, u1, c0, c1, y0, y1,
+    u0, u1, c0, c1, y0, y1, lift0 = 0, lift1 = lift0,
   } = part;
   const corners = [
-    [u0, c0, y0], [u1, c0, y0], [u1, c1, y0], [u0, c1, y0],
-    [u0, c0, y1], [u1, c0, y1], [u1, c1, y1], [u0, c1, y1],
+    [u0, c0, y0 + lift0], [u1, c0, y0 + lift1], [u1, c1, y0 + lift1], [u0, c1, y0 + lift0],
+    [u0, c0, y1 + lift0], [u1, c0, y1 + lift1], [u1, c1, y1 + lift1], [u0, c1, y1 + lift0],
   ];
   const quad = (a, b, c, d) => [[corners[a], corners[b], corners[c]], [corners[a], corners[c], corners[d]]];
   return [
@@ -149,7 +157,10 @@ export function partTriangles(part) {
   ];
 }
 
-function turnedTriangles({ u, y0, y1 }) {
+function turnedTriangles({
+  u, y0: bottom, y1: top, lift0 = 0,
+}) {
+  const [y0, y1] = [bottom + lift0, top + lift0];
   const rings = TURNED_PROFILE.map(([t, r]) => {
     const y = y0 + (y1 - y0) * t;
     return Array.from({ length: TURNED_SEGMENTS }, (_, k) => {

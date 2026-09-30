@@ -6,7 +6,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { createMaterials, MATERIAL_PALETTE, paletteMaterial, glazingMaterial } from './materials.js';
 import { roofAxisForDirection, findVolumeAdjacencies, wallRunFrame } from './facade.js';
 import {
-  resolveOpening, openingOutline, structureOpeningHost, normalizeSteps, flightFor, doorStepPieces, FRAME_DEPTH, PANE_RECESS, FRAME_CASING_WIDTH, STEP_SIDE_MARGIN,
+  resolveOpening, openingOutline, structureOpeningHost, normalizeSteps, flightFor, doorStepPieces, doorStepRails, STEP_RAIL_INSET, FRAME_DEPTH, PANE_RECESS, FRAME_CASING_WIDTH, STEP_SIDE_MARGIN,
 } from './openings.js';
 import {
   normalizeTrim, normalizeWallTrim, courseOn, TRIM_KINDS, courseProfile, profileExtent, subtractIntervals, sweepCourse, dentilSize, dentilTriangles, floorLines,
@@ -301,7 +301,23 @@ function withPorchSteps(result, config) {
       return;
     }
     const center = opening.point((opening.from + opening.to) / 2);
-    result.building.add(buildStepsAt(center, PORCH_OUTWARD[opening.side], opening.width, opening.flight, material, { structureId: resolved.id, bodyPart: 'porch-steps' }));
+    const normal = PORCH_OUTWARD[opening.side];
+    result.building.add(buildStepsAt(center, normal, opening.width, opening.flight, material, { structureId: resolved.id, bodyPart: 'porch-steps' }));
+    // railings down both sides of the flight, from the deck's edge (a post frames each side there)
+    const steps = normalizeSteps(resolved.steps);
+    if (steps.railings.enabled) {
+      const { flight } = opening;
+      result.stairRails = result.stairRails ?? [];
+      [opening.from + STEP_RAIL_INSET, opening.to - STEP_RAIL_INSET].forEach((t, i) => {
+        const [x, z] = opening.point(t);
+        result.stairRails.push({
+          run: { id: `${resolved.id}-stair-rail-${i}`, start: [x, resolved.sillY, z], end: [x + normal[0] * flight.depth, flight.riser, z + normal[1] * flight.depth] },
+          settings: steps.railings,
+          stair: true,
+          top: false,
+        });
+      });
+    }
     // the front railing opens where the steps come up
     const front = (facades.get(resolved.id)?.railRuns ?? []).filter((run) => run.wall === 'front')
       .find((run) => {
@@ -419,9 +435,17 @@ function addRailings(result, config, roofWalks) {
       run, settings: walkSettings, height: walkSettings.height, posts: true, obstacles: [],
     }));
   }
+  (result.stairRails ?? []).forEach(({
+    run, settings, stair, top = true,
+  }) => {
+    const length = Math.hypot(run.end[0] - run.start[0], run.end[2] - run.start[2]);
+    runs.push({
+      run, settings, height: settings.height, posts: stair ? [...(top ? [0] : []), length] : false, obstacles: [], drop: run.start[1] - run.end[1],
+    });
+  });
   const triangles = [];
   runs.forEach(({
-    run, settings, height, posts, obstacles,
+    run, settings, height, posts, obstacles, drop = 0,
   }) => {
     const [dx, dz] = [run.end[0] - run.start[0], run.end[2] - run.start[2]];
     const length = Math.hypot(dx, dz);
@@ -432,7 +456,7 @@ function addRailings(result, config, roofWalks) {
     const across = [-along[1], along[0]];
     const toWorld = ([u, c, y]) => [run.start[0] + along[0] * u + across[0] * c, run.start[1] + y, run.start[2] + along[1] * u + across[1] * c];
     railingParts(length, settings, {
-      height, gaps: result.railGaps?.get(run.id) ?? [], posts: posts ? [0, length] : [], obstacles,
+      height, gaps: result.railGaps?.get(run.id) ?? [], posts: Array.isArray(posts) ? posts : (posts ? [0, length] : []), obstacles, drop,
     })
       .forEach((part) => partTriangles(part).forEach((triangle) => triangles.push(triangle.map(toWorld))));
   });
@@ -533,6 +557,19 @@ function withOpenings(result, config) {
       const doorFlight = opening.kind === 'door' && steps.enabled && wallRun ? doorStepPieces(steps, host.baseY + resolved.sillHeight, width) : null;
       const flight = doorFlight && !doorStepsBlocked(resolved, doorFlight, standingPlans) ? doorFlight : null;
       result.building.add(buildOpeningMeshes(resolved, materials, glazing, flight));
+      if (flight && steps.railings.enabled) {
+        // the door's frame to world: u across the wall from the door's center, d out from it
+        const { start, end, normal } = resolved.frame;
+        const length = Math.hypot(end[0] - start[0], end[1] - start[1]);
+        const right = [(end[0] - start[0]) / length, (end[1] - start[1]) / length];
+        const center = (start[0] + end[0]) / 2 + right[0] * (resolved.u0 + resolved.u1) / 2;
+        const centerZ = (start[1] + end[1]) / 2 + right[1] * (resolved.u0 + resolved.u1) / 2;
+        const world = ([u, y, d]) => [center + right[0] * u + normal[0] * d, y, centerZ + right[1] * u + normal[1] * d];
+        result.stairRails = result.stairRails ?? [];
+        doorStepRails(steps, host.baseY + resolved.sillHeight, width, flight).forEach((rail, i) => result.stairRails.push({
+          run: { id: `${opening.id}-stair-rail-${i}`, start: world(rail.start), end: world(rail.end) }, settings: steps.railings, stair: rail.stair,
+        }));
+      }
     }
     return {
       id: opening.id, opening, host, resolved, errors, warnings,
@@ -870,6 +907,7 @@ function withStructuresAndWalks(built, config, skeletonWalks = []) {
   const roofWalks = walks.map((walk) => roofWalkFacade(walk, standing));
   addRailings(result, config, roofWalks);
   delete result.railGaps;
+  delete result.stairRails;
   return { ...result, roofWalks };
 }
 

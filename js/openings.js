@@ -42,6 +42,8 @@ export const STEP_LANDING_RANGE = Object.freeze([0.6, 4]);
 /** Which way a door's flight runs down from its landing: straight out, or along the wall to the left or right (as seen from outside). */
 export const STEP_DIRECTIONS = Object.freeze(['front', 'left', 'right']);
 
+import { normalizeRailing } from './railings.js';
+
 const finite = (value, fallback) => (Number.isFinite(value) ? value : fallback);
 const plainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {});
 
@@ -382,6 +384,8 @@ export function shapeLimit(opening, host, field, from, to) {
  *   STEP_LANDING; with a deep landing and a flight off its side, a stoop.
  * - `direction` (a door's): which way the flight runs from the landing, see
  *   STEP_DIRECTIONS.
+ * - `railings`: railings up the flight's open sides and round a stoop's
+ *   landing (see normalizeRailing in js/railings.js; off unless turned on).
  */
 export function normalizeSteps(raw) {
   const source = raw === false ? { enabled: false } : raw && typeof raw === 'object' ? raw : {};
@@ -396,6 +400,8 @@ export function normalizeSteps(raw) {
     offset: Number.isFinite(source.offset) ? source.offset : 0,
     landing: inRange(source.landing, STEP_LANDING_RANGE),
     direction: STEP_DIRECTIONS.includes(source.direction) ? source.direction : 'front',
+    // railings up the flight's open sides (and round a stoop's landing): off unless turned on
+    railings: normalizeRailing(source.railings ?? { enabled: false }),
   };
 }
 
@@ -487,4 +493,41 @@ export function doorStepPieces(steps, rise, width) {
     ? { profile: flight.profile, at: [width / 2, landing], toward: [1, 0], width: landing }
     : { profile: flight.profile, at: [-width / 2, 0], toward: [-1, 0], width: landing };
   return { flight: { ...flight, depth: landing }, pieces: [block, run] };
+}
+
+/** How far a flight's railings stand in from its edges. */
+export const STEP_RAIL_INSET = 0.05;
+
+/**
+ * The railing runs for a door's steps (doorStepPieces), in the door's frame
+ * as for the pieces: [u, y, d] points (y above grade), each with whether it
+ * slopes down a flight (`stair`, which gets newels at both ends; a level run
+ * along a landing gets none). A straight flight has a railing up each side,
+ * level along the landing and sloping down the flight parallel to its
+ * nosings; a stoop has one along its landing's open front and far side, and
+ * one down its flight's outer side (its inner side is the wall).
+ */
+export function doorStepRails(steps, rise, width, layout) {
+  const flight = layout.flight;
+  const e = STEP_RAIL_INSET;
+  const half = width / 2 - e;
+  if (!flight?.riser) {
+    return [];
+  }
+  if (steps.direction === 'front') {
+    const landing = steps.landing ?? STEP_LANDING;
+    return [-half, half].flatMap((u) => [
+      { start: [u, rise, 0], end: [u, rise, landing], stair: false },
+      { start: [u, rise, landing], end: [u, flight.riser, flight.depth], stair: true },
+    ]);
+  }
+  const landing = flight.depth;
+  const run = (flight.count - 1) * steps.tread;
+  const side = steps.direction === 'left' ? 1 : -1;
+  const edge = landing - e;
+  return [
+    { start: [-side * half, rise, edge], end: [side * width / 2, rise, edge], stair: false },
+    { start: [-side * half, rise, 0], end: [-side * half, rise, edge], stair: false },
+    { start: [side * width / 2, rise, edge], end: [side * (width / 2 + run), flight.riser, edge], stair: true },
+  ];
 }
