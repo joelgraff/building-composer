@@ -4,7 +4,11 @@ The footprints the Dixon game exports come from OSM, Microsoft's ML footprints, 
 
 Status: planned (2026-09-30). Decisions in [Decisions](#decisions) were made with the project owner.
 
-Progress: phase 2 (editor core) is done: `js/footprint-editor.js`, tested in `tests/footprint_editor.test.js`. `squareFootprint` in `js/import.js` now takes its tolerances and a fixed rotation as options, for the editor's re-square; imports use the same defaults as before.
+Progress:
+
+- Phase 2 (editor core) is done: `js/footprint-editor.js`, tested in `tests/footprint_editor.test.js`. `squareFootprint` in `js/import.js` now takes its tolerances and a fixed rotation as options, for the editor's re-square; imports use the same defaults as before.
+- Phase 3 (editor UI) is done, except the aerial and neighbors, which wait for phase 1's endpoints: `js/footprint-view.js` draws footprint mode, and `js/main.js` opens it (File › Edit footprint…, the Building panel, and a building from the game with no saved design) and applies the result. It asks for `/game-footprints` and `/game-aerial` with the query this plan gives and, until they answer, says so in the Layers section. The game's trace and the squared import are kept in `placement.trace` and `placement.squared`, in game coordinates. Using an outline with a different number of walls drops the windows, doors, chimneys, and wall trim (placed by wall); with a different number of masses, also the masses' own settings and the roof structures; it asks first.
+- Open question answered for now: only a building with no saved design opens in footprint mode (as proposed).
 
 ## The problem
 

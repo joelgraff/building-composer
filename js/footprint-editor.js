@@ -214,6 +214,60 @@ export function resquare(footprint, tolerances = {}) {
   return squared.footprint.map(([x, z]) => [x + squared.center[0], z + squared.center[1]]);
 }
 
+/**
+ * Sets wall `wallIndex` to `length` by moving the wall after it (see
+ * moveWall), so the wall keeps its start and direction. When the next wall
+ * runs the same way (in line), the end corner moves along the wall instead.
+ */
+export function setWallLength(footprint, wallIndex, length) {
+  const ring = openRing(footprint);
+  checkIndex(ring, wallIndex, 'wall');
+  if (!(length >= MIN_WALL)) {
+    throw new RangeError(`A wall must be at least ${MIN_WALL} m long.`);
+  }
+  const walls = footprintWalls(ring);
+  const wall = walls[wallIndex];
+  const nextIndex = (wallIndex + 1) % ring.length;
+  const next = walls[nextIndex];
+  const change = length - wall.length;
+  // how much of the next wall's outward move lengthens this one
+  const reach = next.normal[0] * wall.direction[0] + next.normal[1] * wall.direction[1];
+  if (Math.abs(reach) > 1e-3) {
+    return moveWall(ring, nextIndex, change / reach);
+  }
+  return moveCorner(ring, nextIndex, [wall.start[0] + wall.direction[0] * length, wall.start[1] + wall.direction[1] * length]);
+}
+
+/**
+ * The outline with every wall moved in by `inset` (out, when negative),
+ * each corner where its two moved walls meet: the wall line under a roof
+ * edge traced `inset` outside it (the eave guide).
+ */
+export function insetOutline(footprint, inset) {
+  const ring = openRing(footprint);
+  const walls = footprintWalls(ring);
+  const lines = walls.map((wall) => ({
+    point: [wall.start[0] - wall.normal[0] * inset, wall.start[1] - wall.normal[1] * inset],
+    direction: wall.direction,
+  }));
+  return ring.map((corner, i) => {
+    const before = lines[(i - 1 + ring.length) % ring.length];
+    const after = lines[i];
+    return intersectLines(before, after) ?? after.point;
+  });
+}
+
+/**
+ * How far apart two outlines are: the furthest either one's corners lie from
+ * the other's walls (0 for the same outline). For the readout of how far an
+ * edit has moved from the game's trace.
+ */
+export function outlineDeviation(a, b) {
+  const [ringA, ringB] = [openRing(a), openRing(b)];
+  const fromWalls = (point, ring) => Math.min(...ring.map((start, i) => distance(point, closestOnSegment(point, start, ring[(i + 1) % ring.length]))));
+  return Math.max(...ringA.map((point) => fromWalls(point, ringB)), ...ringB.map((point) => fromWalls(point, ringA)));
+}
+
 // --- Snapping ---------------------------------------------------------------
 
 /**

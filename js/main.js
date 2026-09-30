@@ -26,6 +26,8 @@ import { normalizeChimneys } from './chimneys.js';
 import { exportGlb } from './export.js';
 import { buildGameFile } from './game-export.js';
 import { importDixonFootprint } from './import.js';
+import { toGameFrame, toComposerFrame, recenter, openRing } from './footprint-editor.js';
+import { openFootprintView } from './footprint-view.js';
 
 const statusValue = document.getElementById('status-value');
 const areaValue = document.getElementById('area-value');
@@ -2843,7 +2845,14 @@ function openPayload(payload) {
       }
       imported.warnings.push('The outline was changed in the game since this design was made, so the design is not opened; the new outline is.');
     }
-    Object.assign(modelConfig, imported.settings, { placement: imported.placement });
+    // the game's own outline and the squared import, in game coordinates (so
+    // they survive re-centering), for footprint mode's layers
+    const placement = {
+      ...imported.placement,
+      trace: openRing(payload.footprint),
+      squared: toGameFrame(imported.footprint, imported.placement),
+    };
+    Object.assign(modelConfig, imported.settings, { placement });
     frontSelect.value = modelConfig.frontSide;
     nameSideControls();
     storyCountInput.value = modelConfig.storyCount;
@@ -2851,7 +2860,8 @@ function openPayload(payload) {
     roofTypeSelect.value = modelConfig.roofType;
     syncLengthInputs();
     updateRoofPitchDisplay();
-    loadFootprint(imported.footprint, false);
+    // a building with no design yet opens in footprint mode, to check the outline first
+    loadFootprint(imported.footprint, false).then(() => openFootprintMode());
     const angle = (imported.placement.rotation * 180) / Math.PI;
     setStatus([
       `Building ${imported.placement.id} imported from ${imported.placement.source}, turned ${angle.toFixed(1)} degrees square to the axes.`,
@@ -3238,6 +3248,176 @@ function handleRegionMaterialChange(event) {
 storyMaterialsBox.addEventListener('change', handleRegionMaterialChange);
 wallPanelMaterialsBox.addEventListener('change', handleRegionMaterialChange);
 
+// --- Footprint mode (see js/footprint-view.js, docs/FOOTPRINT_EDITING_PLAN.md) ---
+
+const footprintModeHost = document.getElementById('footprint-mode');
+let footprintView = null;
+
+/** How far past the footprint the aerial and neighbors reach (meters). */
+const CONTEXT_MARGIN = 15;
+
+/** The outline being built, in Composer's frame (re-centered as loadFootprint does). */
+function currentFootprint() {
+  return openRing(normalizeFootprint(loadedFootprint, { expectedWinding: windingPreference }));
+}
+
+/** Opens footprint mode on the current building, over the sidebar and views. */
+function openFootprintMode() {
+  if (!loadedFootprint || footprintView) {
+    return;
+  }
+  const { placement } = modelConfig;
+  const inFrame = (points) => (Array.isArray(points) && points.length >= 3 ? toComposerFrame(points, placement) : null);
+  document.body.classList.add('footprint-mode-on');
+  footprintView = openFootprintView(footprintModeHost, {
+    footprint: currentFootprint(),
+    trace: placement ? inFrame(placement.trace) : null,
+    squared: placement ? inFrame(placement.squared) : null,
+    eaveDepth: modelConfig.roofEaveDepth,
+    title: placement?.id ? `Building ${placement.id}, from ${placement.source ?? 'the game'}` : 'This building',
+    expectedWinding: windingPreference,
+    units: () => ({ factor: unitFactor(), short: displayUnits === 'imperial' ? 'ft' : 'm' }),
+    onUse: useEditedFootprint,
+    onCancel: closeFootprintMode,
+  });
+  loadFootprintContext(footprintView);
+}
+
+function closeFootprintMode() {
+  footprintView?.close();
+  footprintView = null;
+  document.body.classList.remove('footprint-mode-on');
+}
+
+/**
+ * The aerial and the neighbors' outlines around a building from the game,
+ * from the game's server (`/game-aerial`, `/game-footprints`; phase 1 of the
+ * footprint plan). Without it, footprint mode says so and goes on without.
+ */
+async function loadFootprintContext(view) {
+  const { placement } = modelConfig;
+  if (!placement?.center) {
+    view.setContext({ contextNote: 'The aerial and neighbors show for buildings opened from the game.' });
+    return;
+  }
+  const game = toGameFrame(currentFootprint(), placement);
+  const xs = game.map(([x]) => x);
+  const zs = game.map(([, z]) => z);
+  const box = {
+    x0: Math.min(...xs) - CONTEXT_MARGIN, z0: Math.min(...zs) - CONTEXT_MARGIN, x1: Math.max(...xs) + CONTEXT_MARGIN, z1: Math.max(...zs) + CONTEXT_MARGIN,
+  };
+  const query = `x0=${box.x0.toFixed(2)}&z0=${box.z0.toFixed(2)}&x1=${box.x1.toFixed(2)}&z1=${box.z1.toFixed(2)}`;
+  const notes = [];
+  try {
+    const response = await fetch(`/game-footprints?${query}`);
+    if (!response.ok) {
+      throw new Error(String(response.status));
+    }
+    const data = await response.json();
+    const records = Array.isArray(data) ? data : data.footprints ?? [];
+    const neighbors = records
+      .filter((record) => String(record.id) !== String(placement.id) && Array.isArray(record.footprint))
+      .map((record) => toComposerFrame(record.footprint, placement));
+    if (view === footprintView) {
+      view.setContext({ neighbors });
+    }
+  } catch {
+    notes.push('neighbors');
+  }
+  // the aerial is north-up in game coordinates: placed there, then turned into Composer's frame
+  const href = `/game-aerial?${query}&mpp=0.1`;
+  const image = new Image();
+  image.onload = () => {
+    if (view !== footprintView) {
+      return;
+    }
+    const degrees = (-(placement.rotation ?? 0) * 180) / Math.PI;
+    view.setContext({
+      aerial: {
+        href,
+        x: box.x0,
+        y: box.z0,
+        width: box.x1 - box.x0,
+        height: box.z1 - box.z0,
+        transform: `rotate(${degrees}) translate(${-placement.center[0]} ${-placement.center[1]})`,
+      },
+    });
+  };
+  image.onerror = () => {
+    if (view === footprintView) {
+      notes.push('the aerial');
+      view.setContext({ contextNote: `No ${notes.join(' or ')}: they come from the game's server (python3 game/tools/composer_server.py in dixon_dem), which didn't answer.` });
+    }
+  };
+  image.src = href;
+}
+
+/**
+ * Builds on an edited footprint: re-centered, with the placement moved so the
+ * building stays where it is in the game. Windows, doors, chimneys, and wall
+ * trim are placed by wall, and masses' own settings and structures by mass,
+ * both by position: when the walls or masses changed in number, those go
+ * (after asking), rather than landing on the wrong wall or mass.
+ */
+function useEditedFootprint(edited) {
+  const { footprint, placement } = recenter(edited, modelConfig.placement);
+  const wallsChanged = footprint.length !== currentFootprint().length;
+  const massesBefore = activeLayout?.volumes.length ?? 0;
+  const massesAfter = computeFacadeLayout(footprint, { volumeSplit: modelConfig.volumeSplit }).volumes.length;
+  const massesChanged = massesAfter !== massesBefore;
+  const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const dropped = [];
+  if (wallsChanged) {
+    if (modelConfig.openings.length) {
+      dropped.push(count(modelConfig.openings.length, 'window or door', 'windows and doors'));
+    }
+    if (modelConfig.chimneys.length) {
+      dropped.push(count(modelConfig.chimneys.length, 'chimney', 'chimneys'));
+    }
+    if (Object.keys(modelConfig.wallTrim ?? {}).length) {
+      dropped.push("walls' own trim");
+    }
+  }
+  const massMaps = ['volumeStoryOverrides', 'volumeKneeWalls', 'volumeFoundationHeights', 'volumeStoryHeights', 'volumeRidgeDirections',
+    'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves', 'volumeMaterials'];
+  if (massesChanged) {
+    if (massMaps.some((key) => Object.keys(modelConfig[key] ?? {}).length)) {
+      dropped.push("the masses' own settings");
+    }
+    if (modelConfig.roofStructures.length) {
+      dropped.push(count(modelConfig.roofStructures.length, 'roof structure', 'roof structures'));
+    }
+  }
+  if (dropped.length && !window.confirm(`The new footprint has ${massesChanged ? 'different masses' : 'different walls'}, so these go: ${dropped.join(', ')}. Use it anyway?`)) {
+    return;
+  }
+  if (wallsChanged) {
+    modelConfig.openings = [];
+    modelConfig.chimneys = [];
+    modelConfig.wallTrim = {};
+  }
+  if (massesChanged) {
+    massMaps.forEach((key) => { modelConfig[key] = {}; });
+    modelConfig.roofStructures = [];
+  }
+  modelConfig.placement = placement;
+  selectedElementId = 'building-defaults';
+  selectedStructureId = null;
+  selectedWallId = null;
+  selectedOpeningId = null;
+  elevationTargetKey = null;
+  closeFootprintMode();
+  loadFootprint(footprint).then(() => {
+    setStatus(`Footprint updated${dropped.length ? `; removed ${dropped.join(', ')}` : ''}.${placement ? ' Its placement in the game was kept.' : ''}`);
+  });
+}
+
+document.addEventListener('click', (event) => {
+  if (event.target.closest('[data-edit-footprint]')) {
+    openFootprintMode();
+  }
+});
+
 /** Opens or closes the File menu (its button's aria-expanded and the list's hidden). */
 function setFileMenuOpen(open) {
   fileMenu.querySelector('.menu-button').setAttribute('aria-expanded', String(open));
@@ -3393,7 +3573,7 @@ function applyPickSelection({
  * mass isn't something to delete. Keys typed into a field are left alone.
  */
 document.addEventListener('keydown', (event) => {
-  if (!loadedFootprint || event.ctrlKey || event.metaKey || event.altKey) {
+  if (!loadedFootprint || footprintView || event.ctrlKey || event.metaKey || event.altKey) {
     return;
   }
   if (event.target.closest?.('input, select, textarea, [contenteditable="true"]')) {

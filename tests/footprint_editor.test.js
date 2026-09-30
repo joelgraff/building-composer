@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   openRing, footprintWalls, moveCorner, insertCorner, deleteCorner, moveWall, addBump, straightenWall, resquare,
   snapPoint, snapWallOffset, footprintProblems, createFootprintEditor, edit, undo, redo,
-  toGameFrame, toComposerFrame, recenter, MIN_WALL,
+  toGameFrame, toComposerFrame, recenter, MIN_WALL, setWallLength, insetOutline, outlineDeviation,
 } from '../js/footprint-editor.js';
 import { normalizeFootprint, computeFootprintMetrics } from '../js/footprint.js';
 
@@ -309,5 +309,37 @@ describe('frames and placement', () => {
     const { footprint, placement: none } = recenter(moveWall(RECT, 1, 3));
     assert.equal(none, undefined);
     near(computeFootprintMetrics(footprint).centroid.x, 0);
+  });
+});
+
+describe('setWallLength', () => {
+  it('lengthens a wall by moving the one after it', () => {
+    samePoints(setWallLength(RECT, 0, 12), [[-5, -4], [7, -4], [7, 4], [-5, 4]]);
+  });
+
+  it('shortens one leg of an L, its neighbors keeping their directions', () => {
+    // wall 1 is the 4 m wall from (5, -4) to (5, 0); at 3 m, the notch wall behind it moves in to z = -1
+    const shorter = setWallLength(L, 1, 3);
+    near(footprintWalls(shorter)[1].length, 3);
+    assert.deepEqual(footprintProblems(shorter), []);
+  });
+
+  it('moves the end corner along the wall when the next wall is in line', () => {
+    const split = insertCorner(RECT, 0, [0, -4]);
+    samePoints(setWallLength(split, 0, 3), [[-5, -4], [-2, -4], [5, -4], [5, 4], [-5, 4]]);
+  });
+});
+
+describe('insetOutline', () => {
+  it('moves every wall in', () => {
+    samePoints(insetOutline(RECT, 0.5), [[-4.5, -3.5], [4.5, -3.5], [4.5, 3.5], [-4.5, 3.5]]);
+    samePoints(insetOutline(L, 1), [[-4, -3], [4, -3], [4, -1], [-1, -1], [-1, 3], [-4, 3]]);
+  });
+});
+
+describe('outlineDeviation', () => {
+  it('is zero for the same outline and the furthest shift otherwise', () => {
+    near(outlineDeviation(RECT, RECT), 0);
+    near(outlineDeviation(RECT, moveWall(RECT, 1, 0.4)), 0.4);
   });
 });

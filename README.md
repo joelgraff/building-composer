@@ -87,6 +87,7 @@ npm test
   - Secondary top-down orthographic plan view synchronized with camera controls and dynamic bounding frustum.
 
 - **Native Persistence & Interchange**:
+  - **Footprint editing** (File › Edit footprint…): drag corners and walls on a 2D plan with snapping, add bump-outs and notches, type lengths, re-square, undo and redo, over the game's trace; the building keeps its place in the game.
   - **File menu**: New building (from a preset footprint, after asking, since it replaces the current one), Open, Save `.bld`, and Export GLB.
   - **Save Project (`.bld`)**: Serializes complete footprint, volumes, roof graph, story overrides, materials, edge pitches, per-volume roof shapes, eave settings, and roof structures into a native JSON document.
   - **Load Project**: Restores saved `.bld` files or raw footprint JSON arrays.
@@ -107,6 +108,7 @@ building-composer/
 │   ├── facade.js          # Facade layout (with roof structure surfaces), volume decomposition, roof graph, .bld persistence
 │   ├── footprint.js       # 2D polygon validation, normalization, and metrics
 │   ├── footprint-editor.js # Footprint editor core: edits, snapping, validation, undo, placement
+│   ├── footprint-view.js  # Footprint mode: the SVG plan editor and its panel
 │   ├── main.js            # UI controller, scene management, dual viewport rendering
 │   ├── materials.js       # Shared PBR material definitions and palette presets
 │   ├── roof-planes.js     # Roof eave planes and their heights (shared by roofs and structures)
