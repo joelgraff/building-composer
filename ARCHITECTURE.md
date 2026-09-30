@@ -141,7 +141,10 @@ tree at its top picks the target: the building, its masses, under each mass
 its walls and the structures standing on it, and under a structure its own
 walls, railings, and stacked structures; the path to a selection opens when
 the selection changes. A click in the 3D, plan, or elevation view picks the
-same targets, and a click on empty ground goes back to the building. Esc
+same targets, and a click on empty ground goes back to the building. A click
+on a window or door selects it on its wall, with its editor brought into view;
+on a chimney, the wall it stands against with that chimney's settings; on a
+house roof, the mass under it with its Roof section open. Esc
 walks the selection up one level; Delete removes the selected window, door, or
 structure after asking (there is no undo). The
 deepest selection wins: a wall shows the wall's panel, not its mass's. Each

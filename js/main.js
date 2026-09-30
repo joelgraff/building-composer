@@ -197,6 +197,12 @@ let selectedStructureId = null;
 let hoveredStructureId = null;
 let activeStructureEntries = [];
 let structureMeshes = [];
+// the built model's windows and doors, chimneys, and house roofs: picked in a view (see pickAtPointer)
+let openingMeshes = [];
+let chimneyMeshes = [];
+let roofMeshes = [];
+// a sidebar element to bring into view once the next render lands (a picked chimney or opening)
+let pendingSidebarFocus = null;
 // windows/doors: the one being edited, and what the last build made of each
 let selectedOpeningId = null;
 let activeOpeningEntries = [];
@@ -204,6 +210,8 @@ let activeOpeningEntries = [];
 // scope-implied wall the elevation would otherwise show (see elevationTarget)
 let selectedWallId = null;
 let hoveredWallId = null;
+// the window, door, or chimney under the pointer (`opening:<id>` or `chimney:<id>`)
+let hoveredPartKey = null;
 // which wall the elevation view is currently framed on, so a reload that
 // keeps showing the same wall can preserve the user's own pan/zoom on it
 // the way the orbit and plan views already preserve theirs (see loadFootprint)
@@ -1102,6 +1110,11 @@ function selectWallRun(wallId) {
     selectedWallId = null;
     return;
   }
+  focusWallRun(wallId);
+}
+
+/** Selects a wall run (not toggling it off when it's already selected), with its structure or mass. */
+function focusWallRun(wallId) {
   const run = findRun(wallId, activeLayout);
   selectedWallId = wallId;
   if (!run) {
@@ -2214,9 +2227,21 @@ async function loadFootprint(footprintData, preserveView = true) {
   activeStructureEntries = roofStructures;
   activeOpeningEntries = openingEntries ?? [];
   structureMeshes = [];
+  openingMeshes = [];
+  chimneyMeshes = [];
+  roofMeshes = [];
   building.traverse((child) => {
-    if (child.isMesh && child.userData?.structureId) {
+    if (!child.isMesh) {
+      return;
+    }
+    if (child.userData?.structureId) {
       structureMeshes.push(child);
+    } else if (child.userData?.openingId) {
+      openingMeshes.push(child);
+    } else if (child.userData?.chimneyId) {
+      chimneyMeshes.push(child);
+    } else if (child.material?.userData?.role === 'roof' && !child.userData?.editorOnly) {
+      roofMeshes.push(child);
     }
   });
   addVolumePickTargets(layout, foundationHeight);
@@ -2229,12 +2254,19 @@ async function loadFootprint(footprintData, preserveView = true) {
   if (selectedWallId) {
     renderWallCue(selectedWallId, 0x00a6b8, group);
   }
+  if (selectedOpeningId) {
+    renderPartCue(openingMeshes.filter((mesh) => mesh.userData.openingId === selectedOpeningId), 0x00a6b8, group);
+  }
   renderStructurePanel();
   renderStructureFailureMarkers(activeLayout);
   renderOpeningFailureMarkers(activeLayout);
   renderScopeControl(activeLayout);
   renderWallInfoPanel(activeLayout);
   syncInspector(activeLayout);
+  if (pendingSidebarFocus) {
+    scrollSidebarTo(document.querySelector(pendingSidebarFocus));
+    pendingSidebarFocus = null;
+  }
   if (normalized.length === 4) {
     renderFootprintPreview(normalized);
     renderFrontMarker(normalized);
@@ -2418,33 +2450,112 @@ function clearHoverCue() {
  * default, or the plan view (its own camera and canvas), so clicking a wall
  * or a mass there selects the same thing the scope control would.
  */
+const NO_PICK = Object.freeze({
+  volumeId: null, structureId: null, wallId: null, openingId: null, chimneyId: null, roof: false,
+});
+
+// A window or door sits in its wall, just behind the wall's pick target
+// (which stands a little outside the wall face): a hit on one this close
+// behind the nearest hit still picks it.
+const OPENING_PICK_REACH = 0.4;
+
+/** The mass whose plan holds a point (a roof hit), or the nearest one (a hit out on an overhang). */
+function volumeAtPoint(point, volumes) {
+  const inside = volumes.find((volume) => point.x >= volume.minX && point.x <= volume.maxX && point.z >= volume.minZ && point.z <= volume.maxZ);
+  if (inside) {
+    return inside;
+  }
+  const distance = (volume) => Math.hypot(
+    Math.max(volume.minX - point.x, 0, point.x - volume.maxX),
+    Math.max(volume.minZ - point.z, 0, point.z - volume.maxZ),
+  );
+  return volumes.reduce((best, volume) => (!best || distance(volume) < distance(best) ? volume : best), null);
+}
+
+/**
+ * What's under the pointer in a view: the nearest of the wall runs, masses,
+ * roof structures, chimneys, windows and doors, and house roofs. A roof hit
+ * picks the mass under it with `roof` set; a window or door just behind a
+ * wall's pick target still wins (see OPENING_PICK_REACH).
+ */
 function pickAtPointer(clientX, clientY, pickCamera = camera, pickCanvas = viewportCanvas) {
-  if (!activeLayout || (pickTargets.length === 0 && structureMeshes.length === 0 && wallPickTargets.length === 0)) {
-    return { volumeId: null, structureId: null, wallId: null };
+  if (!activeLayout) {
+    return NO_PICK;
   }
   const rect = pickCanvas.getBoundingClientRect();
   pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
   raycaster.setFromCamera(pointer, pickCamera);
-  // the nearest of the wall runs, volumes, and roof structures under the
-  // pointer; a wall run's target sits just outside its mass's own box, so
-  // from outside it wins the nearest-hit without needing any special-casing
-  const hit = raycaster.intersectObjects([...wallPickTargets, ...pickTargets, ...structureMeshes], false)[0];
+  const hits = raycaster.intersectObjects([
+    ...wallPickTargets, ...pickTargets, ...structureMeshes, ...openingMeshes, ...chimneyMeshes, ...roofMeshes,
+  ], false);
+  const nearest = hits[0];
+  if (!nearest) {
+    return NO_PICK;
+  }
+  const opening = hits.find((hit) => hit.object.userData.openingId && hit.distance - nearest.distance <= OPENING_PICK_REACH);
+  const hit = opening ?? nearest;
+  const data = hit.object.userData;
+  if (data.openingId) {
+    return { ...NO_PICK, openingId: data.openingId };
+  }
+  if (data.chimneyId) {
+    return { ...NO_PICK, chimneyId: data.chimneyId };
+  }
   // a wraparound's side segment picks its porch
-  const structureId = hit?.object.userData.recordId ?? hit?.object.userData.structureId ?? null;
-  const wallId = !structureId ? hit?.object.userData.wallId ?? null : null;
-  const volumeId = !structureId && !wallId ? hit?.object.userData.volumeId ?? null : null;
-  return { volumeId, structureId, wallId };
+  const structureId = data.recordId ?? data.structureId ?? null;
+  if (structureId) {
+    return { ...NO_PICK, structureId };
+  }
+  if (data.wallId) {
+    return { ...NO_PICK, wallId: data.wallId };
+  }
+  if (roofMeshes.includes(hit.object)) {
+    const volume = activeLayout.volumes.find((candidate) => candidate.id === data.volumeId) ?? volumeAtPoint(hit.point, activeLayout.volumes);
+    return volume ? { ...NO_PICK, volumeId: volume.id, roof: true } : NO_PICK;
+  }
+  return { ...NO_PICK, volumeId: data.volumeId ?? null };
+}
+
+/** Scrolls the sidebar so an element's top sits just under the sticky scope tree. */
+function scrollSidebarTo(element) {
+  if (!element) {
+    return;
+  }
+  const sidebar = document.querySelector('.sidebar');
+  const below = document.querySelector('.scope-panel').getBoundingClientRect().bottom;
+  sidebar.scrollTop += element.getBoundingClientRect().top - below - 8;
+}
+
+/** An outline box around a window, door, or chimney (all of its meshes), as a selection or hover cue. */
+function renderPartCue(meshes, color, parent) {
+  if (!meshes.length) {
+    return;
+  }
+  const box = new THREE.Box3();
+  meshes.forEach((mesh) => box.expandByObject(mesh));
+  box.expandByScalar(0.05);
+  const cue = new THREE.Box3Helper(box, color);
+  cue.userData.editorOnly = true;
+  parent.add(cue);
 }
 
 function updateHoveredVolume(event, pickCamera = camera, pickCanvas = viewportCanvas) {
-  const { volumeId, structureId, wallId } = pickAtPointer(event.clientX, event.clientY, pickCamera, pickCanvas);
-  if (volumeId === hoveredVolumeId && structureId === hoveredStructureId && wallId === hoveredWallId) {
+  const { volumeId, structureId, wallId, openingId, chimneyId } = pickAtPointer(event.clientX, event.clientY, pickCamera, pickCanvas);
+  const partKey = openingId ? `opening:${openingId}` : chimneyId ? `chimney:${chimneyId}` : null;
+  if (volumeId === hoveredVolumeId && structureId === hoveredStructureId && wallId === hoveredWallId && partKey === hoveredPartKey) {
     return;
   }
   hoveredVolumeId = volumeId;
   hoveredStructureId = structureId;
   hoveredWallId = wallId;
+  hoveredPartKey = partKey;
   clearHoverCue();
+  if (openingId && openingId !== selectedOpeningId) {
+    renderPartCue(openingMeshes.filter((mesh) => mesh.userData.openingId === openingId), 0xf4b400, hoverGroup);
+  }
+  if (chimneyId) {
+    renderPartCue(chimneyMeshes.filter((mesh) => mesh.userData.chimneyId === chimneyId), 0xf4b400, hoverGroup);
+  }
   if (structureId && structureId !== selectedStructureId) {
     renderStructureCue(structureId, 0xf4b400, hoverGroup);
   }
@@ -2455,9 +2566,10 @@ function updateHoveredVolume(event, pickCamera = camera, pickCanvas = viewportCa
   if (volume && (volume.id !== selectedElementId || selectedStructureId)) {
     renderVolumeCue(volume, activeFoundationHeight, 0xf4b400, 0.06, hoverGroup);
   }
-  const pointerStyle = volume || structureId || wallId ? 'pointer' : 'default';
+  const pointerStyle = volume || structureId || wallId || partKey ? 'pointer' : 'default';
   viewportCanvas.style.cursor = pointerStyle;
   topViewCanvas.style.cursor = pointerStyle;
+  elevationViewCanvas.style.cursor = pointerStyle;
 }
 
 /** An outline around a wall run's face, as a selection or hover cue. */
@@ -3128,7 +3240,41 @@ resetViewBtn.addEventListener('click', () => {
  * Applies a pick result (from either the orbit or the plan view) to the
  * selection state, exactly as a direct click there would.
  */
-function applyPickSelection({ volumeId, structureId, wallId }) {
+function applyPickSelection({
+  volumeId, structureId, wallId, openingId, chimneyId, roof,
+}) {
+  if (openingId) {
+    // a window or door: its wall's panel, with it open in the editor there
+    const record = openingRecord(openingId);
+    if (record) {
+      focusWallRun(record.hostWallRunId);
+      selectedOpeningId = openingId;
+      pendingSidebarFocus = '#opening-editor';
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
+  if (chimneyId) {
+    // a chimney is edited on the wall it stands against
+    const chimney = modelConfig.chimneys.find((candidate) => candidate.id === chimneyId);
+    if (chimney) {
+      focusWallRun(chimney.hostWallRunId);
+      selectedOpeningId = null;
+      pendingSidebarFocus = `[data-chimney-id="${chimneyId}"]`;
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
+  if (roof) {
+    // a roof: its mass, with the Roof section open
+    selectedStructureId = null;
+    selectedWallId = null;
+    selectedElementId = volumeId;
+    document.getElementById('volume-config-panel').open = true;
+    pendingSidebarFocus = '#volume-config-panel';
+    loadFootprint(loadedFootprint);
+    return;
+  }
   if (structureId) {
     if (structureId !== selectedStructureId) {
       selectedWallId = null;
@@ -3226,6 +3372,7 @@ function wireViewSelection(canvas, viewCamera) {
     hoveredVolumeId = null;
     hoveredStructureId = null;
     hoveredWallId = null;
+    hoveredPartKey = null;
     clearHoverCue();
     canvas.style.cursor = 'default';
   });

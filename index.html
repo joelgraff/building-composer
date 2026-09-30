@@ -202,7 +202,10 @@
 
       .scope-panel {
         position: sticky;
-        top: 0;
+        /* over the sidebar's own top padding too, so nothing scrolls by above it */
+        top: -18px;
+        margin-top: -18px;
+        padding-top: 18px;
         z-index: 3;
         background: var(--panel-alt);
         padding-bottom: 12px;
@@ -874,6 +877,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=80"></script>
+    <script type="module" src="./js/main.js?v=82"></script>
   </body>
 </html>
