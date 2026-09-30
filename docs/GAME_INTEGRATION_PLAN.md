@@ -31,7 +31,9 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
 ## Decisions
 
 - **The game owns the material vocabulary.** It publishes a manifest; Composer reads it and never invents names.
-- **Missing surfaces get new game materials** (doors, glass, interior walls, floors, ceilings), not substitutes.
+- **Missing surfaces get new game materials** (doors, interior walls, floors, ceilings, white trim), not substitutes.
+- **Windows glow at night like the generated buildings'.** Composed exterior panes use the game's `window_lit`, with the same per-pane lit and curtain variation. No separate unlit glass material.
+- **White trim.** The game gets a `trim_white` material; Composer's trim uses it instead of `siding_white`.
 - **Footprints are edited in Composer and written back to the game** (the footprint plan).
 
 ## Plan
@@ -46,8 +48,9 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
 
 ### Phase 2 — New game materials (dixon_dem)
 
-- Add `.tres` files for `door_wood`, `glass_clear`, `plaster_white`, `plaster_ceiling`, and `floor_wood`, using the names Composer already emits so earlier composed files keep working. Base them on the existing building material shader (triplanar); `glass_clear` transparent and unlit, distinct from `window_lit`.
-- Add each to `MATERIALS`, `APPROX_COLOR`, and the manifest categories.
+- Add `.tres` files for `door_wood`, `plaster_white`, `plaster_ceiling`, `floor_wood`, and `trim_white`, based on the existing building material shader (triplanar). The first four are names Composer already emits. `game/data/composed/` is empty today, so no earlier files depend on the old names.
+- `glass_clear` is not added: exterior glass is `window_lit` (Phase 3).
+- Add each to `MATERIALS`, `APPROX_COLOR`, and the manifest categories (`trim_white` as `trim`).
 - `build_buildings.gd`: `push_warning` when a group key has no material, naming the building, instead of silently using the default.
 - `test_composed.py`: every group name in a composed file is a manifest name.
 
@@ -61,7 +64,13 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
   - persisted in `.bld` (`js/facade.js` serialize/deserialize).
 - UI: a **Game finish** select beside each Material select (walls, roof, structures), listing the manifest's finishes for that category with their colour. Picking a finish also sets the matching Composer family, and the preview uses the manifest colour, so the model looks as it will in the game. Shown when a manifest is available; otherwise the UI is unchanged.
 - `js/materials.js`: materials carry `userData.gameMaterial` when a finish is chosen.
-- `js/game-export.js` `gameMaterial()`: use `userData.gameMaterial` first, and the existing role/palette tables only as a fallback when none is set.
+- `js/game-export.js` `gameMaterial()`: use `userData.gameMaterial` first, and the existing role/palette tables only as a fallback when none is set. Trim maps to `trim_white` by default.
+- **Windows as the game draws them.** Exterior panes export as `window_lit`. That shader reads each pane's vertex colour as `(lit, warmth, curtain, storefront)` and expects UVs running 0–1 across the pane (`window_unit()` in `dixon_dem/pipeline/buildings/facade.py`). Composer today writes white and per-meter UVs, which would make every window lit, curtained, and a storefront. For each pane (one opening's glass), export must:
+  - write UVs 0–1 across the pane's width and height;
+  - write a vertex colour drawn like the game's: lit with probability 0.35, warmth uniform in 0–1, curtain from `[0, 0, 0.35, 0.65, 0.9]`, storefront 1 only for a ground-story shopfront opening;
+  - seed the draw from the building id and the opening's id, so a building looks the same each time it's sent.
+  - Test: every `window_lit` vertex's colour is one pane's, UVs are 0–1, and the same design exports the same colours twice.
+  - Panes in doors (sidelights, transoms, door lights) follow the same rule.
 - Before Send to game: check every group name against the manifest. If any is unknown, refuse and name the surfaces (e.g. "doors use door_oak, which the game doesn't have"). The download fallback applies the same check.
 - Tests: manifest loading and fallback; finish resolution (building, volume, structure precedence); export uses explicit finishes; an unknown name is refused; `.bld` round trip keeps finishes.
 
@@ -93,12 +102,11 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
   1. Run `python3 game/tools/composer_server.py`.
   2. In the game, press B, click a brick building whose override has `color: brick_buff`, and press X. Composer should open with the wall finish `brick_buff`, the right storeys and roof, and the ridge set by `roof_axis`.
   3. Add a door and windows and a walk-in interior. Send to game.
-  4. Rebuild the chunk (Enter, or I). The walls are buff brick, doors and glass use their new materials, the interior can be walked into, and the Godot log has no unknown-material warnings.
+  4. Rebuild the chunk (Enter, or I). The walls are buff brick, trim is white, doors and the interior use their new materials, the interior can be walked into, and the Godot log has no unknown-material warnings. At night, about a third of the windows glow, with curtains varying as on the neighbors.
   5. Press X again. The design reopens.
 
 ## Open questions
 
-- **Exterior glass at night.** Generated buildings use `window_lit`, which glows at night. Should composed exterior panes use `glass_clear` (unlit), `window_lit`, or a per-building choice? A composed building with dark windows among lit ones may stand out.
-- **Trim colour.** The game has only `trim_dark`; Composer's trim exports as `siding_white`. Add a `trim_white`?
+- **Interior glass.** A walk-in building's windows are seen from inside too. Does `window_lit` read well from inside (its glow and curtains are drawn for a viewer outside), or does the inner face need its own treatment?
 - **Roof finishes.** Offer `shingles_brown` and `roof_metal` for pitched roofs, and `roof_membrane` or `roof_metal` for flat roofs, per volume?
 - **Bundled manifest freshness.** Composer run on its own (not through the game's server) uses the bundled copy. Is a sync script enough, or should Composer show the manifest's version when it opens a game building?
