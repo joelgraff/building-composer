@@ -363,6 +363,8 @@ function normalizeRoofShape(shape) {
  *   the host's corner at that end (a wraparound): it runs on past the corner
  *   and back along the adjacent wall for `length`, under one hip roof that
  *   turns the corner (see expandWraps). Its end must be at the corner.
+ * - `fromFootprint`: true for a porch made from part of a traced outline
+ *   (Turn into a porch), which goes back to the game with the footprint.
  * - `inset`: how far the front wall is set back inside the structure,
  *   leaving an open porch (floor, side walls, and the structure's roof) in
  *   front of it; 0 for none. A recessed porch is a dormer with an inset,
@@ -412,6 +414,8 @@ export function normalizeRoofStructure(raw) {
     materials: plainObject(raw.materials),
     // a porch's steps from its deck to grade (built for a ground-level deck open at the front)
     ...(kind === 'porch' ? { steps: normalizeSteps(raw.steps), railings: normalizeRailing(raw.railings), postStyle: normalizePostStyle(raw.postStyle) } : {}),
+    // made by the footprint editor's Turn into a porch (js/footprint-porch.js): the porches sent back to the game with the footprint
+    ...(raw.fromFootprint === true ? { fromFootprint: true } : {}),
   };
 }
 

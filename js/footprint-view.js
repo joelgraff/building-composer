@@ -15,6 +15,7 @@ import {
   snapPoint, snapWallOffset, insetOutline, outlineDeviation, openRing, MIN_WALL,
 } from './footprint-editor.js';
 import { MAX_SKEW_DEGREES, MIN_EDGE, ALIGN } from './import.js';
+import { cutPart, findBump } from './footprint-porch.js';
 import { computeFootprintMetrics } from './footprint.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -37,7 +38,8 @@ const DRAG_START_PX = 3;
  * @param {string} [options.title]
  * @param {'CCW'|'CW'} [options.expectedWinding]
  * @param {() => { factor: number, short: string }} options.units - display units (feet or meters)
- * @param {(footprint: Array<[number, number]>) => void} options.onUse
+ * @param {(side: string) => string} [options.sideName] - a side's name from the building's front ('front', 'left side', ...)
+ * @param {(footprint: Array<[number, number]>, porches: object[]) => void} options.onUse - with the porches made (see js/footprint-porch.js)
  * @param {() => void} options.onCancel
  * @returns {{ setContext(context: { neighbors?: Array, aerial?: object|null, contextNote?: string }): void, close(): void }}
  */
@@ -49,6 +51,10 @@ export function openFootprintView(host, options) {
     preview: null,
     snaps: [],
     selection: null,
+    // 'porch' while the next drag draws a rectangle to turn into a porch
+    tool: null,
+    // the rectangle being drawn
+    draft: null,
     layers: {
       aerial: true, trace: true, squared: false, neighbors: true, guide: true, grid: true,
     },
@@ -68,7 +74,11 @@ export function openFootprintView(host, options) {
     <div class="fp-canvas">
       <svg class="fp-svg" xmlns="${SVG_NS}" tabindex="0" aria-label="Footprint plan">
         <defs>
-          <pattern id="fp-grid" width="1" height="1" patternUnits="userSpaceOnUse">
+          <pattern id="fp-hatch" width="0.4" height="0.4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="0.4" height="0.4" class="fp-hatch-back" />
+          <line x1="0" y1="0" x2="0" y2="0.4" class="fp-hatch-line" />
+        </pattern>
+        <pattern id="fp-grid" width="1" height="1" patternUnits="userSpaceOnUse">
             <path d="M 1 0 L 0 0 0 1" fill="none" class="fp-grid-line" vector-effect="non-scaling-stroke" />
           </pattern>
         </defs>
@@ -78,19 +88,23 @@ export function openFootprintView(host, options) {
         <g class="fp-squared"></g>
         <g class="fp-trace"></g>
         <g class="fp-guide"></g>
+        <g class="fp-porches"></g>
         <g class="fp-outline"></g>
+        <g class="fp-draft"></g>
         <g class="fp-labels"></g>
         <g class="fp-handles"></g>
         <g class="fp-snaps"></g>
       </svg>
-      <div class="fp-hint">Drag a corner or a wall. Double-click a wall to add a corner. Hold Alt to drag without snapping. Scroll to zoom; drag the background to pan.</div>
+      <div class="fp-hint"></div>
     </div>
     <aside class="fp-panel"></aside>`;
   const svg = host.querySelector('.fp-svg');
   const panel = host.querySelector('.fp-panel');
-  const groups = Object.fromEntries(['aerial', 'neighbors', 'squared', 'trace', 'guide', 'outline', 'labels', 'handles', 'snaps']
+  const groups = Object.fromEntries(['aerial', 'neighbors', 'squared', 'trace', 'guide', 'porches', 'outline', 'draft', 'labels', 'handles', 'snaps']
     .map((name) => [name, svg.querySelector(`.fp-${name}`)]));
   const gridRect = svg.querySelector('.fp-grid');
+  const hint = host.querySelector('.fp-hint');
+  const sideName = (side) => options.sideName?.(side) ?? side;
 
   // --- View box: fit, zoom, pan ---------------------------------------------
 
@@ -166,6 +180,19 @@ export function openFootprintView(host, options) {
       }
     }
     groups.guide.innerHTML = guide;
+    groups.porches.innerHTML = state.editor.porches.map((porch, index) => {
+      const { minX, maxX, minZ, maxZ } = porch.rect;
+      const label = `${porch.type === 'recess' ? 'Recessed porch' : 'Porch'} ${index + 1}`;
+      return polygon([[minX, minZ], [maxX, minZ], [maxX, maxZ], [minX, maxZ]], `fp-porch${porch.type === 'recess' ? ' recess' : ''}`)
+        + `<text x="${(minX + maxX) / 2}" y="${(minZ + maxZ) / 2}" font-size="${11 * px}" stroke-width="${3 * px}" text-anchor="middle" dominant-baseline="middle" class="fp-porch-label">${label}</text>`;
+    }).join('');
+    groups.draft.innerHTML = state.draft
+      ? polygon([[state.draft.minX, state.draft.minZ], [state.draft.maxX, state.draft.minZ], [state.draft.maxX, state.draft.maxZ], [state.draft.minX, state.draft.maxZ]], 'fp-draft-rect')
+      : '';
+    hint.textContent = state.tool === 'porch'
+      ? 'Drag a rectangle over the porch, across the wall it stands against. Esc to stop.'
+      : 'Drag a corner or a wall. Double-click a wall to add a corner. Hold Alt to drag without snapping. Scroll to zoom; drag the background to pan.';
+    svg.classList.toggle('drawing', state.tool === 'porch');
 
     const walls = footprintWalls(footprint);
     const selectedWall = state.selection?.kind === 'wall' ? state.selection.index : -1;
@@ -199,6 +226,16 @@ export function openFootprintView(host, options) {
       return;
     }
     svg.focus();
+    if (state.tool === 'porch') {
+      const start = snapToOutline(toPlan(event), !event.altKey);
+      drag = { kind: 'porch', start, screen: [event.clientX, event.clientY], moved: false };
+      try {
+        svg.setPointerCapture(event.pointerId);
+      } catch {
+        // (see below)
+      }
+      return;
+    }
     const corner = event.target.closest('[data-corner]');
     const wall = event.target.closest('[data-wall]');
     const start = toPlan(event);
@@ -244,6 +281,14 @@ export function openFootprintView(host, options) {
       return;
     }
     const point = toPlan(event);
+    if (drag.kind === 'porch') {
+      const end = snapToOutline(point, snapping);
+      state.draft = {
+        minX: Math.min(drag.start[0], end[0]), maxX: Math.max(drag.start[0], end[0]), minZ: Math.min(drag.start[1], end[1]), maxZ: Math.max(drag.start[1], end[1]),
+      };
+      render();
+      return;
+    }
     try {
       if (drag.kind === 'corner') {
         const snapped = snapPoint(point, {
@@ -271,6 +316,13 @@ export function openFootprintView(host, options) {
     const wasClick = !drag.moved;
     if (drag.kind === 'pan' && wasClick) {
       state.selection = null;
+    }
+    if (drag.kind === 'porch') {
+      const rect = state.draft;
+      state.draft = null;
+      if (rect && !wasClick) {
+        makePorch(rect);
+      }
     }
     if (state.preview) {
       const before = state.editor.footprint.length;
@@ -322,7 +374,12 @@ export function openFootprintView(host, options) {
       render();
     } else if (event.key === 'Escape') {
       event.preventDefault();
-      state.selection = null;
+      if (state.tool) {
+        state.tool = null;
+        state.draft = null;
+      } else {
+        state.selection = null;
+      }
       render();
     }
     // footprint mode owns the keyboard while it's open
@@ -362,6 +419,38 @@ export function openFootprintView(host, options) {
     return Number(input.value) / options.units().factor;
   }
 
+  /**
+   * A point for a porch rectangle's corner: each coordinate onto a wall line
+   * of the outline within reach (so the rectangle meets the wall exactly),
+   * else onto the grid.
+   */
+  function snapToOutline(point, snapping) {
+    if (!snapping) {
+      return point;
+    }
+    const reach = SNAP_REACH_PX * scale();
+    const footprint = state.editor.footprint;
+    return [0, 1].map((axis) => {
+      const lines = footprint.map((corner) => corner[axis]);
+      const nearest = lines.reduce((best, value) => (Math.abs(value - point[axis]) < Math.abs(best - point[axis]) ? value : best), Infinity);
+      return Math.abs(nearest - point[axis]) <= reach ? nearest : Math.round(point[axis] / 0.05) * 0.05;
+    });
+  }
+
+  /** Turns the part of the outline under `rect` into a pending porch: one undo step with the cut. */
+  function makePorch(rect) {
+    try {
+      const { footprint, porch } = cutPart(state.editor.footprint, rect);
+      state.editor = edit(state.editor, footprint, { porches: [...state.editor.porches, porch] });
+      state.selection = null;
+      state.tool = null;
+      message = '';
+    } catch (error) {
+      message = error.message;
+    }
+    render();
+  }
+
   // --- Panel ----------------------------------------------------------------
 
   function renderPanel() {
@@ -395,6 +484,7 @@ export function openFootprintView(host, options) {
         <div class="fp-actions">
           <button data-action="apply-wall">Apply</button>
           ${wall.axis ? '' : '<button data-action="straighten">Straighten</button>'}
+          ${findBump(footprint, selection.index) ? '<button data-action="bump-to-porch" title="It was traced as part of the house: cut it off and make it a porch">Turn this bump into a porch</button>' : ''}
         </div>
         <div class="fp-subhead">Bump-out or notch on this wall</div>
         <div class="fp-row">
@@ -421,6 +511,7 @@ export function openFootprintView(host, options) {
         <button data-action="undo"${state.editor.past.length ? '' : ' disabled'} title="Ctrl+Z">Undo</button>
         <button data-action="redo"${state.editor.future.length ? '' : ' disabled'} title="Ctrl+Shift+Z">Redo</button>
         <button data-action="fit">Fit view</button>
+        <button data-action="porch-tool" class="${state.tool === 'porch' ? 'active' : ''}" title="A porch traced as part of the house: draw a rectangle over it">Turn into a porch…</button>
       </div>
       <div class="fp-facts">
         <div>Area</div><div>${(area * factor * factor).toFixed(0)} sq ${short}</div>
@@ -428,6 +519,12 @@ export function openFootprintView(host, options) {
         ${deviation === null ? '' : `<div>From the game's trace</div><div>up to ${formatLength(deviation, 2)}</div>`}
       </div>
       <section class="fp-section">${selected}</section>
+      ${state.editor.porches.length ? `<section class="fp-section">
+        <div class="fp-subhead">Porches made from the outline</div>
+        ${state.editor.porches.map((porch, index) => `<div class="fp-porch-row"><span>${porch.type === 'recess' ? 'Recessed porch' : 'Porch'} ${index + 1}, ${escapeHtml(sideName(porch.side))}</span>`
+          + `<button data-remove-porch="${index}" title="Drop this porch (the outline stays as it is; Undo puts the part back)" aria-label="Remove porch ${index + 1}">×</button></div>`).join('')}
+        <div class="fp-note">Added as porch structures when you use this footprint. Porches cut one leg at a time round a corner join into a wraparound.</div>
+      </section>` : ''}
       ${message ? `<div class="fp-message">${escapeHtml(message)}</div>` : ''}
       <details class="fp-section" data-section="square"${state.openSections.has('square') ? ' open' : ''}>
         <summary>Square up again</summary>
@@ -459,6 +556,13 @@ export function openFootprintView(host, options) {
   }
 
   panel.addEventListener('click', (event) => {
+    const remove = event.target.closest('[data-remove-porch]');
+    if (remove) {
+      const index = Number(remove.dataset.removePorch);
+      state.editor = edit(state.editor, state.editor.footprint, { porches: state.editor.porches.filter((_, i) => i !== index) });
+      render();
+      return;
+    }
     const action = event.target.closest('[data-action]')?.dataset.action;
     if (!action) {
       return;
@@ -497,6 +601,13 @@ export function openFootprintView(host, options) {
         });
         break;
       }
+      case 'porch-tool':
+        state.tool = state.tool === 'porch' ? null : 'porch';
+        render();
+        break;
+      case 'bump-to-porch':
+        makePorch(findBump(footprint, selection.index));
+        break;
       case 'straighten':
         run(() => straightenWall(footprint, selection.index));
         break;
@@ -526,7 +637,7 @@ export function openFootprintView(host, options) {
         break;
       case 'use':
         if (!state.editor.problems.length) {
-          options.onUse(state.editor.footprint);
+          options.onUse(state.editor.footprint, state.editor.porches);
         }
         break;
       default:

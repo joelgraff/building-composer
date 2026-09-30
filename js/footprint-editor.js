@@ -378,27 +378,34 @@ export function footprintProblems(footprint, { expectedWinding = 'CCW', minWall 
 // --- Undo and redo ----------------------------------------------------------
 
 /**
- * A footprint being edited: the current outline, what undo and redo go back
- * and forward to, and its problems (footprintProblems). Treat it as a value:
- * edit, undo, and redo each return a new one.
+ * A footprint being edited: the current outline, the porches made from it
+ * so far (Turn into a porch, see js/footprint-porch.js), what undo and redo
+ * go back and forward to, and the outline's problems (footprintProblems).
+ * Treat it as a value: edit, undo, and redo each return a new one.
  */
 export function createFootprintEditor(footprint, options = {}) {
   const ring = openRing(footprint);
   return {
-    footprint: ring, past: [], future: [], problems: footprintProblems(ring, options), options,
+    footprint: ring, porches: [], past: [], future: [], problems: footprintProblems(ring, options), options,
   };
 }
 
-/** The editor after an edit: `footprint` is the outline an operation returned. An edit that changes nothing adds no undo step. */
-export function edit(editor, footprint) {
+/**
+ * The editor after an edit: `footprint` is the outline an operation
+ * returned, and `porches` (when given) the pending porches after it, so a
+ * cut and the porch it makes are one undo step. An edit that changes
+ * nothing adds no step.
+ */
+export function edit(editor, footprint, { porches = editor.porches } = {}) {
   const ring = openRing(footprint);
-  if (sameRing(ring, editor.footprint)) {
+  if (sameRing(ring, editor.footprint) && porches === editor.porches) {
     return editor;
   }
   return {
     ...editor,
     footprint: ring,
-    past: [...editor.past, editor.footprint].slice(-HISTORY_LIMIT),
+    porches,
+    past: [...editor.past, snapshot(editor)].slice(-HISTORY_LIMIT),
     future: [],
     problems: footprintProblems(ring, editor.options),
   };
@@ -408,27 +415,27 @@ export function undo(editor) {
   if (!editor.past.length) {
     return editor;
   }
-  const footprint = editor.past[editor.past.length - 1];
-  return {
-    ...editor,
-    footprint,
+  return restore(editor, editor.past[editor.past.length - 1], {
     past: editor.past.slice(0, -1),
-    future: [editor.footprint, ...editor.future],
-    problems: footprintProblems(footprint, editor.options),
-  };
+    future: [snapshot(editor), ...editor.future],
+  });
 }
 
 export function redo(editor) {
   if (!editor.future.length) {
     return editor;
   }
-  const [footprint, ...future] = editor.future;
+  const [next, ...future] = editor.future;
+  return restore(editor, next, { past: [...editor.past, snapshot(editor)], future });
+}
+
+function snapshot(editor) {
+  return { footprint: editor.footprint, porches: editor.porches };
+}
+
+function restore(editor, { footprint, porches }, history) {
   return {
-    ...editor,
-    footprint,
-    past: [...editor.past, editor.footprint],
-    future,
-    problems: footprintProblems(footprint, editor.options),
+    ...editor, ...history, footprint, porches, problems: footprintProblems(footprint, editor.options),
   };
 }
 

@@ -5,7 +5,7 @@ import {
   createBuildingFromFootprint, volumeWallHeight, volumeFoundationHeight, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS, porchStepTravel, PORCH_STEP_WIDTH, volumeStories, evalZoneHeight,
 } from './extrusion.js';
 import {
-  normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS, structureFrame, structureWallSides, resolveRoofStructure, MAX_BRACKET_PROJECTION, hostEaveProfile,
+  normalizeRoofStructures, createRoofStructure, STRUCTURE_SUPPORTS, STRUCTURE_WALLS, structureFrame, structureWallSides, resolveRoofStructure, MAX_BRACKET_PROJECTION, hostEaveProfile,
 } from './roof-structures.js';
 import { STRUCTURE_UI_PRESETS, newRoofStructure, structureLabel, wallNames } from './structure-ui.js';
 import { TWO_SLOPE_ROOF_TYPES } from './roof-planes.js';
@@ -28,6 +28,7 @@ import { buildGameFile } from './game-export.js';
 import { importDixonFootprint } from './import.js';
 import { toGameFrame, toComposerFrame, recenter, openRing } from './footprint-editor.js';
 import { openFootprintView } from './footprint-view.js';
+import { porchStructures } from './footprint-porch.js';
 
 const statusValue = document.getElementById('status-value');
 const areaValue = document.getElementById('area-value');
@@ -3277,6 +3278,7 @@ function openFootprintMode() {
     title: placement?.id ? `Building ${placement.id}, from ${placement.source ?? 'the game'}` : 'This building',
     expectedWinding: windingPreference,
     units: () => ({ factor: unitFactor(), short: displayUnits === 'imperial' ? 'ft' : 'm' }),
+    sideName: (side) => wallName(side),
     onUse: useEditedFootprint,
     onCancel: closeFootprintMode,
   });
@@ -3359,8 +3361,17 @@ async function loadFootprintContext(view) {
  * both by position: when the walls or masses changed in number, those go
  * (after asking), rather than landing on the wrong wall or mass.
  */
-function useEditedFootprint(edited) {
+function useEditedFootprint(edited, porches = []) {
   const { footprint, placement } = recenter(edited, modelConfig.placement);
+  // the porches made from the outline (Turn into a porch), moved with it, as structure records
+  const [shiftX, shiftZ] = [openRing(edited)[0][0] - footprint[0][0], openRing(edited)[0][1] - footprint[0][1]];
+  const moved = porches.map((porch) => ({
+    ...porch,
+    rect: {
+      minX: porch.rect.minX - shiftX, maxX: porch.rect.maxX - shiftX, minZ: porch.rect.minZ - shiftZ, maxZ: porch.rect.maxZ - shiftZ,
+    },
+  }));
+  const madePorches = porchStructures(footprint, moved, { volumeSplit: modelConfig.volumeSplit });
   const wallsChanged = footprint.length !== currentFootprint().length;
   const massesBefore = activeLayout?.volumes.length ?? 0;
   const massesAfter = computeFacadeLayout(footprint, { volumeSplit: modelConfig.volumeSplit }).volumes.length;
@@ -3400,6 +3411,9 @@ function useEditedFootprint(edited) {
     massMaps.forEach((key) => { modelConfig[key] = {}; });
     modelConfig.roofStructures = [];
   }
+  madePorches.structures.forEach((fields) => {
+    modelConfig.roofStructures = [...modelConfig.roofStructures, createRoofStructure('porch', fields, modelConfig.roofStructures)];
+  });
   modelConfig.placement = placement;
   selectedElementId = 'building-defaults';
   selectedStructureId = null;
@@ -3408,7 +3422,13 @@ function useEditedFootprint(edited) {
   elevationTargetKey = null;
   closeFootprintMode();
   loadFootprint(footprint).then(() => {
-    setStatus(`Footprint updated${dropped.length ? `; removed ${dropped.join(', ')}` : ''}.${placement ? ' Its placement in the game was kept.' : ''}`);
+    const added = madePorches.structures.length;
+    setStatus([
+      `Footprint updated${dropped.length ? `; removed ${dropped.join(', ')}` : ''}${added ? `; added ${added} ${added === 1 ? 'porch' : 'porches'}` : ''}.`,
+      placement ? 'Its placement in the game was kept.' : '',
+      ...madePorches.problems,
+      roofStructureIssues,
+    ].filter(Boolean).join(' '), roofStructureIssues || madePorches.problems.length ? 'error' : 'default');
   });
 }
 

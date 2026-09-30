@@ -183,7 +183,12 @@ import, the eave guide (the outline inset by the eave depth, since an aerial
 shows roof edges), and, from the game's server, neighbors and the aerial.
 The edits themselves are pure functions in `js/footprint-editor.js`. Use
 this footprint re-centers the outline and moves `placement.center` to match,
-so the building stays in place in the game. See docs/FOOTPRINT_EDITING_PLAN.md.
+so the building stays in place in the game. Turn into a porch
+(`js/footprint-porch.js`) cuts an open porch traced as part of the house out
+of the outline (a rectangle drawn over it, or a traced bump), or keeps the
+outline for a recessed porch, and adds the porch structure when the
+footprint is used; legs turned one at a time round a corner join into a
+wraparound. See docs/FOOTPRINT_EDITING_PLAN.md.
 
 **Roofs meeting their neighbors.** A gable's end meeting a neighbor's roof
 merges into it by default (its ridge runs into the neighbor's slope with

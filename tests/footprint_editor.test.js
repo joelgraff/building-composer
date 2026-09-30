@@ -269,6 +269,20 @@ describe('the editor', () => {
     assert.equal(edit(editor, editor.footprint.map((point) => [...point])), editor);
   });
 
+  it('undoes an outline change and its porches as one step', () => {
+    let editor = createFootprintEditor(RECT);
+    const porch = { type: 'projecting', side: 'maxZ', rect: { minX: -5, maxX: 5, minZ: 2, maxZ: 4 } };
+    editor = edit(editor, moveWall(RECT, 2, -2), { porches: [porch] });
+    assert.equal(editor.porches.length, 1);
+    editor = edit(editor, moveWall(editor.footprint, 1, 1));
+    assert.equal(editor.porches.length, 1);
+    editor = undo(undo(editor));
+    samePoints(editor.footprint, RECT);
+    assert.deepEqual(editor.porches, []);
+    editor = redo(editor);
+    assert.equal(editor.porches.length, 1);
+  });
+
   it('keeps the current problems', () => {
     let editor = createFootprintEditor(RECT);
     editor = edit(editor, moveCorner(editor.footprint, 2, [-6, -6]));

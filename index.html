@@ -671,6 +671,17 @@
       .fp-corner { fill: #fff; stroke: #1d3f8f; stroke-width: 2; cursor: move; }
       .fp-corner.selected { fill: #00a6b8; stroke: #00a6b8; }
       .fp-snap { fill: none; stroke: #f4b400; stroke-width: 2; }
+      .fp-svg.drawing { cursor: crosshair; }
+      .fp-hatch-back { fill: rgba(224, 121, 27, 0.12); }
+      .fp-hatch-line { stroke: rgba(224, 121, 27, 0.55); stroke-width: 0.06; }
+      .fp-porch { fill: url(#fp-hatch); stroke: #e0791b; stroke-width: 1.5; }
+      .fp-porch.recess { stroke-dasharray: 4 3; }
+      .fp-porch-label { fill: #9a4f0c; paint-order: stroke; stroke: rgba(255, 255, 255, 0.9); font-family: inherit; font-weight: 600; pointer-events: none; }
+      .fp-draft-rect { fill: rgba(224, 121, 27, 0.15); stroke: #e0791b; stroke-width: 1.5; stroke-dasharray: 5 3; }
+      .fp-actions button.active { background: #e0791b; border-color: #e0791b; color: #fff; }
+      .fp-porch-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
+      .fp-porch-row button { padding: 0 8px; border: 0; background: none; font-size: 1rem; color: var(--muted); }
+      .fp-porch-row button:hover { color: #c0392b; }
       .fp-labels text { fill: var(--text); paint-order: stroke; stroke: rgba(255, 255, 255, 0.9); font-family: inherit; pointer-events: none; }
 
       .fp-panel {
@@ -1108,6 +1119,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=85"></script>
+    <script type="module" src="./js/main.js?v=86"></script>
   </body>
 </html>
