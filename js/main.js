@@ -3413,7 +3413,12 @@ function renderTrimPanel() {
     }
     return fieldGroup(label, parts);
   });
-  trimControls.innerHTML = selectField('Trim material', 'material', materialOptions, trim.material) + groups.join('');
+  const corners = [selectField('At the outside corners', 'corners.style', [['none', 'Nothing'], ['boards', 'Corner boards'], ['quoins', 'Quoins']], trim.corners.style)];
+  if (trim.corners.style !== 'none') {
+    corners.push(numberField(trim.corners.style === 'quoins' ? 'Quoin width (the short ones)' : 'Board width', 'corners.width', trim.corners.width, { step: 0.02 }));
+    corners.push(numberField('Projection', 'corners.projection', trim.corners.projection, { step: 0.01 }));
+  }
+  trimControls.innerHTML = selectField('Trim material', 'material', materialOptions, trim.material) + groups.join('') + fieldGroup('Corners', corners);
 }
 
 function applyTrimFieldEdit(input) {
@@ -3421,6 +3426,9 @@ function applyTrimFieldEdit(input) {
   const [kind, key] = input.dataset.field.split('.');
   if (kind === 'material') {
     trim.material = input.value;
+  } else if (kind === 'corners') {
+    // (normalizeTrim keeps sizes in range)
+    trim.corners[key] = key === 'style' ? input.value : Number(input.value) / unitFactor();
   } else if (key === 'enabled' || key === 'dentils') {
     trim[kind][key] = input.checked;
   } else {

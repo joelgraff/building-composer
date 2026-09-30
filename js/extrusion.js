@@ -9,7 +9,7 @@ import {
   resolveOpening, openingOutline, structureOpeningHost, normalizeSteps, flightFor, doorStepPieces, doorStepRails, STEP_RAIL_INSET, FRAME_DEPTH, PANE_RECESS, FRAME_CASING_WIDTH, STEP_SIDE_MARGIN,
 } from './openings.js';
 import {
-  normalizeTrim, normalizeWallTrim, courseOn, TRIM_KINDS, courseProfile, profileExtent, subtractIntervals, sweepCourse, dentilSize, dentilTriangles, floorLines,
+  normalizeTrim, normalizeWallTrim, courseOn, cornerTriangles, TRIM_KINDS, courseProfile, profileExtent, subtractIntervals, sweepCourse, dentilSize, dentilTriangles, floorLines,
 } from './trim.js';
 import {
   normalizeRailing, railingParts, partTriangles, TOP_RAIL,
@@ -1015,7 +1015,7 @@ function withTrim(result, config) {
   const wallRuns = config.facadeLayout?.wallRuns ?? [];
   // a course runs where the building has it on, or where a wall turns it on for itself
   const anyOn = (kind) => trim[kind].enabled || Object.values(wallTrim).some((own) => own[kind] === 'on');
-  if (!TRIM_KINDS.some(anyOn) || wallRuns.length < 3) {
+  if ((!TRIM_KINDS.some(anyOn) && trim.corners.style === 'none') || wallRuns.length < 3) {
     return result;
   }
   const levelConfig = { ...config, foundationDepth: config.foundationDepth ?? 0.6 };
@@ -1098,6 +1098,15 @@ function withTrim(result, config) {
       extent,
       (ring) => sweepCourse(ring, profile)
     )));
+  }
+  if (trim.corners.style !== 'none') {
+    // from on top of the water table (or the floor) up under the cornice and its dentils (or the wall top)
+    const dentilDrop = trim.cornice.dentils ? dentilSize(trim.cornice).height : 0;
+    addMesh('corners', cornerTriangles(houseRuns.map((run) => ({
+      ...run,
+      y0: courseOn(trim, wallTrim, run.id, 'waterTable') && Number.isFinite(run.waterY) ? run.waterY + trim.waterTable.height : run.baseY,
+      y1: courseOn(trim, wallTrim, run.id, 'cornice') ? run.corniceY - trim.cornice.height - dentilDrop : run.plateY,
+    })), trim.corners));
   }
   if (anyOn('cornice')) {
     const profile = courseProfile('cornice', trim.cornice);

@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeTrim, hasTrim, courseProfile, profileExtent, subtractIntervals, triangulatePolygon, sweepCourse, miterVector,
-  dentilTriangles, dentilSize, floorLines, TRIM_DEFAULTS, normalizeWallTrim, courseOn,
+  dentilTriangles, dentilSize, floorLines, TRIM_DEFAULTS, normalizeWallTrim, courseOn, cornerTriangles,
 } from '../js/trim.js';
 import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState } from '../js/facade.js';
 import { createBuildingFromFootprint } from '../js/extrusion.js';
@@ -307,5 +307,70 @@ describe('trim wall by wall', () => {
     const saved = serializeBuildingState(layout, { wallTrim: { 'wall-run-0': { cornice: 'off' }, 'wall-run-9': { cornice: 'on' } } });
     assert.deepEqual(deserializeBuildingState(saved).state.wallTrim, { 'wall-run-0': { cornice: 'off' } });
     assert.deepEqual(deserializeBuildingState({ format: 'building-composer', version: 1, footprint: RECT }).state.wallTrim, {});
+  });
+});
+
+describe('at the outside corners', () => {
+  const ringWith = (footprint, y0 = 0.6, y1 = 6.6) => ringOf(footprint).map((run) => ({ ...run, y0, y1 }));
+  // a corner piece: an L of 6 points stood up: 4 cap triangles top and bottom, 6 sides
+  const PIECE = 2 * 4 + 6 * 2;
+  const boards = { style: 'boards', width: 0.15, projection: 0.025 };
+
+  it('none unless asked', () => {
+    assert.equal(normalizeTrim({}).corners.style, 'none');
+    assert.deepEqual(cornerTriangles(ringWith(RECT), normalizeTrim({}).corners), []);
+    assert.equal(hasTrim(normalizeTrim({ corners: { style: 'quoins' } })), true);
+  });
+
+  it('boards at each of a box\'s four corners, standing out from both faces, the corner\'s height', () => {
+    const triangles = cornerTriangles(ringWith(RECT), boards);
+    assert.equal(triangles.length, 4 * PIECE);
+    const points = triangles.flat();
+    assert.ok(Math.abs(Math.max(...points.map(([x]) => x)) - 5.025) < 1e-9);
+    assert.deepEqual([Math.min(...points.map(([, y]) => y)), Math.max(...points.map(([, y]) => y))], [0.6, 6.6]);
+    // along each face, the board's width back from the corner
+    assert.ok(points.some(([x, , z]) => Math.abs(x - (5 - 0.15)) < 1e-9 && Math.abs(z - -4.025) < 1e-9));
+  });
+
+  it('none at an inside corner, or where the wall only bends (a tower\'s facets)', () => {
+    const ell = [[-6, -4], [6, -4], [6, 0], [0, 0], [0, 4], [-6, 4]];
+    assert.equal(cornerTriangles(ringWith(ell), boards).length, 5 * PIECE);
+    const octagon = Array.from({ length: 8 }, (_, k) => [3 * Math.cos((k * Math.PI) / 4), 3 * Math.sin((k * Math.PI) / 4)]);
+    const ring = octagon.map((start, i) => {
+      const end = octagon[(i + 1) % 8];
+      const length = Math.hypot(end[0] - start[0], end[1] - start[1]);
+      return {
+        start, end, normal: [(end[1] - start[1]) / length, -(end[0] - start[0]) / length], y0: 0, y1: 3,
+      };
+    });
+    assert.deepEqual(cornerTriangles(ring, boards), []);
+  });
+
+  it('quoins stacked up the corner, long and short in turn', () => {
+    const quoins = cornerTriangles(ringWith(RECT, 0.6, 3.6), { style: 'quoins', width: 0.2, projection: 0.04 });
+    // 3 m of corner: 9 quoins of 0.3 m with 0.03 m gaps
+    assert.equal(quoins.length, 4 * 9 * PIECE);
+    const first = cornerTriangles(ringWith([[-5, -4], [5, -4], [5, 4], [-5, 4]], 0, 0.3), { style: 'quoins', width: 0.2, projection: 0.04 }).flat();
+    // at the (5, -4) corner the first is long along the z = -4 face (0.36) and short along the x = 5 face (0.2)
+    assert.ok(first.some(([x, , z]) => Math.abs(x - (5 - 0.36)) < 1e-9 && Math.abs(z + 4) < 1e-9));
+    assert.ok(first.some(([x, , z]) => Math.abs(x - 5) < 1e-9 && Math.abs(z - (-4 + 0.2)) < 1e-9));
+  });
+
+  it('on a built house, from on top of the water table up under the cornice', () => {
+    const layout = computeFacadeLayout(RECT, {});
+    const built = createBuildingFromFootprint(RECT, {
+      storyCount: 2, storyHeight: 3, foundationDepth: 0.6, roofType: 'gable', roofDirection: 'x', roofHeight: 2, roofEaveDepth: 0,
+      volumes: layout.volumes, facadeLayout: layout,
+      trim: { waterTable: { enabled: true }, cornice: { enabled: true }, corners: { style: 'boards' } },
+    });
+    let ys = [];
+    built.building.traverse((mesh) => {
+      if (mesh.userData?.trimKind === 'corners') {
+        const p = mesh.geometry.getAttribute('position');
+        ys = Array.from({ length: p.count }, (_, i) => p.getY(i));
+      }
+    });
+    assert.ok(Math.abs(Math.min(...ys) - (0.6 + TRIM_DEFAULTS.waterTable.height)) < 1e-5);
+    assert.ok(Math.abs(Math.max(...ys) - (6.6 - TRIM_DEFAULTS.cornice.height)) < 1e-5);
   });
 });

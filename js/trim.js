@@ -26,7 +26,14 @@ export const TRIM_DEFAULTS = Object.freeze({
   cornice: Object.freeze({
     enabled: false, height: 0.3, projection: 0.2, dentils: false,
   }),
+  corners: Object.freeze({ style: 'none', width: 0.15, projection: 0.05 }),
 });
+
+/** What stands at the building's outside corners: nothing, a pair of corner boards, or quoins. */
+export const CORNER_STYLES = Object.freeze(['none', 'boards', 'quoins']);
+export const CORNER_WIDTH_RANGE = Object.freeze([0.08, 0.6]);
+// (at least clear of the facade panels over the walls, 0.035 out, which would hide them)
+export const CORNER_PROJECTION_RANGE = Object.freeze([0.045, 0.15]);
 
 /** Allowed course sizes (meters). */
 export const TRIM_HEIGHT_RANGE = Object.freeze([0.05, 1.2]);
@@ -60,12 +67,17 @@ export function normalizeTrim(raw) {
     waterTable: course('waterTable'),
     beltCourse: course('beltCourse'),
     cornice: course('cornice'),
+    corners: {
+      style: CORNER_STYLES.includes(source.corners?.style) ? source.corners.style : 'none',
+      width: clamp(source.corners?.width, CORNER_WIDTH_RANGE, TRIM_DEFAULTS.corners.width),
+      projection: clamp(source.corners?.projection, CORNER_PROJECTION_RANGE, TRIM_DEFAULTS.corners.projection),
+    },
   };
 }
 
-/** Whether any course is switched on. */
+/** Whether any course, or anything at the corners, is switched on. */
 export function hasTrim(trim) {
-  return Boolean(trim) && TRIM_KINDS.some((kind) => trim[kind]?.enabled);
+  return Boolean(trim) && (TRIM_KINDS.some((kind) => trim[kind]?.enabled) || (trim.corners?.style ?? 'none') !== 'none');
 }
 
 /**
@@ -324,4 +336,87 @@ export function normalizeWallTrim(raw) {
 export function courseOn(trim, wallTrim, wallId, kind) {
   const own = wallTrim?.[wallId]?.[kind];
   return own ? own === 'on' : Boolean(trim?.[kind]?.enabled);
+}
+
+/** A quoin's height, the gap between quoins, and how much longer a long quoin is than a short one along its face. */
+const QUOIN = Object.freeze({ height: 0.3, gap: 0.03, long: 1.8 });
+/** Corners turning less than this (a tower's facets) get nothing. */
+const MIN_CORNER_TURN = Math.PI / 3;
+
+/**
+ * The triangles of what stands at each outside corner of a ring of wall runs
+ * (as sweepCourse takes them, each with `y0` and `y1`, the heights its corner
+ * pieces run between, or null for none): corner boards, a board `width` wide
+ * on each face, `projection` out from it, running the corner's height; or
+ * quoins, blocks stacked up it, long on one face and short on the other in
+ * turn. Only a corner where two runs meet, turning out (convex) by at least
+ * MIN_CORNER_TURN, gets them; it runs between the higher bottom and the lower
+ * top of its two runs.
+ */
+export function cornerTriangles(ring, corners) {
+  if (!corners || corners.style === 'none') {
+    return [];
+  }
+  const triangles = [];
+  const n = ring.length;
+  ring.forEach((run, index) => {
+    const next = ring[(index + 1) % n];
+    if (!Number.isFinite(run.y0) || !Number.isFinite(next.y0) || Math.hypot(run.end[0] - next.start[0], run.end[1] - next.start[1]) > 1e-6) {
+      return;
+    }
+    const direction = (r) => {
+      const length = Math.hypot(r.end[0] - r.start[0], r.end[1] - r.start[1]);
+      return [(r.end[0] - r.start[0]) / length, (r.end[1] - r.start[1]) / length];
+    };
+    const [da, db] = [direction(run), direction(next)];
+    // convex: the next wall heads back from this one's face; and it turns enough to read as a corner
+    const turn = Math.acos(Math.max(-1, Math.min(1, da[0] * db[0] + da[1] * db[1])));
+    if (dot2(run.normal, db) >= -1e-9 || turn < MIN_CORNER_TURN) {
+      return;
+    }
+    const y0 = Math.max(run.y0, next.y0);
+    const y1 = Math.min(run.y1, next.y1);
+    if (y1 - y0 < 0.05) {
+      return;
+    }
+    const c = run.end;
+    const p = corners.projection;
+    const miter = miterVector(run.normal, next.normal);
+    // an L round the corner: along this wall back from it `wa`, along the next `wb`
+    const piece = (wa, wb, bottom, top) => {
+      const plan = [
+        [c[0] - da[0] * wa, c[1] - da[1] * wa],
+        [c[0] - da[0] * wa + run.normal[0] * p, c[1] - da[1] * wa + run.normal[1] * p],
+        [c[0] + miter[0] * p, c[1] + miter[1] * p],
+        [c[0] + db[0] * wb + next.normal[0] * p, c[1] + db[1] * wb + next.normal[1] * p],
+        [c[0] + db[0] * wb, c[1] + db[1] * wb],
+        [c[0], c[1]],
+      ];
+      triangles.push(...prismTriangles(plan, bottom, top));
+    };
+    if (corners.style === 'boards') {
+      piece(corners.width, corners.width, y0, y1);
+      return;
+    }
+    const long = corners.width * QUOIN.long;
+    for (let y = y0, k = 0; y + QUOIN.height <= y1 + 1e-9; y += QUOIN.height + QUOIN.gap, k += 1) {
+      piece(k % 2 ? corners.width : long, k % 2 ? long : corners.width, y, y + QUOIN.height);
+    }
+  });
+  return triangles;
+}
+
+/** A plan polygon ([x, z]) stood up from `bottom` to `top`, as triangles (its sides against the walls included: they're hidden). */
+function prismTriangles(plan, bottom, top) {
+  const at = ([x, z], y) => [x, y, z];
+  const out = [];
+  triangulatePolygon(plan).forEach(([i, j, k]) => {
+    out.push([at(plan[i], top), at(plan[j], top), at(plan[k], top)]);
+    out.push([at(plan[k], bottom), at(plan[j], bottom), at(plan[i], bottom)]);
+  });
+  plan.forEach((point, i) => {
+    const next = plan[(i + 1) % plan.length];
+    out.push([at(point, bottom), at(next, bottom), at(next, top)], [at(point, bottom), at(next, top), at(point, top)]);
+  });
+  return out;
 }
