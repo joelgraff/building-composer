@@ -2,7 +2,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import { validateFootprint, normalizeFootprint, computeFootprintMetrics } from './footprint.js';
 import {
-  createBuildingFromFootprint, volumeWallHeight, volumeFoundationHeight, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS, porchStepTravel, PORCH_STEP_WIDTH,
+  createBuildingFromFootprint, volumeWallHeight, volumeFoundationHeight, roofHeightFromPitch, roofPitchFromHeight, roofPitchDegrees, setStraightSkeletonBuilder, TWO_SLOPE_DEFAULTS, porchStepTravel, PORCH_STEP_WIDTH, volumeStories,
 } from './extrusion.js';
 import {
   normalizeRoofStructures, STRUCTURE_SUPPORTS, STRUCTURE_WALLS, structureFrame, structureWallSides, resolveRoofStructure, MAX_BRACKET_PROJECTION, hostEaveProfile,
@@ -14,7 +14,7 @@ import {
   computeFacadeLayout, serializeBuildingState, deserializeBuildingState, findVolumeAdjacencies, roofAxisForDirection, withStructureFacades, angledWallProblem, wallRunFrame,
 } from './facade.js';
 import {
-  normalizeOpenings, createOpening, fitOpening, structureOpeningHost, shapeLimit, normalizeSteps, flightFor, resolveOpening, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
+  normalizeOpenings, createOpening, fitOpening, structureOpeningHost, shapeLimit, normalizeSteps, flightFor, windowGrid, wallStories, FILL_MARGIN, resolveOpening, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
 } from './openings.js';
 import {
   normalizeTrim, normalizeWallTrim, TRIM_HEIGHT_RANGE, TRIM_PROJECTION_RANGE,
@@ -1148,7 +1148,7 @@ function renderOpeningsBox(wallRun) {
   const rows = onThisWall.length
     ? onThisWall.map(openingRowHtml).join('')
     : '<div class="scope-empty">No windows or doors on this wall yet.</div>';
-  wallOpeningsBox.innerHTML = addRow + rows;
+  wallOpeningsBox.innerHTML = addRow + rows + fillWallHtml(wallRun);
   const selected = selectedOpeningId ? openingRecord(selectedOpeningId) : null;
   // Rewriting the editor's HTML on every tick of a slider drag would tear
   // out the range input the pointer is captured on — see the identical
@@ -1161,6 +1161,52 @@ function renderOpeningsBox(wallRun) {
     return;
   }
   openingEditor.innerHTML = selected ? openingEditorHtml(selected) : '';
+}
+
+/** A wall's stories, as windowGrid fills them: a house wall's volume's, or a structure wall's one. */
+function fillStories(wallRun) {
+  if (wallRun.runType === 'structure-wall') {
+    return wallStories(1, openingHost(wallRun.id)?.wallHeight ?? 0);
+  }
+  const { count, height } = volumeStories(wallRun.volumeId, modelConfig);
+  return wallStories(count, height);
+}
+
+/** The "fill with windows" controls under a wall's openings: how many to a story, on which stories. */
+function fillWallHtml(wallRun) {
+  const suggested = Math.max(1, Math.round((wallRun.length - 2 * FILL_MARGIN) / 2.4));
+  const stories = fillStories(wallRun);
+  const which = stories.length > 1
+    ? `<div class="field"><label>On</label><select data-fill="stories">${optionsHtml([['all', 'Every story'], ['ground', 'The ground story'], ['upper', 'The upper stories']], 'all')}</select></div>`
+    : '';
+  return fieldGroup('Fill with windows', [
+    `<div class="field"><label>Windows per story</label><input type="number" min="1" max="20" step="1" data-fill="count" value="${suggested}" /></div>`,
+    which,
+    '<div class="actions" style="margin:4px 0 8px;"><button data-fill-wall>Replace the windows on these stories</button></div>',
+  ].filter(Boolean));
+}
+
+/** Replaces the selected wall's windows with evenly spaced ones, lined up floor to floor, clear of its doors. */
+function fillSelectedWall() {
+  const wallRun = findRun(selectedWallId, activeLayout);
+  const host = wallRun && openingHost(wallRun.id);
+  if (!host) {
+    return;
+  }
+  const count = Math.max(1, Math.min(20, Math.round(Number(wallOpeningsBox.querySelector('[data-fill="count"]')?.value) || 1)));
+  const which = wallOpeningsBox.querySelector('[data-fill="stories"]')?.value ?? 'all';
+  const stories = fillStories(wallRun);
+  const chosen = which === 'ground' ? stories.slice(0, 1) : which === 'upper' ? stories.slice(1) : stories;
+  // a window on one of the chosen stories is replaced; the wall's doors, and windows on other stories, stay
+  const replaced = (opening) => opening.hostWallRunId === wallRun.id && opening.kind === 'window'
+    && chosen.some(({ base, height }) => {
+      const middle = opening.sillHeight + opening.height / 2;
+      return middle >= base && middle < base + height;
+    });
+  const keep = modelConfig.openings.filter((opening) => opening.hostWallRunId === wallRun.id && !replaced(opening));
+  const windows = windowGrid({ ...host, id: wallRun.id }, { count, stories: chosen, keep });
+  selectedOpeningId = null;
+  rebuildWithOpenings([...modelConfig.openings.filter((opening) => !replaced(opening)), ...windows]);
 }
 
 /** A window/door's row in the wall-info panel: its kind, any build problem, and a delete button. */
@@ -1423,6 +1469,10 @@ function deleteOpening(id) {
 }
 
 wallOpeningsBox.addEventListener('click', (event) => {
+  if (event.target.closest('[data-fill-wall]')) {
+    fillSelectedWall();
+    return;
+  }
   const addBtn = event.target.closest('[data-add-opening]');
   if (addBtn) {
     if (!activeLayout || !selectedWallId) {

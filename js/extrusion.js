@@ -890,7 +890,7 @@ function lowestSurfaceAbove(triangles, x, z, floorY) {
 }
 
 /** A volume's stories, as volumeWallHeight counts them. */
-function volumeStories(volumeId, config) {
+export function volumeStories(volumeId, config) {
   const count = (volumeId && config.volumeStoryOverrides?.[volumeId]) ?? config.storyCount ?? 1;
   const own = volumeId ? config.volumeStoryHeights?.[volumeId] : undefined;
   const height = own > 0 ? own : config.storyHeight ?? 3.2;

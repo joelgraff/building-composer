@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  normalizeOpening, normalizeOpenings, createOpening, resolveOpening, openingOutline, structureOpeningHost, rectInShape, fitOpening, shapeLimit, stepFlight, normalizeSteps, flightFor,
+  normalizeOpening, normalizeOpenings, createOpening, resolveOpening, openingOutline, structureOpeningHost, rectInShape, fitOpening, shapeLimit, stepFlight, normalizeSteps, flightFor, windowGrid, wallStories, FILL_MARGIN,
   STEP_TREAD, STEP_LANDING, STEP_SIDE_MARGIN,
   OPENING_PRESETS, FRAME_CASING_WIDTH, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
 } from '../js/openings.js';
@@ -521,5 +521,48 @@ describe('entry steps', () => {
     const openings = normalizeOpenings([{ kind: 'door', hostWallRunId: 'wall-run-0', steps: false }, { kind: 'door', hostWallRunId: 'wall-run-1', offset: 2 }]);
     const { state } = deserializeBuildingState(serializeBuildingState(layout, { openings }));
     assert.deepEqual(state.openings.map((opening) => opening.steps.enabled), [false, true]);
+  });
+});
+
+describe('filling a wall with windows', () => {
+  // a 10 m wall, two 3 m stories
+  const host = wallRun({ wallHeight: 6 });
+  const stories = wallStories(2, 3);
+
+  it('sets the same bays on every story, lined up floor to floor', () => {
+    const windows = windowGrid(host, { count: 3, stories });
+    assert.equal(windows.length, 6);
+    const bay = (10 - 2 * FILL_MARGIN) / 3;
+    const offsets = [...new Set(windows.map((w) => +w.offset.toFixed(6)))];
+    assert.deepEqual(offsets, [0, 1, 2].map((i) => +(-5 + FILL_MARGIN + bay * (i + 0.5)).toFixed(6)));
+    assert.deepEqual([...new Set(windows.map((w) => w.sillHeight))], [0.9, 3.9]);
+    assert.ok(windows.every((w) => w.kind === 'window' && w.hostWallRunId === 'wall-run-0' && w.id === null));
+  });
+
+  it('a window a story up clears the one below it', () => {
+    const [below] = windowGrid(host, { count: 1, stories: wallStories(1, 3) });
+    const above = { ...below, id: 'above', sillHeight: 3.9 };
+    assert.deepEqual(resolveOpening(normalizeOpening({ ...below, id: 'below' }), host, { siblings: [above] }).errors, []);
+  });
+
+  it('leaves out a place a door takes, on its own story only', () => {
+    const door = normalizeOpening({ id: 'door', kind: 'door', hostWallRunId: 'wall-run-0', offset: 0 });
+    const windows = windowGrid(host, { count: 3, stories, keep: [door] });
+    assert.equal(windows.length, 5);
+    assert.ok(windows.some((w) => Math.abs(w.offset) < 1e-9 && w.sillHeight === 3.9), 'the one over the door stays');
+  });
+
+  it('narrows windows to their bays, and gives up where a bay is too narrow', () => {
+    // 8 bays of 1.15 m: less the casings and gaps, 0.77 m windows
+    const tight = windowGrid(host, { count: 8, stories: wallStories(1, 3) });
+    assert.equal(tight.length, 8);
+    assert.ok(tight.every((w) => w.width < OPENING_PRESETS.window.width));
+    assert.deepEqual(windowGrid(host, { count: 30, stories }), []);
+  });
+
+  it('shortens a window to fit a low story, and skips a story too low for one', () => {
+    const [low] = windowGrid(host, { count: 1, stories: wallStories(1, 2.4) });
+    assert.ok(Math.abs(low.height - (2.4 - 0.9 - 0.3)) < 1e-9);
+    assert.deepEqual(windowGrid(host, { count: 1, stories: wallStories(1, 1.4) }), []);
   });
 });

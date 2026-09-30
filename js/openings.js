@@ -158,11 +158,15 @@ export function resolveOpening(opening, hostWallRun, config = {}) {
   }
 
   const siblings = (config.siblings ?? []).filter((other) => other.id !== opening.id && other.hostWallRunId === opening.hostWallRunId);
-  const overlapsSibling = siblings.some((other) => {
+  // (overlapping across the wall and up it: a window over another, a story up, is clear of it)
+  const overlapsSibling = siblings.some((raw) => {
+    const other = normalizeOpening(raw) ?? raw;
     const otherHalf = other.width / 2;
     const otherU0 = other.offset - otherHalf - OPENING_GAP;
     const otherU1 = other.offset + otherHalf + OPENING_GAP;
-    return u0 < otherU1 && otherU0 < u1;
+    const otherV0 = other.sillHeight - OPENING_GAP;
+    const otherV1 = other.sillHeight + other.height + OPENING_GAP;
+    return u0 < otherU1 && otherU0 < u1 && v0 < otherV1 && otherV0 < v1;
   });
   if (overlapsSibling) {
     errors.push(error('overlap', 'overlaps another opening on the same wall'));
@@ -532,4 +536,60 @@ export function doorStepRails(steps, rise, width, layout) {
     { start: [-side * half, rise, 0], end: [-side * half, rise, edge], stair: false },
     { start: [side * width / 2, rise, edge], end: [side * (width / 2 + run), flight.riser, edge], stair: true },
   ];
+}
+
+/** How far the windows filling a wall keep clear of its ends. */
+export const FILL_MARGIN = 0.4;
+/** Room kept over a window's head, under the next floor. */
+const HEAD_CLEARANCE = 0.3;
+
+/**
+ * Windows filling a wall: `count` to a story, in equal bays along the wall
+ * (FILL_MARGIN clear of its ends), the same bays on every story in `stories`
+ * ({ base, height }: the story's floor above the wall's floor line, and its
+ * height), so they line up floor to floor. Each sits at the preset's sill
+ * above its story's floor, no taller than leaves HEAD_CLEARANCE under the
+ * next, and no wider than its bay. A position that would overlap an opening
+ * in `keep` (the wall's doors), or that doesn't fit the wall (a dormer's
+ * gable), is left out. Records without ids: the caller gives them theirs.
+ */
+export function windowGrid(host, {
+  count, stories, keep = [], preset = OPENING_PRESETS.window,
+}) {
+  const usable = host.length - 2 * FILL_MARGIN;
+  if (!(count >= 1) || usable < MIN_OPENING_SIZE) {
+    return [];
+  }
+  const bay = usable / count;
+  const width = Math.min(preset.width, bay - 2 * (FRAME_CASING_WIDTH + OPENING_GAP));
+  if (width < MIN_OPENING_SIZE) {
+    return [];
+  }
+  const placed = [];
+  stories.forEach(({ base, height: storyHeight }) => {
+    const height = Math.min(preset.height, storyHeight - preset.sillHeight - HEAD_CLEARANCE);
+    if (height < MIN_OPENING_SIZE) {
+      return;
+    }
+    for (let i = 0; i < count; i += 1) {
+      const candidate = normalizeOpening({
+        id: `fill-${placed.length}-${i}`,
+        kind: 'window',
+        hostWallRunId: host.id,
+        offset: -host.length / 2 + FILL_MARGIN + bay * (i + 0.5),
+        width,
+        height,
+        sillHeight: base + preset.sillHeight,
+      });
+      if (resolveOpening(candidate, host, { siblings: [...keep, ...placed] }).resolved) {
+        placed.push(candidate);
+      }
+    }
+  });
+  return placed.map(({ id, ...opening }) => ({ ...opening, id: null }));
+}
+
+/** A wall's stories, as windowGrid takes them: `count` of them, each `height` tall, from its floor line. */
+export function wallStories(count, height) {
+  return Array.from({ length: Math.max(0, count) }, (_, k) => ({ base: k * height, height }));
 }
