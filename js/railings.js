@@ -66,7 +66,7 @@ export function normalizeRailing(raw) {
  * The parts of a railing (settings as normalizeRailing gives them, its top
  * rail at `height`, the settings' own unless lower) along a run `length`
  * long, left out across `gaps` ([from, to] along the run), with newel posts
- * at `posts` and just outside each gap. Rails and balusters stop at the
+ * at `posts` and just outside each gap (where no post stands already). Rails and balusters stop at the
  * faces of every post: its newels, and `obstacles` ([from, to] along the
  * run) standing there already (a porch's own posts). A part is a box ({ u0,
  * u1, c0, c1, y0, y1 }) or a turned baluster ({ turned: true, u, y0, y1 });
@@ -81,8 +81,10 @@ export function railingParts(length, settings, {
   });
   const railBottom = height - TOP_RAIL.height;
   const lowTop = BOTTOM_RAIL.lift + BOTTOM_RAIL.height;
-  // a gap's newels stand just outside it
-  const newels = [...new Set([...posts, ...gaps.flatMap(([from, to]) => [from - NEWEL.width / 2, to + NEWEL.width / 2])]
+  // a gap's newels stand just outside it, unless a post already stands there
+  const postAt = (u) => obstacles.some(([from, to]) => from < u + NEWEL.width / 2 - 1e-6 && to > u - NEWEL.width / 2 + 1e-6);
+  const gapNewels = gaps.flatMap(([from, to]) => [from - NEWEL.width / 2, to + NEWEL.width / 2]).filter((u) => !postAt(u));
+  const newels = [...new Set([...posts, ...gapNewels]
     .filter((u) => u >= -1e-6 && u <= length + 1e-6)
     .map((u) => Math.min(Math.max(u, NEWEL.width / 2), length - NEWEL.width / 2).toFixed(6)))].map(Number);
   const blocked = [...gaps, ...obstacles, ...newels.map((u) => [u - NEWEL.width / 2, u + NEWEL.width / 2])];

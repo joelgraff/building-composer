@@ -119,10 +119,37 @@ describe('railings on a built building', () => {
   it('rails a porch\'s open sides from its floor, and opens the front where its steps come up', () => {
     const points = railingPoints(build({ roofStructures: normalizeRoofStructures([porch()]) }));
     assert.ok(points.length > 0);
-    assert.ok(Math.abs(Math.min(...points.map(([, y]) => y)) - 0.7) < 1e-6, 'standing on the deck');
+    assert.ok(Math.abs(Math.min(...points.map(([, y]) => y)) - (0.7 + BOTTOM_RAIL.lift)) < 1e-6, 'its bottom rail just above the deck');
     // the front (z = 7.4) is open across the 1.5 m flight of steps in its middle, rails and balusters alike
     const inGap = points.filter(([x, y, z]) => Math.abs(z - 7.4) < 0.1 && Math.abs(x) < 0.7 && y > 0.75);
     assert.equal(inGap.length, 0);
+  });
+
+  it('frames a porch\'s steps with its posts, not a post in the opening, and needs no newels there', () => {
+    const built = build({ roofStructures: normalizeRoofStructures([porch()]) });
+    const postXs = [];
+    built.building.traverse((mesh) => {
+      if (mesh.userData?.structurePart === 'posts') {
+        const p = mesh.geometry.getAttribute('position');
+        for (let i = 0; i < p.count; i += 1) {
+          if (p.getZ(i) > 7.2) postXs.push(p.getX(i));
+        }
+      }
+    });
+    // the 1.5 m flight is centered on the 6 m front: posts' faces at x = ±0.75, none between
+    assert.ok(postXs.some((x) => Math.abs(x + 0.75) < 1e-6) && postXs.some((x) => Math.abs(x - 0.75) < 1e-6));
+    assert.ok(postXs.every((x) => x <= -0.75 + 1e-6 || x >= 0.75 - 1e-6), 'nothing stands in the opening');
+    const railing = railingPoints(built);
+    assert.ok(railing.every(([, y]) => y <= 0.7 + 1 + 1e-6), 'no newels: the posts frame the opening');
+  });
+
+  it('a narrow porch leaves the framing to its corner posts', () => {
+    const built = build({ roofStructures: normalizeRoofStructures([porch({ width: 1.8 })]) });
+    let posts = 0;
+    built.building.traverse((mesh) => {
+      if (mesh.userData?.structurePart === 'posts') posts = mesh.geometry.getAttribute('position').count / 36;
+    });
+    assert.equal(posts, 2, 'just its two front corners');
   });
 
   it('a porch\'s railing runs on its posts\' center line and stops at their faces', () => {
@@ -160,8 +187,8 @@ describe('railings on a built building', () => {
 
   it('a porch\'s railing is no higher than its ceiling, and as high as set below that', () => {
     const top = (railings, wallHeight = 2.8) => Math.max(...railingPoints(build({ roofStructures: normalizeRoofStructures([porch({ railings, wallHeight })]) })).map(([, y]) => y));
-    // the newels either side of the steps stand a cap above the rail
-    assert.ok(Math.abs(top({ height: 0.8 }) - (0.7 + 0.8 + NEWEL.cap)) < 1e-6);
+    // (the porch's own posts frame its steps, so there are no newels to stand above the rail)
+    assert.ok(Math.abs(top({ height: 0.8 }) - (0.7 + 0.8)) < 1e-6);
     assert.ok(top({ height: 1.5 }, 1.2) <= 0.7 + 1.2 + NEWEL.cap + 1e-6);
   });
 

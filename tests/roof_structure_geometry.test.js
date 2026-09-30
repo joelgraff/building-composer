@@ -557,7 +557,11 @@ describe('supports', () => {
     const result = porch({ baseHeight: 'ground', wallHeight: 2.8, openSides: ['front', 'left', 'right'] });
     const { resolved } = result.roofStructures[0];
     const posts = partOf(result, 'posts');
-    assert.equal(posts.length, 3 * 12, 'front corners and one mid-front post; the back corners bear on the wall');
+    assert.equal(posts.length, 4 * 12, 'front corners, and a post either side of its steps; the back corners bear on the wall');
+    const noSteps = partOf(porch({
+      baseHeight: 'ground', wallHeight: 2.8, openSides: ['front', 'left', 'right'], steps: { enabled: false },
+    }), 'posts');
+    assert.equal(noSteps.length, 3 * 12, 'without steps: front corners and one mid-front post');
     const [, ys, zs] = boundsOf(posts);
     assert.ok(Math.abs(ys[0] - resolved.sillY) < 1e-6 && Math.abs(ys[1] - resolved.plateY) < 1e-6, 'floor to plate');
     assert.ok(zs[1] <= FRONT + 0.2 + 1e-6, 'all along the front');

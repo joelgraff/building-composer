@@ -287,33 +287,68 @@ const PORCH_STEP_WIDTH = 1.5;
  * landing).
  */
 function withPorchSteps(result, config) {
-  const records = new Map((config.roofStructures ?? []).map((record) => [record.id, record]));
   const facades = new Map((result.structureFacades ?? []).map((facade) => [facade.structureId, facade]));
   const material = createMaterials(config).foundation;
   (result.roofStructures ?? []).forEach(({ resolved }) => {
-    if (!resolved || resolved.kind !== 'porch' || !['deck', 'porch'].includes(resolved.support) || !resolved.openSides.includes('front')) {
+    const opening = resolved && porchStepOpening(resolved);
+    if (!opening) {
       return;
     }
-    const front = (facades.get(resolved.id)?.railRuns ?? []).filter((run) => run.wall === 'front')
-      .sort((a, b) => Math.hypot(b.end[0] - b.start[0], b.end[2] - b.start[2]) - Math.hypot(a.end[0] - a.start[0], a.end[2] - a.start[2]))[0];
-    const steps = normalizeSteps(records.get(resolved.recordId ?? resolved.id)?.steps);
-    const flight = front && steps.enabled && flightFor(steps, front.start[1], { deck: true });
-    if (!flight) {
-      return;
-    }
-    const length = Math.hypot(front.end[0] - front.start[0], front.end[2] - front.start[2]);
-    const width = Math.min(steps.width ?? PORCH_STEP_WIDTH, length - 0.2);
-    if (width < 0.6) {
-      return;
-    }
-    const normal = PORCH_OUTWARD[front.side];
-    const center = [(front.start[0] + front.end[0]) / 2, (front.start[2] + front.end[2]) / 2];
+    const center = opening.point((opening.from + opening.to) / 2);
+    result.building.add(buildStepsAt(center, PORCH_OUTWARD[opening.side], opening.width, opening.flight, material, { structureId: resolved.id, bodyPart: 'porch-steps' }));
     // the front railing opens where the steps come up
-    result.railGaps = result.railGaps ?? new Map();
-    result.railGaps.set(front.id, [[length / 2 - width / 2, length / 2 + width / 2]]);
-    result.building.add(buildStepsAt(center, normal, width, flight, material, { structureId: resolved.id, bodyPart: 'porch-steps' }));
+    const front = (facades.get(resolved.id)?.railRuns ?? []).filter((run) => run.wall === 'front')
+      .find((run) => {
+        const along = (p) => opening.alongOf([p[0], p[2]]);
+        const [lo, hi] = [along(run.start), along(run.end)].sort((x, y) => x - y);
+        return lo <= opening.from + 1e-6 && hi >= opening.to - 1e-6;
+      });
+    if (front) {
+      const dir = Math.sign(opening.alongOf([front.end[0], front.end[2]]) - opening.alongOf([front.start[0], front.start[2]])) || 1;
+      const u = (t) => (t - opening.alongOf([front.start[0], front.start[2]])) * dir;
+      result.railGaps = result.railGaps ?? new Map();
+      result.railGaps.set(front.id, [[Math.min(u(opening.from), u(opening.to)), Math.max(u(opening.from), u(opening.to))]]);
+    }
   });
   return result;
+}
+
+/**
+ * Where a ground-level porch's steps come up its open front, if it has them
+ * (a porch on a deck, or on posts on one, open at the front, with steps on):
+ * `side` (of the porch's rectangle), `from`/`to` along that side's axis (the
+ * opening, as wide as the steps, centered on the side), the `flight`, and
+ * helpers from a plan point to its position along the side (`alongOf`) and
+ * back (`point`). The porch's posts frame this opening, the steps fill it,
+ * and its railing opens across it.
+ */
+function porchStepOpening(resolved) {
+  if (resolved.kind !== 'porch' || resolved.hood || !['deck', 'porch'].includes(resolved.support) || !resolved.openSides.includes('front')) {
+    return null;
+  }
+  const steps = normalizeSteps(resolved.steps);
+  const flight = steps.enabled && flightFor(steps, resolved.sillY, { deck: true });
+  if (!flight) {
+    return null;
+  }
+  const side = structureWallSides(resolved.frame).front;
+  const { bounds } = resolved;
+  const k = side === 'minX' || side === 'maxX' ? 1 : 0;
+  const [a, b] = k === 1 ? [bounds.minZ, bounds.maxZ] : [bounds.minX, bounds.maxX];
+  const width = Math.min(steps.width ?? PORCH_STEP_WIDTH, b - a - 0.2);
+  if (width < 0.6) {
+    return null;
+  }
+  const mid = (a + b) / 2;
+  return {
+    side,
+    flight,
+    width,
+    from: mid - width / 2,
+    to: mid + width / 2,
+    alongOf: (point) => point[k],
+    point: (t) => (k === 1 ? [bounds[side], t] : [t, bounds[side]]),
+  };
 }
 
 const PORCH_OUTWARD = { minX: [-1, 0], maxX: [1, 0], minZ: [0, -1], maxZ: [0, 1] };
@@ -1355,7 +1390,9 @@ function openSidePostPoints(resolved, solids) {
       : [[bounds.minX, bounds[side]], [bounds.maxX, bounds[side]]];
     const k = side === 'minX' || side === 'maxX' ? 1 : 0;
     // only the stretch of the side standing clear of the host and other volumes
-    spacedPositions(a[k], b[k], MAX_POST_SPAN).forEach((t) => {
+    const opening = wallName === 'front' ? porchStepOpening(resolved) : null;
+    const positions = opening ? framedPositions(a[k], b[k], opening) : spacedPositions(a[k], b[k], MAX_POST_SPAN);
+    positions.forEach((t) => {
       const point = k === 1 ? [a[0], t] : [t, a[1]];
       if (!onClosedWall(point) && !againstSolid(point)) {
         points.set(point.map((v) => v.toFixed(6)).join(','), point);
@@ -1363,6 +1400,22 @@ function openSidePostPoints(resolved, solids) {
     });
   });
   return [...points.values()];
+}
+
+/**
+ * Post positions along a side from `a` to `b` framing a steps opening
+ * (`from`..`to`): a post either side of it, its face on the opening's edge,
+ * and the stretches out to the corners spaced as usual. A framing post that
+ * would crowd a corner post is left to the corner post.
+ */
+function framedPositions(a, b, { from, to }) {
+  const s = POST_SIZE;
+  const left = from - s / 2;
+  const right = to + s / 2;
+  return [
+    ...(left - a >= s ? spacedPositions(a, left, MAX_POST_SPAN) : [a]),
+    ...(b - right >= s ? spacedPositions(right, b, MAX_POST_SPAN) : [b]),
+  ];
 }
 
 /** The plan rectangle a post at `point` covers (as postBox places it). */

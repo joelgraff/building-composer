@@ -1042,6 +1042,8 @@ function resolveStructureOnce(structure, host, config = {}) {
       innerLine: inner,
       eaves: structure.eaves,
       materials: structure.materials,
+      // a porch's steps (where its posts frame their opening; see porchStepOpening in extrusion.js)
+      steps: structure.steps,
     },
     errors,
     warnings,
