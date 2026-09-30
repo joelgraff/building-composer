@@ -32,7 +32,7 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
 
 - **The game owns the material vocabulary.** It publishes a manifest; Composer reads it and never invents names.
 - **Missing surfaces get new game materials** (doors, interior walls, floors, ceilings, white trim), not substitutes.
-- **Windows glow at night like the generated buildings'.** Composed exterior panes use the game's `window_lit`, with the same per-pane lit and curtain variation. No separate unlit glass material.
+- **Windows glow at night like the generated buildings'.** Composed exterior panes use the game's `window_lit`, with the same per-pane lit and curtain variation. No separate unlit glass material. `window_lit` is also used as seen from inside a walk-in building (confirmed acceptable).
 - **White trim.** The game gets a `trim_white` material; Composer's trim uses it instead of `siding_white`.
 - **Footprints are edited in Composer and written back to the game** (the footprint plan).
 
@@ -107,6 +107,5 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
 
 ## Open questions
 
-- **Interior glass.** A walk-in building's windows are seen from inside too. Does `window_lit` read well from inside (its glow and curtains are drawn for a viewer outside), or does the inner face need its own treatment?
 - **Roof finishes.** Offer `shingles_brown` and `roof_metal` for pitched roofs, and `roof_membrane` or `roof_metal` for flat roofs, per volume?
 - **Bundled manifest freshness.** Composer run on its own (not through the game's server) uses the bundled copy. Is a sync script enough, or should Composer show the manifest's version when it opens a game building?

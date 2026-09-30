@@ -59,7 +59,7 @@ Which parts belong in the footprint: enclosed rooms (bump-outs, additions, enclo
   - a part that turns a building corner becomes a wraparound porch (`wrap`);
   - a part that sits inside the wall line (a recessed porch traced as solid) becomes a recessed porch (`mount: 'recess'`), keeping the footprint.
 
-  The porch is created when the footprint is used, through the normal structure path (`normalizeRoofStructure`, `resolveRoofStructure`). If it's refused, the message says why (e.g. too shallow), and the footprint change stands. It's one undo step in the editor. The footprint written back to the game leaves the porch out, as it's not an enclosed part; the game's generator has its own `porch` field.
+  The porch is created when the footprint is used, through the normal structure path (`normalizeRoofStructure`, `resolveRoofStructure`). If it's refused, the message says why (e.g. too shallow), and the footprint change stands. It's one undo step in the editor. The footprint written back to the game leaves the porch out, as it's not an enclosed part, and the porch goes back separately so the game's generated building has it too (below, `porches` in the override).
 - **UI** (`js/main.js`, `index.html`): a footprint mode in the main viewport. An SVG overlay is recommended over a Three.js scene, for crisp handles, simple hit-testing, an `<image>` underlay, and zoom and pan with `viewBox`.
   - Layers, each toggleable: aerial (with opacity), the game's trace (dashed), the squared import, the edited outline with corner and wall handles, neighbors' outlines, and the eave-inset guide.
   - Readouts: wall lengths and angles, area, and how far the outline moved from the game's trace.
@@ -93,9 +93,28 @@ One file per building, `game/data/footprint_overrides/<id>.json`, like `game/dat
 
 `footprint` is in game coordinates, in the same winding as `game/data/buildings.json` (see the triangle-winding notes near the top of the game's `docs/buildings_notes.md`). `based_on` lets the game notice when the underlying OSM or Microsoft outline has since changed.
 
+Porches made with Turn into a porch go in the same file, so the game's generated building gets them too:
+
+```json
+"porches": [
+  { "kind": "shed_full", "legs": [ { "a": [510.2, -212.8], "b": [519.6, -213.4], "depth": 2.4 } ] }
+]
+```
+
+- Each leg is the porch's back edge along the wall, `a` to `b` in game coordinates, ordered so the edge's outward normal (the pipeline's `edge_dir_normal`, counter-clockwise rings) points away from the building, and its depth.
+- A projecting porch has one leg; a wraparound has one per wall.
+- `kind` is the game's nearest porch kind, for its style (post style, railing): `stoop` for a porch under about 1.5 m deep and 2.5 m wide, `wrap` for a wraparound, `gable_full` for a gable roof, and `shed_full` otherwise.
+- A recessed porch has no entry: the game's generator can't cut into its mass. It stays part of the solid building in the game's generated version.
+- Porches Composer already had (not made by Turn into a porch) are not sent. Only the footprint editor writes this list.
+
+The game's generator places porches by kind alone: on the main block's first wall, at a fraction of its width, with a fixed depth (`_place_porch()` in `pipeline/buildings/archetypes.py`). So the exact position has to travel with the kind.
+
 ### Game: pipeline and editor (dixon_dem)
 
 - `pipeline/buildings/build_building_plan.py`: after loading OSM, curated, and Microsoft footprints, apply `footprint_overrides/`. Replace the `footprint` of the record with that id, keep its id and tags, and recompute its ground heights from the heightmap as it already does. If `based_on.hash` no longer matches the source outline, warn and keep the override.
+- Porches from the override: set the building's template `porch` to the first porch's `kind` (over the generated choice, but under an explicit `porch` in `building_overrides.json`), and pass the legs as `porch_legs`.
+- `pipeline/buildings/archetypes.py` `_place_porch()`: when the template has `porch_legs`, build each leg with `build_porch(mb, a, b, ground_y, rng, width_frac=1.0, max_width=<leg length>, depth=<depth>)`, which already places a porch exactly along a given edge, instead of the kind's default edge and size. Without `porch_legs`, nothing changes.
+- Tests: an override with a porch on a side wall builds the porch on that wall, at that offset, width, and depth; a wraparound builds a porch per leg; a building without `porch_legs` builds as before.
 - `game/player/building_edit.gd`:
   - `_footprint(bid)` reads an override first, so X exports the corrected outline. The export adds `override: true` and `based_on`.
   - A key to revert a footprint to its source (deleting or disabling the override), matching R for composed designs.
@@ -112,7 +131,7 @@ Shared with the integration plan's Phase 5. Composer stores the hash of the outl
 3. **Editor UI** (Composer): footprint mode, layers, handles, numeric entry, import simplification settings, and the entry points (new building, Edit footprint).
 4. **Turn into a porch** (Composer): the cut, the porch, wraparound, and recessed cases, with tests that each yields a valid footprint and an accepted porch structure matching the cut part.
 5. **Write-back**: `POST /game-footprint/<id>`, the override file, and the download fallback.
-6. **Game pipeline and editor** (dixon_dem): apply overrides in the build plan; X exports them; revert key; tests.
+6. **Game pipeline and editor** (dixon_dem): apply overrides in the build plan, including porches placed by their legs (`porch_legs` in `_place_porch()`); X exports them; revert key (which also removes the porches); tests.
 7. **Reopen by outline hash** (Composer), with the integration plan's Phase 5.
 8. **Docs**: ARCHITECTURE.md §7 (the input pipeline), IMPLEMENTATION_PLAN.md, and the game's `docs/buildings_notes.md`.
 
@@ -124,8 +143,8 @@ Phases 1 and 2 are independent and can go in parallel. The UI needs both.
 - End to end:
   1. Run `python3 game/tools/composer_server.py`.
   2. In the game, press B and click a house whose OSM outline lacks a visible rear addition, then X. Composer opens in footprint mode with the aerial aligned under the trace. Check alignment against a clear corner.
-  3. Add the addition as a bump-out, and snap a wall to the neighbor's party wall. Save footprint to game.
-  4. In the game, rebuild the chunk. The generated house has the addition and sits where it did.
+  3. Add the addition as a bump-out, and snap a wall to the neighbor's party wall. Its front porch was traced as part of the house: select it and Turn into a porch. Save footprint to game.
+  4. In the game, rebuild the chunk. The generated house has the addition, a porch where the traced one was (same wall, offset, width, and depth), and sits where it did.
   5. Press X again. The corrected outline arrives, and a design saved before the edit offers to fit or start fresh.
   6. Design the building, Send to game, and rebuild. The composed building matches the corrected outline.
 
@@ -138,5 +157,4 @@ Phases 1 and 2 are independent and can go in parallel. The UI needs both.
 ## Open questions
 
 - **Default entry point.** Should every X open in footprint mode first, or only buildings without a saved design (as proposed)?
-- **Porch in the game's generator.** After Turn into a porch, should the written-back override also set the game's own `porch` field for that building, so its generated version gets a porch too?
 - **Imagery elsewhere.** The aerial tiles are only on the machine that fetched them. Should the server fetch a missing tile on demand (`fetch_illinois.py` logic), or should Composer do without?
