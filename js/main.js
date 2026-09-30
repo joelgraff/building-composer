@@ -16,7 +16,9 @@ import {
 import {
   normalizeOpenings, createOpening, fitOpening, structureOpeningHost, shapeLimit, normalizeSteps, flightFor, resolveOpening, MIN_OPENING_SIZE, OPENING_EDGE_MARGIN, DOOR_SILL_MAX,
 } from './openings.js';
-import { normalizeTrim, TRIM_HEIGHT_RANGE, TRIM_PROJECTION_RANGE } from './trim.js';
+import {
+  normalizeTrim, normalizeWallTrim, TRIM_HEIGHT_RANGE, TRIM_PROJECTION_RANGE,
+} from './trim.js';
 import { normalizeRailing } from './railings.js';
 import { exportGlb } from './export.js';
 import { buildGameFile } from './game-export.js';
@@ -68,6 +70,7 @@ const wallInfoSummary = document.getElementById('wall-info-summary');
 const wallPanelMaterialsBox = document.getElementById('wall-panel-materials');
 const wallOpeningsBox = document.getElementById('wall-openings-box');
 const openingEditor = document.getElementById('opening-editor');
+const wallTrimBox = document.getElementById('wall-trim-box');
 const volumeControlsBox = document.getElementById('volume-controls');
 const scopeCrumbs = document.getElementById('scope-crumbs');
 const facadeDefaultsPanel = document.getElementById('facade-defaults-panel');
@@ -439,6 +442,8 @@ let modelConfig = {
   openings: [],
   // water table, belt courses, cornice (see js/trim.js)
   trim: normalizeTrim(),
+  // trim courses turned on or off wall by wall, by wall run id (see normalizeWallTrim)
+  wallTrim: {},
   // a widow's walk's railings (see js/railings.js)
   walkRailings: normalizeRailing(),
   // where an imported footprint came from, to put the building back (see import.js)
@@ -1045,6 +1050,7 @@ function renderWallInfoPanel(layout) {
     wallPanelMaterialsBox.innerHTML = '';
     wallOpeningsBox.innerHTML = '';
     openingEditor.innerHTML = '';
+    wallTrimBox.innerHTML = '';
     // no wall (or a structure/rail run) is selected, so no window/door on a
     // wall can be either — every place that clears selectedWallId funnels
     // through this one render, rather than each needing its own reset
@@ -1059,6 +1065,7 @@ function renderWallInfoPanel(layout) {
     const wallName = `${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`;
     wallInfoSummary.innerHTML = `<strong>${escapeHtml(wallName)}</strong> of the ${escapeHtml(owner.toLowerCase())}<br>Length: ${formatLength(run.length)}`;
     wallPanelMaterialsBox.innerHTML = '';
+    renderWallTrimBox(run);
     renderOpeningsBox(run);
     return;
   }
@@ -1077,8 +1084,37 @@ function renderWallInfoPanel(layout) {
       </select>
     </div>
   `).join('');
+  renderWallTrimBox(run);
   renderOpeningsBox(run);
 }
+
+/** This wall's own trim: each course as the building has it, or turned on or off here. */
+function renderWallTrimBox(run) {
+  const trim = normalizeTrim(modelConfig.trim);
+  const own = modelConfig.wallTrim?.[run.id] ?? {};
+  const courses = [['waterTable', 'Water table'], ['beltCourse', 'Belt course'], ['cornice', 'Cornice']];
+  const fields = courses.map(([kind, label]) => selectField(label, kind, [
+    ['', `As the building (${trim[kind].enabled ? 'on' : 'off'})`], ['on', 'On'], ['off', 'Off'],
+  ], own[kind] ?? ''));
+  wallTrimBox.innerHTML = fieldGroup('Trim', fields);
+}
+
+wallTrimBox.addEventListener('change', (event) => {
+  const input = event.target.closest('[data-field]');
+  if (!input || !selectedWallId) {
+    return;
+  }
+  const own = { ...(modelConfig.wallTrim?.[selectedWallId] ?? {}) };
+  if (input.value) {
+    own[input.dataset.field] = input.value;
+  } else {
+    delete own[input.dataset.field];
+  }
+  modelConfig.wallTrim = normalizeWallTrim({ ...modelConfig.wallTrim, [selectedWallId]: own });
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
 
 /** This wall's own windows/doors: an Add row, then each one's row (mirrors structureRowHtml). */
 function renderOpeningsBox(wallRun) {
@@ -1676,6 +1712,7 @@ async function loadFootprint(footprintData, preserveView = true) {
     roofStructures: modelConfig.roofStructures,
     openings: modelConfig.openings,
     trim: modelConfig.trim,
+    wallTrim: modelConfig.wallTrim,
     walkRailings: modelConfig.walkRailings,
     roofBreakHeight: modelConfig.roofBreakHeight,
     roofLowerPitchRise: modelConfig.roofLowerPitchRise,
@@ -1766,6 +1803,9 @@ async function loadSampleFootprint() {
   modelConfig.volumeRoofShapes = {};
   modelConfig.volumeEaves = {};
   modelConfig.roofStructures = [];
+  // windows, doors, and per-wall trim address walls by position, which a new footprint renumbers
+  modelConfig.openings = [];
+  modelConfig.wallTrim = {};
   modelConfig.placement = undefined;
   modelConfig.frontSide = 'maxZ';
   frontSelect.value = 'maxZ';
@@ -2118,6 +2158,9 @@ function resetForNewFootprint() {
   modelConfig.volumeEaves = {};
   modelConfig.edgePitchOverrides = {};
   modelConfig.roofStructures = [];
+  // windows, doors, and per-wall trim address walls by position, which a new footprint renumbers
+  modelConfig.openings = [];
+  modelConfig.wallTrim = {};
   modelConfig.placement = undefined;
   modelConfig.frontSide = 'maxZ';
   frontSelect.value = 'maxZ';
@@ -3698,7 +3741,9 @@ function deleteStructure(id) {
     selectedStructureId = null;
   }
   // and the windows and doors on its walls (`wall-run-<structure>-<wall>`, or a part of it: `wall-run-<structure>-<part>-<wall>`)
-  modelConfig.openings = modelConfig.openings.filter((opening) => ![...doomed].some((doomedId) => opening.hostWallRunId.startsWith(`wall-run-${doomedId}-`)));
+  const onDoomed = (wallId) => [...doomed].some((doomedId) => wallId.startsWith(`wall-run-${doomedId}-`));
+  modelConfig.openings = modelConfig.openings.filter((opening) => !onDoomed(opening.hostWallRunId));
+  modelConfig.wallTrim = Object.fromEntries(Object.entries(modelConfig.wallTrim ?? {}).filter(([wallId]) => !onDoomed(wallId)));
   rebuildWithStructures(modelConfig.roofStructures.filter((structure) => !doomed.has(structure.id)));
 }
 

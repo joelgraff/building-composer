@@ -2,7 +2,7 @@ import { normalizeRoofStructures } from './roof-structures.js';
 import { hasAngledWalls, rectilinearHull, cutVolumes, cutDistance } from './angled-walls.js';
 import { cutRole } from './cut-roofs.js';
 import { normalizeOpenings } from './openings.js';
-import { normalizeTrim } from './trim.js';
+import { normalizeTrim, normalizeWallTrim } from './trim.js';
 import { normalizeRailing } from './railings.js';
 
 /**
@@ -674,6 +674,7 @@ export function serializeBuildingState(layout, modelConfig) {
     roofStructures: modelConfig.roofStructures ?? [],
     openings: modelConfig.openings ?? [],
     trim: normalizeTrim(modelConfig.trim),
+    wallTrim: normalizeWallTrim(modelConfig.wallTrim),
     walkRailings: normalizeRailing(modelConfig.walkRailings),
     // where the footprint came from, to put the building back (see import.js)
     placement: modelConfig.placement ?? null,
@@ -753,6 +754,9 @@ export function deserializeBuildingState(data) {
     }
     return hostOk;
   });
+  // per-wall trim, kept for the walls that still exist (a structure's while it does)
+  const wallTrim = Object.fromEntries(Object.entries(normalizeWallTrim(data.wallTrim))
+    .filter(([wallId]) => wallRunIds.has(wallId) || onKeptStructure(wallId)));
 
   return {
     valid: true,
@@ -800,6 +804,7 @@ export function deserializeBuildingState(data) {
       openings,
       // trim courses; an older file has none, so every course is off
       trim: normalizeTrim(data.trim),
+      wallTrim,
       // a widow's walk's railings; an older file's walk has the plain default
       walkRailings: normalizeRailing(data.walkRailings),
       placement: data.placement && typeof data.placement === 'object' ? data.placement : undefined,

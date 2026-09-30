@@ -2,9 +2,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeTrim, hasTrim, courseProfile, profileExtent, subtractIntervals, triangulatePolygon, sweepCourse, miterVector,
-  dentilTriangles, dentilSize, floorLines, TRIM_DEFAULTS,
+  dentilTriangles, dentilSize, floorLines, TRIM_DEFAULTS, normalizeWallTrim, courseOn,
 } from '../js/trim.js';
-import { computeFacadeLayout } from '../js/facade.js';
+import { computeFacadeLayout, serializeBuildingState, deserializeBuildingState } from '../js/facade.js';
 import { createBuildingFromFootprint } from '../js/extrusion.js';
 import { gameMaterial } from '../js/game-export.js';
 import { normalizeRoofStructures } from '../js/roof-structures.js';
@@ -252,5 +252,60 @@ describe('trim on roof structures\' walls', () => {
 
   it('none on a structure when every course is off', () => {
     assert.equal(trimPoints(build([tower], {}), 'cornice').length, 0);
+  });
+});
+
+describe('trim wall by wall', () => {
+  it('keeps only on/off settings for known courses', () => {
+    assert.deepEqual(normalizeWallTrim({
+      'wall-run-0': { cornice: 'off', waterTable: 'maybe', dentils: 'on' }, 'wall-run-1': {}, 'wall-run-2': { beltCourse: 'on' },
+    }), { 'wall-run-0': { cornice: 'off' }, 'wall-run-2': { beltCourse: 'on' } });
+  });
+
+  it('a wall\'s own setting wins over the building\'s', () => {
+    const trim = normalizeTrim({ cornice: { enabled: true } });
+    const wallTrim = { 'wall-run-1': { cornice: 'off', waterTable: 'on' } };
+    assert.equal(courseOn(trim, wallTrim, 'wall-run-0', 'cornice'), true);
+    assert.equal(courseOn(trim, wallTrim, 'wall-run-1', 'cornice'), false);
+    assert.equal(courseOn(trim, wallTrim, 'wall-run-1', 'waterTable'), true);
+    assert.equal(courseOn(trim, wallTrim, 'wall-run-0', 'waterTable'), false);
+  });
+
+  const build = (trim, wallTrim) => {
+    const layout = computeFacadeLayout(RECT, {});
+    return createBuildingFromFootprint(RECT, {
+      storyCount: 2, storyHeight: 3, foundationDepth: 0.6, roofType: 'gable', roofDirection: 'x', roofHeight: 2, roofEaveDepth: 0,
+      volumes: layout.volumes, facadeLayout: layout, trim, wallTrim,
+    });
+  };
+  const pointsOf = (built, kind) => {
+    const points = [];
+    built.building.traverse((mesh) => {
+      if (mesh.userData?.trimKind === kind) {
+        const p = mesh.geometry.getAttribute('position');
+        for (let i = 0; i < p.count; i += 1) points.push([p.getX(i), p.getY(i), p.getZ(i)]);
+      }
+    });
+    return points;
+  };
+
+  it('leaves a course off one wall, ending it square at that wall\'s corners', () => {
+    // wall-run-0 is the z = -4 wall
+    const points = pointsOf(build({ cornice: { enabled: true } }, { 'wall-run-0': { cornice: 'off' } }), 'cornice');
+    assert.ok(points.length > 0);
+    assert.ok(points.every(([, , z]) => z >= -4 - 1e-6), 'none stands out from the z = -4 wall');
+  });
+
+  it('runs a course along one wall only, with the building\'s turned off', () => {
+    const points = pointsOf(build({}, { 'wall-run-0': { waterTable: 'on' } }), 'waterTable');
+    assert.ok(points.length > 0);
+    assert.ok(points.every(([, , z]) => z <= -4 + 1e-6), 'only along the z = -4 wall');
+  });
+
+  it('saves wall by wall, dropping walls the footprint no longer has', () => {
+    const layout = computeFacadeLayout(RECT, {});
+    const saved = serializeBuildingState(layout, { wallTrim: { 'wall-run-0': { cornice: 'off' }, 'wall-run-9': { cornice: 'on' } } });
+    assert.deepEqual(deserializeBuildingState(saved).state.wallTrim, { 'wall-run-0': { cornice: 'off' } });
+    assert.deepEqual(deserializeBuildingState({ format: 'building-composer', version: 1, footprint: RECT }).state.wallTrim, {});
   });
 });

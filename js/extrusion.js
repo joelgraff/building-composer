@@ -9,7 +9,7 @@ import {
   resolveOpening, openingOutline, structureOpeningHost, normalizeSteps, flightFor, FRAME_DEPTH, PANE_RECESS, FRAME_CASING_WIDTH, STEP_SIDE_MARGIN,
 } from './openings.js';
 import {
-  normalizeTrim, hasTrim, courseProfile, profileExtent, subtractIntervals, sweepCourse, dentilSize, dentilTriangles, floorLines,
+  normalizeTrim, normalizeWallTrim, courseOn, TRIM_KINDS, courseProfile, profileExtent, subtractIntervals, sweepCourse, dentilSize, dentilTriangles, floorLines,
 } from './trim.js';
 import {
   normalizeRailing, railingParts, partTriangles, TOP_RAIL,
@@ -666,9 +666,12 @@ function bandIntervals(shape, v0, v1) {
  * none yet.
  */
 function withTrim(result, config) {
-  const trim = config.trim && hasTrim(config.trim) ? normalizeTrim(config.trim) : null;
+  const trim = normalizeTrim(config.trim);
+  const wallTrim = normalizeWallTrim(config.wallTrim);
   const wallRuns = config.facadeLayout?.wallRuns ?? [];
-  if (!trim || wallRuns.length < 3) {
+  // a course runs where the building has it on, or where a wall turns it on for itself
+  const anyOn = (kind) => trim[kind].enabled || Object.values(wallTrim).some((own) => own[kind] === 'on');
+  if (!TRIM_KINDS.some(anyOn) || wallRuns.length < 3) {
     return result;
   }
   const levelConfig = { ...config, foundationDepth: config.foundationDepth ?? 0.6 };
@@ -729,28 +732,35 @@ function withTrim(result, config) {
     mesh.userData = { bodyPart: 'trim', trimKind: kind };
     result.building.add(mesh);
   };
-  const eachChain = (anchorOf, extent, sweep) => chains.flatMap((chain) => sweepChain(chain, anchorOf, extent, sweep));
+  // one course along every chain, on the walls it runs along (see courseOn)
+  const eachChain = (kind, anchorOf, extent, sweep) => chains.flatMap((chain) => sweepChain(
+    chain,
+    (run) => (courseOn(trim, wallTrim, run.id, kind) ? anchorOf(run) : null),
+    extent,
+    sweep
+  ));
 
-  if (trim.waterTable.enabled) {
+  if (anyOn('waterTable')) {
     const profile = courseProfile('waterTable', trim.waterTable);
-    addMesh('waterTable', eachChain((run) => run.waterY, profileExtent(profile), (ring) => sweepCourse(ring, profile)));
+    addMesh('waterTable', eachChain('waterTable', (run) => run.waterY, profileExtent(profile), (ring) => sweepCourse(ring, profile)));
   }
-  if (trim.beltCourse.enabled) {
+  if (anyOn('beltCourse')) {
     const profile = courseProfile('beltCourse', trim.beltCourse);
     const extent = profileExtent(profile);
     const levels = [...new Set(allRuns.flatMap((run) => run.floorLines).map((y) => y.toFixed(6)))].map(Number);
     addMesh('beltCourse', levels.flatMap((level) => eachChain(
+      'beltCourse',
       (run) => run.floorLines.find((y) => Math.abs(y - level) < 1e-5) ?? null,
       extent,
       (ring) => sweepCourse(ring, profile)
     )));
   }
-  if (trim.cornice.enabled) {
+  if (anyOn('cornice')) {
     const profile = courseProfile('cornice', trim.cornice);
-    addMesh('cornice', eachChain((run) => run.corniceY, profileExtent(profile), (ring) => sweepCourse(ring, profile)));
+    addMesh('cornice', eachChain('cornice', (run) => run.corniceY, profileExtent(profile), (ring) => sweepCourse(ring, profile)));
     if (trim.cornice.dentils) {
       const size = dentilSize(trim.cornice);
-      addMesh('dentils', eachChain((run) => run.corniceY - trim.cornice.height, { min: -size.height, max: 0 }, (ring) => dentilTriangles(ring, size)));
+      addMesh('dentils', eachChain('cornice', (run) => run.corniceY - trim.cornice.height, { min: -size.height, max: 0 }, (ring) => dentilTriangles(ring, size)));
     }
   }
   return result;

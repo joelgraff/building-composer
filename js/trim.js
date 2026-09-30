@@ -297,3 +297,31 @@ export function floorLines(storyCount, storyHeight, hasKneeWall = false) {
   }
   return lines;
 }
+
+/**
+ * Per-wall trim settings (`wallTrim` in a project), by wall run id (a
+ * footprint wall's `wall-run-N`, or a structure's `wall-run-<structure>-<wall>`):
+ * for each course, `'on'` or `'off'` in place of the building's setting.
+ * Anything else is dropped.
+ */
+export function normalizeWallTrim(raw) {
+  const out = {};
+  Object.entries(raw && typeof raw === 'object' ? raw : {}).forEach(([wallId, own]) => {
+    const kept = {};
+    TRIM_KINDS.forEach((kind) => {
+      if (own?.[kind] === 'on' || own?.[kind] === 'off') {
+        kept[kind] = own[kind];
+      }
+    });
+    if (typeof wallId === 'string' && wallId && Object.keys(kept).length) {
+      out[wallId] = kept;
+    }
+  });
+  return out;
+}
+
+/** Whether a course runs along a wall: its own setting, or the building's. */
+export function courseOn(trim, wallTrim, wallId, kind) {
+  const own = wallTrim?.[wallId]?.[kind];
+  return own ? own === 'on' : Boolean(trim?.[kind]?.enabled);
+}
