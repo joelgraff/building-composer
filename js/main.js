@@ -71,7 +71,6 @@ const roofSupportNote = document.getElementById('roof-support-note');
 const roofZoneTarget = document.getElementById('roof-zone-target');
 const wallMaterialSelect = document.getElementById('wall-material');
 const storyMaterialsBox = document.getElementById('story-materials');
-const wallInfoPanel = document.getElementById('wall-info-panel');
 const wallInfoSummary = document.getElementById('wall-info-summary');
 const wallPanelMaterialsBox = document.getElementById('wall-panel-materials');
 const wallOpeningsBox = document.getElementById('wall-openings-box');
@@ -80,14 +79,16 @@ const wallTrimBox = document.getElementById('wall-trim-box');
 const wallChimneysBox = document.getElementById('wall-chimneys-box');
 const volumeControlsBox = document.getElementById('volume-controls');
 const scopeCrumbs = document.getElementById('scope-crumbs');
-const facadeDefaultsPanel = document.getElementById('facade-defaults-panel');
-const trimPanel = document.getElementById('trim-panel');
 const trimControls = document.getElementById('trim-controls');
-const volumeConfigPanel = document.getElementById('volume-config-panel');
+const inspectorTitle = document.getElementById('inspector-title');
+const inspectorSub = document.getElementById('inspector-sub');
+const inspectorParts = [...document.querySelectorAll('.sidebar > [data-inspector]')];
+const structureAddSummary = document.getElementById('structure-add-summary');
 const facadeSummaryBox = document.getElementById('facade-summary-box');
 const roofGraphSummary = document.getElementById('roof-graph-summary');
 const roofGraphEdges = document.getElementById('roof-graph-edges');
-const sampleBtn = document.getElementById('sample-btn');
+const fileMenu = document.getElementById('file-menu');
+const issuesBtn = document.getElementById('issues-btn');
 const footprintSelect = document.getElementById('footprint-select');
 const loadBtn = document.getElementById('load-btn');
 const saveBtn = document.getElementById('save-btn');
@@ -197,6 +198,12 @@ let selectedStructureId = null;
 let hoveredStructureId = null;
 let activeStructureEntries = [];
 let structureMeshes = [];
+// the built model's windows and doors, chimneys, and house roofs: picked in a view (see pickAtPointer)
+let openingMeshes = [];
+let chimneyMeshes = [];
+let roofMeshes = [];
+// a sidebar element to bring into view once the next render lands (a picked chimney or opening)
+let pendingSidebarFocus = null;
 // windows/doors: the one being edited, and what the last build made of each
 let selectedOpeningId = null;
 let activeOpeningEntries = [];
@@ -204,6 +211,8 @@ let activeOpeningEntries = [];
 // scope-implied wall the elevation would otherwise show (see elevationTarget)
 let selectedWallId = null;
 let hoveredWallId = null;
+// the window, door, or chimney under the pointer (`opening:<id>` or `chimney:<id>`)
+let hoveredPartKey = null;
 // which wall the elevation view is currently framed on, so a reload that
 // keeps showing the same wall can preserve the user's own pan/zoom on it
 // the way the orbit and plan views already preserve theirs (see loadFootprint)
@@ -566,13 +575,42 @@ function setStatus(text, tone = 'default') {
   statusBox.textContent = tone === 'error'
     ? `Validation error: ${text}`
     : text;
-  statusBox.style.background = tone === 'error'
-    ? 'rgba(214, 69, 69, 0.08)'
-    : 'rgba(50, 107, 245, 0.08)';
-  statusBox.style.borderColor = tone === 'error'
-    ? 'rgba(214, 69, 69, 0.22)'
-    : 'rgba(50, 107, 245, 0.18)';
+  statusBox.title = statusBox.textContent;
+  statusBox.classList.toggle('error', tone === 'error');
 }
+
+/**
+ * The status bar's count of what wasn't built (structures and windows or
+ * doors refused by validation). Clicking it selects the first one; its row
+ * in the tree or wall panel says why.
+ */
+function renderIssueCount() {
+  const structures = activeStructureEntries.filter((entry) => entry.errors?.length);
+  const openings = activeOpeningEntries.filter((entry) => entry.errors?.length);
+  const count = structures.length + openings.length;
+  issuesBtn.hidden = count === 0;
+  issuesBtn.textContent = `${count} not built`;
+  issuesBtn.title = [
+    ...structures.map((entry) => `${entry.id}: ${nameSides(entry.errors[0].message)}`),
+    ...openings.map((entry) => `${entry.id}: ${entry.errors[0].message}`),
+  ].join('\n');
+}
+
+issuesBtn.addEventListener('click', () => {
+  const structure = activeStructureEntries.find((entry) => entry.errors?.length);
+  const opening = activeOpeningEntries.find((entry) => entry.errors?.length);
+  if (structure && structureRecord(structure.id)) {
+    selectedWallId = null;
+    selectedStructureId = structure.id;
+  } else if (opening && openingRecord(opening.id)) {
+    focusWallRun(openingRecord(opening.id).hostWallRunId);
+    selectedOpeningId = opening.id;
+    pendingSidebarFocus = '#opening-editor';
+  } else {
+    return;
+  }
+  loadFootprint(loadedFootprint);
+});
 
 function updateMetrics(metrics) {
   const { area, perimeter, centroid, bbox } = metrics;
@@ -695,10 +733,188 @@ function syncSelectionValidity(layout) {
   if (selectedWallId && !wallStillExists) {
     selectedWallId = null;
   }
-  // a structure's own editor stands alone: the mass it stands on isn't shown alongside it
-  facadeDefaultsPanel.style.display = selectedElementId === 'building-defaults' && !selectedStructureId ? '' : 'none';
-  trimPanel.style.display = facadeDefaultsPanel.style.display;
-  volumeConfigPanel.style.display = selectedStructureId ? 'none' : '';
+}
+
+/**
+ * What the sidebar is inspecting: the deepest selection. A wall (a
+ * footprint wall run or a structure's own wall) wins over the structure or
+ * mass it belongs to; a railing run has no panel of its own, so it shows the
+ * structure whose editor holds its railings.
+ */
+function inspectorKind(layout) {
+  const run = layout && selectedWallId ? findRun(selectedWallId, layout) : null;
+  if (run && (run.runType === 'wall' || run.runType === 'structure-wall')) {
+    return 'wall';
+  }
+  if (selectedStructureId && structureRecord(selectedStructureId)) {
+    return 'structure';
+  }
+  if (layout?.volumes.some((volume) => volume.id === selectedElementId)) {
+    return 'mass';
+  }
+  return 'building';
+}
+
+/** The inspector's title and one line of facts for what's selected. */
+function inspectorHeading(kind, layout) {
+  if (kind === 'wall') {
+    const run = findRun(selectedWallId, layout);
+    if (run.runType === 'structure-wall') {
+      const structure = structureRecord(run.structureId) ?? modelConfig.roofStructures.find((candidate) => run.structureId.startsWith(`${candidate.id}-`));
+      const owner = structure ? structureLabel(structure, modelConfig.frontSide, { withHost: false }) : run.structureId;
+      return [`${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`, `Of the ${owner.toLowerCase()}`];
+    }
+    const volume = layout.volumes.find((candidate) => candidate.id === run.volumeId);
+    return [`${disambiguatedWallLabel(run, layout)} wall`, volume && layout.volumes.length > 1 ? `Of the mass ${massName(volume, layout.volumes)}` : 'Of the building'];
+  }
+  if (kind === 'structure') {
+    const structure = structureRecord(selectedStructureId);
+    const hostId = structureHostVolumeId(structure);
+    const host = layout.volumes.find((volume) => volume.id === hostId);
+    const on = structure.hostStructureId
+      ? `On ${structureLabel(structureRecord(structure.hostStructureId) ?? { id: structure.hostStructureId }, modelConfig.frontSide, { withHost: false }).toLowerCase()}`
+      : host && layout.volumes.length > 1 ? `On the mass ${massName(host, layout.volumes)}` : 'On the building';
+    return [structureLabel(structure, modelConfig.frontSide, { withHost: false }), on];
+  }
+  if (kind === 'mass') {
+    const volume = layout.volumes.find((candidate) => candidate.id === selectedElementId);
+    return ['Mass', massName(volume, layout.volumes)];
+  }
+  if (!layout) {
+    return ['Building', 'No footprint loaded'];
+  }
+  const masses = layout.volumes.length;
+  const structures = modelConfig.roofStructures.length;
+  return ['Building', `${masses} ${masses === 1 ? 'mass' : 'masses'}, ${structures} ${structures === 1 ? 'structure' : 'structures'}`];
+}
+
+/** Removes a volume's own entry from one of the modelConfig maps it can override the building in. */
+function dropOwn(mapKey, volumeId) {
+  const own = { ...(modelConfig[mapKey] ?? {}) };
+  delete own[volumeId];
+  modelConfig[mapKey] = own;
+}
+
+/** Removes keys from a volume's own record in a modelConfig map (roof shape, eaves), dropping the record once empty. */
+function dropOwnKeys(mapKey, volumeId, keys) {
+  const own = { ...(modelConfig[mapKey]?.[volumeId] ?? {}) };
+  keys.forEach((key) => delete own[key]);
+  const map = { ...(modelConfig[mapKey] ?? {}) };
+  if (Object.keys(own).length) {
+    map[volumeId] = own;
+  } else {
+    delete map[volumeId];
+  }
+  modelConfig[mapKey] = map;
+}
+
+/**
+ * The settings a mass can hold its own value for, in place of the
+ * building's: whether it does (`own`), and how to drop that value
+ * (`reset`). `field` names a static roof field (by its input's id) the tag
+ * goes on; the massing fields are rendered with theirs (see
+ * renderVolumeControls). `shape` settings (roof shape and eaves) are only a
+ * mass's own on a building of several masses (see volumeShapeTarget); on a
+ * single mass they edit the building.
+ */
+const shapeKeys = (keys) => ({
+  own: (id) => keys.some((key) => modelConfig.volumeRoofShapes[id]?.[key] !== undefined),
+  reset: (id) => dropOwnKeys('volumeRoofShapes', id, keys),
+});
+const eaveKey = (key) => ({
+  own: (id) => modelConfig.volumeEaves[id]?.[key] !== undefined,
+  reset: (id) => dropOwnKeys('volumeEaves', id, [key]),
+});
+const ownIn = (mapKey) => ({
+  own: (id) => modelConfig[mapKey]?.[id] !== undefined,
+  reset: (id) => dropOwn(mapKey, id),
+});
+const MASS_OVERRIDES = {
+  stories: ownIn('volumeStoryOverrides'),
+  storyHeight: ownIn('volumeStoryHeights'),
+  kneeWall: ownIn('volumeKneeWalls'),
+  foundation: ownIn('volumeFoundationHeights'),
+  material: ownIn('volumeMaterials'),
+  roofType: { ...ownIn('volumeRoofTypes'), field: 'roof-type' },
+  roofDirection: { ...ownIn('volumeRidgeDirections'), field: 'roof-direction' },
+  roofConnection: { ...ownIn('volumeRoofConnections'), field: 'roof-connection' },
+  pitch: { ...shapeKeys(['mode', 'pitchRise', 'height']), field: 'roof-pitch-rise', shape: true },
+  rise: { ...shapeKeys(['mode', 'pitchRise', 'height']), field: 'roof-height', shape: true },
+  breakHeight: { ...shapeKeys(['breakHeight']), field: 'roof-break-height', shape: true },
+  lowerPitch: { ...shapeKeys(['lowerPitchRise']), field: 'roof-lower-pitch', shape: true },
+  upperPitch: { ...shapeKeys(['upperPitchRise']), field: 'roof-upper-pitch', shape: true },
+  walk: { ...shapeKeys(['walkHeight']), field: 'roof-walk-enabled', shape: true },
+  eaveDepth: { ...eaveKey('eaveDepth'), field: 'roof-eave-depth', shape: true },
+  rakeDepth: { ...eaveKey('rakeDepth'), field: 'roof-rake-depth', shape: true },
+  fasciaDepth: { ...eaveKey('fasciaDepth'), field: 'roof-fascia-depth', shape: true },
+  eaveSoffit: { ...eaveKey('eaveSoffit'), field: 'eave-soffit', shape: true },
+  rakeSoffit: { ...eaveKey('rakeSoffit'), field: 'rake-soffit', shape: true },
+};
+
+/** The tag beside a mass setting's label: the building's value, or the mass's own with a reset. */
+function overrideTagHtml(key, volumeId) {
+  return MASS_OVERRIDES[key].own(volumeId)
+    ? `<button type="button" class="override-tag own" data-reset-override="${key}" title="Set on this mass. Click to use the building's value.">this mass's ↺</button>`
+    : '<span class="override-tag" title="The building\'s value. Change it to set this mass\'s own.">building\'s</span>';
+}
+
+/** Tags the static roof fields' labels for the selected mass (see MASS_OVERRIDES), or clears them when the building is selected. */
+function syncOverrideTags(kind) {
+  const volumeId = kind === 'mass' ? selectedElementId : null;
+  const shapeTarget = volumeShapeTarget();
+  Object.entries(MASS_OVERRIDES).forEach(([key, entry]) => {
+    if (!entry.field) {
+      return;
+    }
+    const label = document.getElementById(entry.field)?.closest('.field')?.querySelector('label');
+    if (!label) {
+      return;
+    }
+    let slot = label.querySelector(':scope > .override-slot');
+    if (!slot) {
+      slot = document.createElement('span');
+      slot.className = 'override-slot';
+      label.append(slot);
+    }
+    const applies = volumeId && (!entry.shape || shapeTarget === volumeId);
+    slot.innerHTML = applies ? overrideTagHtml(key, volumeId) : '';
+  });
+}
+
+document.querySelector('.sidebar').addEventListener('click', (event) => {
+  const reset = event.target.closest('[data-reset-override]');
+  if (!reset || selectedElementId === 'building-defaults') {
+    return;
+  }
+  event.preventDefault();
+  MASS_OVERRIDES[reset.dataset.resetOverride].reset(selectedElementId);
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
+
+/**
+ * Shows only the sidebar parts for what's selected (each part names the
+ * kinds it serves in data-inspector) and titles the inspector. When none of
+ * the shown accordion sections is open, the one marked data-default opens.
+ */
+function syncInspector(layout = activeLayout) {
+  const kind = inspectorKind(layout);
+  const [title, sub] = inspectorHeading(kind, layout);
+  inspectorTitle.textContent = title;
+  inspectorSub.textContent = sub;
+  inspectorParts.forEach((part) => {
+    part.hidden = !part.dataset.inspector.split(' ').includes(kind);
+  });
+  const sections = inspectorParts.filter((part) => !part.hidden && part.matches('details[name="inspector-section"]'));
+  if (!sections.some((section) => section.open)) {
+    const fallback = sections.find((section) => 'default' in section.dataset);
+    if (fallback) {
+      fallback.open = true;
+    }
+  }
+  structureAddSummary.textContent = kind === 'structure' ? 'Add a structure' : 'Add a roof structure';
+  syncOverrideTags(kind);
 }
 
 /** A mass's name for the scope control: its size, and which side of the building it sits on. */
@@ -727,27 +943,35 @@ function massName(volume, allVolumes) {
   return labels.length ? `${size}, on the ${labels.join(' and ')}` : size;
 }
 
-/** A structure's rows in the scope control: its label, any build problem, and a delete button. */
-function structureRowHtml(structure) {
-  const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
-  const problem = entry?.errors?.[0] ?? entry?.warnings?.[0];
-  const note = problem
-    ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(nameSides(problem.message))}</span>`
-    : '';
-  return `<div class="structure-row-wrap scope-structure-wrap"><button class="structure-row scope-btn structure-btn${structure.id === selectedStructureId ? ' selected' : ''}" data-structure-id="${structure.id}">`
-    + `${escapeHtml(structureLabel(structure, modelConfig.frontSide, { withHost: false }))}${note}</button>`
-    + `<button class="structure-delete" data-delete-structure="${structure.id}" title="Delete ${escapeHtml(structure.id)}" aria-label="Delete ${escapeHtml(structure.id)}">×</button></div>`;
+// The scope tree's expanded nodes (`mass:<id>`, `walls:<mass id>`,
+// `structure:<id>`), kept across its re-renders. The path to a new selection
+// is added when the selection changes; a node the person collapses stays
+// collapsed until the selection moves again.
+const treeExpanded = new Set();
+let treeSelectionKey = null;
+
+/** One row of the scope tree: a twisty (or a spacer), the item's button, and for a structure its delete button. */
+function treeRowHtml({ depth, key = null, expanded = false, button, extra = '' }) {
+  const twisty = key
+    ? `<button class="tree-twisty" data-tree-toggle="${key}" aria-label="${expanded ? 'Collapse' : 'Expand'}" aria-expanded="${expanded}">${expanded ? '▾' : '▸'}</button>`
+    : '<span class="tree-twisty"></span>';
+  return `<div class="tree-row" style="--depth:${depth}">${twisty}${button}${extra}</div>`;
 }
 
-/**
- * The scope control pinned at the top of the sidebar: Building, then each
- * mass, then (once a mass is selected) the structures standing on it.
- * Choosing an entry is the only way selectedElementId/selectedStructureId
- * change from the sidebar; a 3D click sets the same state (see pickAtPointer).
- */
-/** A wall or structure-run row for the scope control: a button plus its own hover/select styling. */
-function wallRowHtml(id, label) {
-  return `<button class="scope-btn wall-btn${id === selectedWallId ? ' selected' : ''}" data-wall-id="${id}">${escapeHtml(label)}</button>`;
+/** A wall, structure wall, or railing row in the scope tree. */
+function wallRowHtml(id, label, depth) {
+  return treeRowHtml({
+    depth,
+    button: `<button class="tree-item wall-item${id === selectedWallId ? ' selected' : ''}" data-wall-id="${id}">${escapeHtml(label)}</button>`,
+  });
+}
+
+/** The id of the structure a structure wall or railing run belongs to (a wraparound's parts carry `<structure>-<part>`). */
+function runStructureId(run) {
+  if (structureRecord(run.structureId)) {
+    return run.structureId;
+  }
+  return modelConfig.roofStructures.find((candidate) => run.structureId.startsWith(`${candidate.id}-`))?.id ?? null;
 }
 
 /**
@@ -802,69 +1026,174 @@ function disambiguatedWallLabel(run, layout) {
   return index >= 0 ? labels[index] : footprintWallLabel(run, layout);
 }
 
+/** The tree keys from the building down to the selection, opened when the selection changes. */
+function selectionTreePath(layout) {
+  const keys = [];
+  const run = selectedWallId ? findRun(selectedWallId, layout) : null;
+  let structureId = selectedStructureId;
+  if (run && run.runType !== 'wall') {
+    structureId = runStructureId(run) ?? structureId;
+  }
+  const seen = new Set();
+  for (let current = structureId ? structureRecord(structureId) : null; current && !seen.has(current.id); current = current.hostStructureId ? structureRecord(current.hostStructureId) : null) {
+    seen.add(current.id);
+    keys.push(`structure:${current.id}`);
+  }
+  if (run?.runType === 'wall') {
+    keys.push(`walls:${run.volumeId}`);
+  }
+  const massId = run?.runType === 'wall' ? run.volumeId : structureId ? structureHostVolumeId(structureRecord(structureId)) : selectedElementId;
+  if (layout.volumes.some((volume) => volume.id === massId)) {
+    keys.push(`mass:${massId}`);
+  }
+  return keys;
+}
+
+/** A structure's rows in the scope tree: itself (label, any build problem, delete), then when open its walls, railings, and the structures standing on it. */
+function structureTreeHtml(structure, layout, depth) {
+  const key = `structure:${structure.id}`;
+  const walls = (layout.structureWallRuns ?? []).filter((run) => runStructureId(run) === structure.id);
+  const rails = (layout.railRuns ?? []).filter((run) => runStructureId(run) === structure.id);
+  const stacked = modelConfig.roofStructures.filter((candidate) => candidate.hostStructureId === structure.id);
+  const hasChildren = walls.length || rails.length || stacked.length;
+  const expanded = hasChildren && treeExpanded.has(key);
+  const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
+  const problem = entry?.errors?.[0] ?? entry?.warnings?.[0];
+  const note = problem
+    ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(nameSides(problem.message))}</span>`
+    : '';
+  const label = escapeHtml(structureLabel(structure, modelConfig.frontSide, { withHost: false }));
+  let html = treeRowHtml({
+    depth,
+    key: hasChildren ? key : null,
+    expanded,
+    button: `<button class="tree-item structure-item${structure.id === selectedStructureId && !selectedWallId ? ' selected' : ''}" data-structure-id="${structure.id}">${label}${note}</button>`,
+    extra: `<button class="tree-delete" data-delete-structure="${structure.id}" title="Delete ${label}" aria-label="Delete ${label}">×</button>`,
+  });
+  if (expanded) {
+    // a wraparound's parts each have a front wall and railing: number the repeats (see dedupeLabels)
+    const runs = [...walls, ...rails];
+    const labels = dedupeLabels(runs.map((run) => (rails.includes(run)
+      ? `Railing, ${run.wall}`
+      : `${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`)));
+    html += runs.map((run, index) => wallRowHtml(run.id, labels[index], depth + 1)).join('');
+    html += stacked.map((candidate) => structureTreeHtml(candidate, layout, depth + 1)).join('');
+  }
+  return html;
+}
+
+/**
+ * The scope tree pinned at the top of the sidebar: the building, its
+ * masses, and under each mass its walls and the structures standing on it
+ * (and under a structure its own walls, railings, and stacked structures).
+ * Choosing a row selects that item, as a click on it in a view does (see
+ * applyPickSelection); the inspector below follows (see syncInspector).
+ */
 function renderScopeControl(layout) {
-  const buildingRow = `<button class="scope-btn${selectedElementId === 'building-defaults' ? ' selected' : ''}" data-scope="building">Building</button>`;
-  const massRow = layout.volumes.map((volume) => `<button class="scope-btn${selectedElementId === volume.id ? ' selected' : ''}" data-scope="${volume.id}">${escapeHtml(massName(volume, layout.volumes))}</button>`).join('');
-  const mass = layout.volumes.find((volume) => volume.id === selectedElementId);
-  let wallsSection = '';
-  let structureRow = '';
-  if (mass) {
-    if (selectedStructureId) {
-      // the selected structure's own facade surfaces (withStructureFacades), not the house wall it stands on
-      const walls = (layout.structureWallRuns ?? []).filter((run) => run.structureId === selectedStructureId);
-      const rails = (layout.railRuns ?? []).filter((run) => run.structureId === selectedStructureId);
-      const rows = [
-        ...walls.map((run) => wallRowHtml(run.id, `${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`)),
-        ...rails.map((run) => wallRowHtml(run.id, `Railing, ${run.wall}`)),
-      ];
-      if (rows.length) {
-        wallsSection = `<div class="scope-section-label">Walls</div><div class="scope-row">${rows.join('')}</div>`;
-      }
-    } else {
-      const massWalls = layout.wallRuns.filter((run) => run.volumeId === mass.id);
-      if (massWalls.length) {
-        const rows = massWalls.map((run) => wallRowHtml(run.id, disambiguatedWallLabel(run, layout))).join('');
-        wallsSection = `<div class="scope-section-label">Walls</div><div class="scope-row">${rows}</div>`;
+  const selectionKey = `${selectedElementId}|${selectedStructureId}|${selectedWallId}`;
+  if (selectionKey !== treeSelectionKey) {
+    treeSelectionKey = selectionKey;
+    selectionTreePath(layout).forEach((key) => treeExpanded.add(key));
+  }
+  const buildingSelected = selectedElementId === 'building-defaults' && !selectedStructureId && !selectedWallId;
+  let html = treeRowHtml({
+    depth: 0,
+    button: `<button class="tree-item${buildingSelected ? ' selected' : ''}" data-scope="building">Building</button>`,
+  });
+  layout.volumes.forEach((volume) => {
+    const key = `mass:${volume.id}`;
+    const expanded = treeExpanded.has(key);
+    const massSelected = selectedElementId === volume.id && !selectedStructureId && !selectedWallId;
+    html += treeRowHtml({
+      depth: 1,
+      key,
+      expanded,
+      button: `<button class="tree-item${massSelected ? ' selected' : ''}" data-scope="${volume.id}">${escapeHtml(massName(volume, layout.volumes))}</button>`,
+    });
+    if (!expanded) {
+      return;
+    }
+    const massWalls = layout.wallRuns.filter((run) => run.volumeId === volume.id);
+    if (massWalls.length) {
+      const wallsKey = `walls:${volume.id}`;
+      const wallsExpanded = treeExpanded.has(wallsKey);
+      html += treeRowHtml({
+        depth: 2,
+        key: wallsKey,
+        expanded: wallsExpanded,
+        button: `<button class="tree-item tree-group" data-tree-toggle="${wallsKey}">Walls (${massWalls.length})</button>`,
+      });
+      if (wallsExpanded) {
+        html += massWalls.map((run) => wallRowHtml(run.id, disambiguatedWallLabel(run, layout), 3)).join('');
       }
     }
-    const onThisMass = modelConfig.roofStructures.filter((structure) => structureHostVolumeId(structure) === mass.id);
-    structureRow = `<div class="scope-section-label">Structures</div>${onThisMass.length
-      ? `<div class="scope-row">${onThisMass.map(structureRowHtml).join('')}</div>`
-      : '<div class="scope-empty">No roof structures on this mass yet.</div>'}`;
+    const onThisMass = modelConfig.roofStructures.filter((structure) => !structure.hostStructureId && structure.hostVolumeId === volume.id);
+    html += onThisMass.map((structure) => structureTreeHtml(structure, layout, 2)).join('');
+  });
+  scopeCrumbs.innerHTML = html;
+  scopeCrumbs.querySelector('.tree-item.selected')?.scrollIntoView({ block: 'nearest' });
+}
+
+/** Selects a wall run from the tree: its structure (for a structure's wall or railing) or its mass comes with it. */
+function selectWallRun(wallId) {
+  if (wallId === selectedWallId) {
+    selectedWallId = null;
+    return;
   }
-  scopeCrumbs.innerHTML = `<div class="scope-row">${buildingRow}${massRow}</div>${wallsSection}${structureRow}`;
+  focusWallRun(wallId);
+}
+
+/** Selects a wall run (not toggling it off when it's already selected), with its structure or mass. */
+function focusWallRun(wallId) {
+  const run = findRun(wallId, activeLayout);
+  selectedWallId = wallId;
+  if (!run) {
+    return;
+  }
+  if (run.runType === 'wall') {
+    selectedStructureId = null;
+    selectedElementId = run.volumeId;
+  } else {
+    selectedStructureId = runStructureId(run) ?? selectedStructureId;
+  }
 }
 
 scopeCrumbs.addEventListener('click', (event) => {
+  const toggle = event.target.closest('[data-tree-toggle]');
+  if (toggle) {
+    const key = toggle.dataset.treeToggle;
+    if (treeExpanded.has(key)) {
+      treeExpanded.delete(key);
+    } else {
+      treeExpanded.add(key);
+    }
+    if (activeLayout) {
+      renderScopeControl(activeLayout);
+    }
+    return;
+  }
   const remove = event.target.closest('[data-delete-structure]');
   if (remove) {
     deleteStructure(remove.dataset.deleteStructure);
     return;
   }
   const wallBtn = event.target.closest('[data-wall-id]');
-  if (wallBtn) {
-    selectedWallId = wallBtn.dataset.wallId === selectedWallId ? null : wallBtn.dataset.wallId;
-    if (loadedFootprint) {
-      loadFootprint(loadedFootprint);
-    }
-    return;
-  }
   const structureBtn = event.target.closest('[data-structure-id]');
-  if (structureBtn) {
-    selectedWallId = null;
-    selectedStructureId = structureBtn.dataset.structureId === selectedStructureId ? null : structureBtn.dataset.structureId;
-    if (loadedFootprint) {
-      loadFootprint(loadedFootprint);
-    }
-    return;
-  }
   const scopeBtn = event.target.closest('[data-scope]');
-  if (!scopeBtn) {
+  if (wallBtn) {
+    selectWallRun(wallBtn.dataset.wallId);
+  } else if (structureBtn) {
+    const id = structureBtn.dataset.structureId;
+    const reselect = id === selectedStructureId && !selectedWallId;
+    selectedWallId = null;
+    selectedStructureId = reselect ? null : id;
+  } else if (scopeBtn) {
+    selectedStructureId = null;
+    selectedWallId = null;
+    selectedElementId = scopeBtn.dataset.scope === 'building' ? 'building-defaults' : scopeBtn.dataset.scope;
+  } else {
     return;
   }
-  selectedStructureId = null;
-  selectedWallId = null;
-  selectedElementId = scopeBtn.dataset.scope;
   if (loadedFootprint) {
     loadFootprint(loadedFootprint);
   }
@@ -1003,7 +1332,7 @@ function adjacentVolumeForHighEdge(volume, volumes, highEdge) {
 function renderVolumeControls(layout) {
   updateRoofHeightModeVisibility(layout.volumes.length);
   if (layout.volumes.length <= 1) {
-    volumeControlsBox.innerHTML = 'This footprint is a single volume; no independent massing to configure.';
+    volumeControlsBox.innerHTML = '<div class="field-note">This building is one mass, so its massing is the building\'s: select Building to change it.</div>';
     return;
   }
 
@@ -1013,25 +1342,23 @@ function renderVolumeControls(layout) {
     return;
   }
 
-  const width = formatLength(Math.min(volume.maxX - volume.minX, volume.maxZ - volume.minZ));
-  const length = formatLength(Math.max(volume.maxX - volume.minX, volume.maxZ - volume.minZ));
   const currentValue = modelConfig.volumeStoryOverrides[volume.id] ?? modelConfig.storyCount;
   // lengths this volume can set for itself, each empty for the building's
-  const lengthField = (key, label, own, fallback, id) => `
+  const lengthField = (key, label, own, fallback, id, tag) => `
     <div class="field">
-      <label for="${volume.id}-${id}">${label} (${unitLabel()}; empty for the building's)</label>
+      <label for="${volume.id}-${id}">${label} (${unitLabel()}) ${overrideTagHtml(tag, volume.id)}</label>
       <input type="number" min="0" max="20" step="0.1" value="${Number.isFinite(own) ? (own * unitFactor()).toFixed(1) : ''}" placeholder="${Number.isFinite(fallback) ? (fallback * unitFactor()).toFixed(1) : 'none'}" data-volume-length="${key}" data-volume="${volume.id}" id="${volume.id}-${id}" />
     </div>`;
   volumeControlsBox.innerHTML = `
     <div class="field">
-      <label for="${volume.id}-stories">${volume.id.replace('-', ' ')} (${width} × ${length})</label>
+      <label for="${volume.id}-stories">Stories ${overrideTagHtml('stories', volume.id)}</label>
       <input type="number" min="1" max="12" step="1" value="${currentValue}" data-volume-id="${volume.id}" id="${volume.id}-stories" />
     </div>
-    ${lengthField('volumeStoryHeights', 'Story height', modelConfig.volumeStoryHeights[volume.id], modelConfig.storyHeight, 'story-height')}
-    ${lengthField('volumeKneeWalls', 'Half story above: knee wall', modelConfig.volumeKneeWalls[volume.id], modelConfig.kneeWallHeight, 'knee')}
-    ${lengthField('volumeFoundationHeights', 'Floor above grade (foundation)', modelConfig.volumeFoundationHeights[volume.id], modelConfig.foundationDepth ?? 0.7, 'foundation')}
+    ${lengthField('volumeStoryHeights', 'Story height', modelConfig.volumeStoryHeights[volume.id], modelConfig.storyHeight, 'story-height', 'storyHeight')}
+    ${lengthField('volumeKneeWalls', 'Half story above: knee wall', modelConfig.volumeKneeWalls[volume.id], modelConfig.kneeWallHeight, 'knee', 'kneeWall')}
+    ${lengthField('volumeFoundationHeights', 'Floor above grade (foundation)', modelConfig.volumeFoundationHeights[volume.id], modelConfig.foundationDepth ?? 0.7, 'foundation', 'foundation')}
     <div class="field">
-      <label for="${volume.id}-material">Wall material</label>
+      <label for="${volume.id}-material">Wall material ${overrideTagHtml('material', volume.id)}</label>
       <select data-volume-material="${volume.id}" id="${volume.id}-material">
         <option value="">The building's</option>
         ${createMaterialOptions(modelConfig.volumeMaterials?.[volume.id] ?? '')}
@@ -1072,7 +1399,6 @@ const WALL_ROLE_LABELS = {
 function renderWallInfoPanel(layout) {
   const run = layout ? findRun(selectedWallId, layout) : null;
   if (!run || (run.runType !== 'wall' && run.runType !== 'structure-wall')) {
-    wallInfoPanel.style.display = 'none';
     wallInfoSummary.innerHTML = '';
     wallPanelMaterialsBox.innerHTML = '';
     wallOpeningsBox.innerHTML = '';
@@ -1085,13 +1411,10 @@ function renderWallInfoPanel(layout) {
     selectedOpeningId = null;
     return;
   }
-  wallInfoPanel.style.display = '';
   if (run.runType === 'structure-wall') {
-    // a structure's own wall: no stories or facade panels of its own, only its windows
-    const structure = structureRecord(run.structureId) ?? modelConfig.roofStructures.find((candidate) => run.structureId.startsWith(`${candidate.id}-`));
-    const owner = structure ? structureLabel(structure, modelConfig.frontSide, { withHost: false }) : run.structureId;
-    const wallName = `${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`;
-    wallInfoSummary.innerHTML = `<strong>${escapeHtml(wallName)}</strong> of the ${escapeHtml(owner.toLowerCase())}<br>Length: ${formatLength(run.length)}`;
+    // a structure's own wall: no stories or facade panels of its own, only its
+    // windows (its name and owner head the inspector: see inspectorHeading)
+    wallInfoSummary.innerHTML = `Length: ${formatLength(run.length)}`;
     wallPanelMaterialsBox.innerHTML = '';
     wallChimneysBox.innerHTML = '';
     renderWallTrimBox(run);
@@ -1102,8 +1425,7 @@ function renderWallInfoPanel(layout) {
   const volume = layout.volumes.find((candidate) => candidate.id === run.volumeId);
   const storyCount = volume ? modelConfig.volumeStoryOverrides[volume.id] ?? modelConfig.storyCount : modelConfig.storyCount;
   const roleLabel = WALL_ROLE_LABELS[run.role] ?? run.role;
-  wallInfoSummary.innerHTML = `<strong>${escapeHtml(name)} wall</strong><br>`
-    + `Length: ${formatLength(run.length)}<br>Stories: ${storyCount}<br>Roof edge: ${escapeHtml(roleLabel)}`;
+  wallInfoSummary.innerHTML = `Length: ${formatLength(run.length)} · Stories: ${storyCount} · Roof edge: ${escapeHtml(roleLabel)}`;
   const panels = layout.facadePanels.filter((panel) => panel.wallRunId === run.id);
   wallPanelMaterialsBox.innerHTML = panels.map((panel) => `
     <div class="field">
@@ -1935,9 +2257,21 @@ async function loadFootprint(footprintData, preserveView = true) {
   activeStructureEntries = roofStructures;
   activeOpeningEntries = openingEntries ?? [];
   structureMeshes = [];
+  openingMeshes = [];
+  chimneyMeshes = [];
+  roofMeshes = [];
   building.traverse((child) => {
-    if (child.isMesh && child.userData?.structureId) {
+    if (!child.isMesh) {
+      return;
+    }
+    if (child.userData?.structureId) {
       structureMeshes.push(child);
+    } else if (child.userData?.openingId) {
+      openingMeshes.push(child);
+    } else if (child.userData?.chimneyId) {
+      chimneyMeshes.push(child);
+    } else if (child.material?.userData?.role === 'roof' && !child.userData?.editorOnly) {
+      roofMeshes.push(child);
     }
   });
   addVolumePickTargets(layout, foundationHeight);
@@ -1950,11 +2284,20 @@ async function loadFootprint(footprintData, preserveView = true) {
   if (selectedWallId) {
     renderWallCue(selectedWallId, 0x00a6b8, group);
   }
+  if (selectedOpeningId) {
+    renderPartCue(openingMeshes.filter((mesh) => mesh.userData.openingId === selectedOpeningId), 0x00a6b8, group);
+  }
   renderStructurePanel();
   renderStructureFailureMarkers(activeLayout);
   renderOpeningFailureMarkers(activeLayout);
   renderScopeControl(activeLayout);
   renderWallInfoPanel(activeLayout);
+  syncInspector(activeLayout);
+  renderIssueCount();
+  if (pendingSidebarFocus) {
+    scrollSidebarTo(document.querySelector(pendingSidebarFocus));
+    pendingSidebarFocus = null;
+  }
   if (normalized.length === 4) {
     renderFootprintPreview(normalized);
     renderFrontMarker(normalized);
@@ -2138,33 +2481,112 @@ function clearHoverCue() {
  * default, or the plan view (its own camera and canvas), so clicking a wall
  * or a mass there selects the same thing the scope control would.
  */
+const NO_PICK = Object.freeze({
+  volumeId: null, structureId: null, wallId: null, openingId: null, chimneyId: null, roof: false,
+});
+
+// A window or door sits in its wall, just behind the wall's pick target
+// (which stands a little outside the wall face): a hit on one this close
+// behind the nearest hit still picks it.
+const OPENING_PICK_REACH = 0.4;
+
+/** The mass whose plan holds a point (a roof hit), or the nearest one (a hit out on an overhang). */
+function volumeAtPoint(point, volumes) {
+  const inside = volumes.find((volume) => point.x >= volume.minX && point.x <= volume.maxX && point.z >= volume.minZ && point.z <= volume.maxZ);
+  if (inside) {
+    return inside;
+  }
+  const distance = (volume) => Math.hypot(
+    Math.max(volume.minX - point.x, 0, point.x - volume.maxX),
+    Math.max(volume.minZ - point.z, 0, point.z - volume.maxZ),
+  );
+  return volumes.reduce((best, volume) => (!best || distance(volume) < distance(best) ? volume : best), null);
+}
+
+/**
+ * What's under the pointer in a view: the nearest of the wall runs, masses,
+ * roof structures, chimneys, windows and doors, and house roofs. A roof hit
+ * picks the mass under it with `roof` set; a window or door just behind a
+ * wall's pick target still wins (see OPENING_PICK_REACH).
+ */
 function pickAtPointer(clientX, clientY, pickCamera = camera, pickCanvas = viewportCanvas) {
-  if (!activeLayout || (pickTargets.length === 0 && structureMeshes.length === 0 && wallPickTargets.length === 0)) {
-    return { volumeId: null, structureId: null, wallId: null };
+  if (!activeLayout) {
+    return NO_PICK;
   }
   const rect = pickCanvas.getBoundingClientRect();
   pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
   raycaster.setFromCamera(pointer, pickCamera);
-  // the nearest of the wall runs, volumes, and roof structures under the
-  // pointer; a wall run's target sits just outside its mass's own box, so
-  // from outside it wins the nearest-hit without needing any special-casing
-  const hit = raycaster.intersectObjects([...wallPickTargets, ...pickTargets, ...structureMeshes], false)[0];
+  const hits = raycaster.intersectObjects([
+    ...wallPickTargets, ...pickTargets, ...structureMeshes, ...openingMeshes, ...chimneyMeshes, ...roofMeshes,
+  ], false);
+  const nearest = hits[0];
+  if (!nearest) {
+    return NO_PICK;
+  }
+  const opening = hits.find((hit) => hit.object.userData.openingId && hit.distance - nearest.distance <= OPENING_PICK_REACH);
+  const hit = opening ?? nearest;
+  const data = hit.object.userData;
+  if (data.openingId) {
+    return { ...NO_PICK, openingId: data.openingId };
+  }
+  if (data.chimneyId) {
+    return { ...NO_PICK, chimneyId: data.chimneyId };
+  }
   // a wraparound's side segment picks its porch
-  const structureId = hit?.object.userData.recordId ?? hit?.object.userData.structureId ?? null;
-  const wallId = !structureId ? hit?.object.userData.wallId ?? null : null;
-  const volumeId = !structureId && !wallId ? hit?.object.userData.volumeId ?? null : null;
-  return { volumeId, structureId, wallId };
+  const structureId = data.recordId ?? data.structureId ?? null;
+  if (structureId) {
+    return { ...NO_PICK, structureId };
+  }
+  if (data.wallId) {
+    return { ...NO_PICK, wallId: data.wallId };
+  }
+  if (roofMeshes.includes(hit.object)) {
+    const volume = activeLayout.volumes.find((candidate) => candidate.id === data.volumeId) ?? volumeAtPoint(hit.point, activeLayout.volumes);
+    return volume ? { ...NO_PICK, volumeId: volume.id, roof: true } : NO_PICK;
+  }
+  return { ...NO_PICK, volumeId: data.volumeId ?? null };
+}
+
+/** Scrolls the sidebar so an element's top sits just under the sticky scope tree. */
+function scrollSidebarTo(element) {
+  if (!element) {
+    return;
+  }
+  const sidebar = document.querySelector('.sidebar');
+  const below = document.querySelector('.scope-panel').getBoundingClientRect().bottom;
+  sidebar.scrollTop += element.getBoundingClientRect().top - below - 8;
+}
+
+/** An outline box around a window, door, or chimney (all of its meshes), as a selection or hover cue. */
+function renderPartCue(meshes, color, parent) {
+  if (!meshes.length) {
+    return;
+  }
+  const box = new THREE.Box3();
+  meshes.forEach((mesh) => box.expandByObject(mesh));
+  box.expandByScalar(0.05);
+  const cue = new THREE.Box3Helper(box, color);
+  cue.userData.editorOnly = true;
+  parent.add(cue);
 }
 
 function updateHoveredVolume(event, pickCamera = camera, pickCanvas = viewportCanvas) {
-  const { volumeId, structureId, wallId } = pickAtPointer(event.clientX, event.clientY, pickCamera, pickCanvas);
-  if (volumeId === hoveredVolumeId && structureId === hoveredStructureId && wallId === hoveredWallId) {
+  const { volumeId, structureId, wallId, openingId, chimneyId } = pickAtPointer(event.clientX, event.clientY, pickCamera, pickCanvas);
+  const partKey = openingId ? `opening:${openingId}` : chimneyId ? `chimney:${chimneyId}` : null;
+  if (volumeId === hoveredVolumeId && structureId === hoveredStructureId && wallId === hoveredWallId && partKey === hoveredPartKey) {
     return;
   }
   hoveredVolumeId = volumeId;
   hoveredStructureId = structureId;
   hoveredWallId = wallId;
+  hoveredPartKey = partKey;
   clearHoverCue();
+  if (openingId && openingId !== selectedOpeningId) {
+    renderPartCue(openingMeshes.filter((mesh) => mesh.userData.openingId === openingId), 0xf4b400, hoverGroup);
+  }
+  if (chimneyId) {
+    renderPartCue(chimneyMeshes.filter((mesh) => mesh.userData.chimneyId === chimneyId), 0xf4b400, hoverGroup);
+  }
   if (structureId && structureId !== selectedStructureId) {
     renderStructureCue(structureId, 0xf4b400, hoverGroup);
   }
@@ -2175,9 +2597,10 @@ function updateHoveredVolume(event, pickCamera = camera, pickCanvas = viewportCa
   if (volume && (volume.id !== selectedElementId || selectedStructureId)) {
     renderVolumeCue(volume, activeFoundationHeight, 0xf4b400, 0.06, hoverGroup);
   }
-  const pointerStyle = volume || structureId || wallId ? 'pointer' : 'default';
+  const pointerStyle = volume || structureId || wallId || partKey ? 'pointer' : 'default';
   viewportCanvas.style.cursor = pointerStyle;
   topViewCanvas.style.cursor = pointerStyle;
+  elevationViewCanvas.style.cursor = pointerStyle;
 }
 
 /** An outline around a wall run's face, as a selection or hover cue. */
@@ -2815,7 +3238,44 @@ function handleRegionMaterialChange(event) {
 storyMaterialsBox.addEventListener('change', handleRegionMaterialChange);
 wallPanelMaterialsBox.addEventListener('change', handleRegionMaterialChange);
 
-sampleBtn.addEventListener('click', () => {
+/** Opens or closes the File menu (its button's aria-expanded and the list's hidden). */
+function setFileMenuOpen(open) {
+  fileMenu.querySelector('.menu-button').setAttribute('aria-expanded', String(open));
+  fileMenu.querySelector('.menu-list').hidden = !open;
+}
+
+fileMenu.querySelector('.menu-button').addEventListener('click', () => {
+  setFileMenuOpen(fileMenu.querySelector('.menu-list').hidden);
+});
+// any choice in the menu, a click elsewhere, or Esc closes it
+fileMenu.querySelector('.menu-list').addEventListener('click', (event) => {
+  if (event.target.closest('button')) {
+    setFileMenuOpen(false);
+  }
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!fileMenu.contains(event.target)) {
+    setFileMenuOpen(false);
+  }
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !fileMenu.querySelector('.menu-list').hidden) {
+    setFileMenuOpen(false);
+    event.stopImmediatePropagation();
+  }
+}, true);
+
+// A new building from a preset footprint replaces the current one (there's no undo): ask first.
+fileMenu.addEventListener('click', (event) => {
+  const item = event.target.closest('[data-new-footprint]');
+  if (!item) {
+    return;
+  }
+  const name = item.textContent.trim();
+  if (loadedFootprint && !window.confirm(`Start a new building on the ${name} footprint? This replaces the current building; save it first to keep it.`)) {
+    return;
+  }
+  footprintSelect.value = item.dataset.newFootprint;
   loadSampleFootprint();
 });
 
@@ -2848,7 +3308,41 @@ resetViewBtn.addEventListener('click', () => {
  * Applies a pick result (from either the orbit or the plan view) to the
  * selection state, exactly as a direct click there would.
  */
-function applyPickSelection({ volumeId, structureId, wallId }) {
+function applyPickSelection({
+  volumeId, structureId, wallId, openingId, chimneyId, roof,
+}) {
+  if (openingId) {
+    // a window or door: its wall's panel, with it open in the editor there
+    const record = openingRecord(openingId);
+    if (record) {
+      focusWallRun(record.hostWallRunId);
+      selectedOpeningId = openingId;
+      pendingSidebarFocus = '#opening-editor';
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
+  if (chimneyId) {
+    // a chimney is edited on the wall it stands against
+    const chimney = modelConfig.chimneys.find((candidate) => candidate.id === chimneyId);
+    if (chimney) {
+      focusWallRun(chimney.hostWallRunId);
+      selectedOpeningId = null;
+      pendingSidebarFocus = `[data-chimney-id="${chimneyId}"]`;
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
+  if (roof) {
+    // a roof: its mass, with the Roof section open
+    selectedStructureId = null;
+    selectedWallId = null;
+    selectedElementId = volumeId;
+    document.getElementById('volume-config-panel').open = true;
+    pendingSidebarFocus = '#volume-config-panel';
+    loadFootprint(loadedFootprint);
+    return;
+  }
   if (structureId) {
     if (structureId !== selectedStructureId) {
       selectedWallId = null;
@@ -2891,6 +3385,54 @@ function applyPickSelection({ volumeId, structureId, wallId }) {
   loadFootprint(loadedFootprint);
 }
 
+/**
+ * Esc walks the selection up one level: a window or door to its wall, a wall
+ * to its structure or mass, a stacked structure to the one it stands on, a
+ * structure to its mass, a mass to the building. Delete removes the selected
+ * window, door, or structure (after asking: there's no undo); a wall or a
+ * mass isn't something to delete. Keys typed into a field are left alone.
+ */
+document.addEventListener('keydown', (event) => {
+  if (!loadedFootprint || event.ctrlKey || event.metaKey || event.altKey) {
+    return;
+  }
+  if (event.target.closest?.('input, select, textarea, [contenteditable="true"]')) {
+    return;
+  }
+  if (event.key === 'Escape') {
+    if (selectedOpeningId) {
+      selectedOpeningId = null;
+    } else if (selectedWallId) {
+      selectedWallId = null;
+    } else if (selectedStructureId) {
+      selectedStructureId = structureRecord(selectedStructureId)?.hostStructureId ?? null;
+    } else if (selectedElementId !== 'building-defaults') {
+      selectedElementId = 'building-defaults';
+    } else {
+      return;
+    }
+    event.preventDefault();
+    loadFootprint(loadedFootprint);
+    return;
+  }
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    if (selectedOpeningId) {
+      event.preventDefault();
+      if (window.confirm(`Delete ${selectedOpeningId}?`)) {
+        deleteOpening(selectedOpeningId);
+      }
+    } else if (selectedStructureId && !selectedWallId) {
+      event.preventDefault();
+      const structure = structureRecord(selectedStructureId);
+      const stacked = modelConfig.roofStructures.some((candidate) => candidate.hostStructureId === selectedStructureId);
+      const label = structure ? structureLabel(structure, modelConfig.frontSide, { withHost: false }) : selectedStructureId;
+      if (window.confirm(`Delete the ${label.toLowerCase()}${stacked ? ' and the structures standing on it' : ''}?`)) {
+        deleteStructure(selectedStructureId);
+      }
+    }
+  }
+});
+
 /** Wires up click-to-select and hover cues on a view's canvas, against its own camera. */
 function wireViewSelection(canvas, viewCamera) {
   canvas.addEventListener('pointermove', (event) => updateHoveredVolume(event, viewCamera, canvas));
@@ -2898,6 +3440,7 @@ function wireViewSelection(canvas, viewCamera) {
     hoveredVolumeId = null;
     hoveredStructureId = null;
     hoveredWallId = null;
+    hoveredPartKey = null;
     clearHoverCue();
     canvas.style.cursor = 'default';
   });
@@ -3944,16 +4487,34 @@ function structureEditorHtml(structure) {
     ? `<div class="structure-editor-error">Not built: ${escapeHtml(nameSides(buildError.message))}</div>`
     : '';
 
-  return `<div class="structure-editor-head"><span>Editing ${escapeHtml(structure.id)}</span></div>${errorBanner}`
-    + fieldGroup('Placement', placement)
-    + fieldGroup('Footprint', footprint)
-    + fieldGroup('Height', height)
-    + fieldGroup('Roof', roof)
-    + fieldGroup('Openings', openings)
-    + fieldGroup('Posts', postFields)
-    + fieldGroup('Railings', railingFields)
-    + fieldGroup('Steps', stepsFields)
-    + fieldGroup('Materials', materials);
+  // the structure's name heads the inspector (see inspectorHeading); its groups are accordions, one open
+  return errorBanner + structureSectionsHtml([
+    ['Placement', placement],
+    ['Footprint', footprint],
+    ['Height', height],
+    ['Roof', roof],
+    ['Openings', openings],
+    ['Posts', postFields],
+    ['Railings', railingFields],
+    ['Steps', stepsFields],
+    ['Materials', materials],
+  ]);
+}
+
+// The structure editor's open section, kept across its re-renders (every edit
+// rewrites the editor's HTML) and from one structure to the next.
+let openStructureSection = 'Placement';
+
+/**
+ * A structure's field groups as accordion sections, one open at a time (the
+ * shared `name` makes the browser close the others). Empty groups are left
+ * out; when the remembered section isn't among them, the first one opens.
+ */
+function structureSectionsHtml(groups) {
+  const shown = groups.filter(([, parts]) => parts.length);
+  const open = shown.some(([label]) => label === openStructureSection) ? openStructureSection : shown[0]?.[0];
+  return shown.map(([label, parts]) => `<details class="section" name="structure-section" data-structure-section="${label}"${label === open ? ' open' : ''}>`
+    + `<summary>${escapeHtml(label)}</summary><div class="section-body">${parts.join('')}</div></details>`).join('');
 }
 
 function rebuildWithStructures(structures) {
@@ -4264,6 +4825,13 @@ function applyStructureFieldEdit(input) {
   }
 }
 
+// toggle doesn't bubble, so the editor listens in the capture phase
+structureEditor.addEventListener('toggle', (event) => {
+  if (event.target.open && event.target.dataset.structureSection) {
+    openStructureSection = event.target.dataset.structureSection;
+  }
+}, true);
+
 structureEditor.addEventListener('change', (event) => {
   applyStructureFieldEdit(event.target.closest('[data-field]'));
 });
@@ -4319,6 +4887,7 @@ function animate() {
 window.addEventListener('resize', resizeRenderer);
 resizeRenderer();
 animate();
+syncInspector(null);
 
 // a footprint handed over in the address opens once the skeleton library
 // is ready (hips need it); otherwise the sample shows, rebuilt when it is

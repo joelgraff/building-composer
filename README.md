@@ -46,7 +46,7 @@ npm test
 
 - **Roof System & Variants**:
   - Roof forms supported: **Flat**, **Gable**, **Hip**, **Shed**, **Mansard**, and **Gambrel**.
-  - Mansard and gambrel roofs: a steep lower slope to a break (curb) and a shallow or flat upper slope, with a horizontal cornice at the eaves; a gambrel has gable ends with rakes following its broken profile. Break height and both pitches are building defaults any volume can override (Volume Configuration panel).
+  - Mansard and gambrel roofs: a steep lower slope to a break (curb) and a shallow or flat upper slope, with a horizontal cornice at the eaves; a gambrel has gable ends with rakes following its broken profile. Break height and both pitches are building defaults any volume can override (the Roof section of the building or a mass).
   - A hip roof can have a widow's walk: cut flat at a height above the plate in place of its ridge. On an L or U the continuous hip is cut flat as one walk. The flat top and its edges are facade surfaces for a deck and railings.
   - Dual control authority: edit roof pitch ratio (rise per 12 run) or geometric roof rise.
   - Straight skeleton WebAssembly solver (`straight-skeleton` CGAL library) for multi-volume equal-height hip roofs, with automatic fall-through to gridded distance fields.
@@ -59,7 +59,7 @@ npm test
   - Flat or roof-parallel soffits (eaves default flat, rakes default parallel), with boxed corners where they meet.
   - Every setting is a building default that any volume can override; a main roof keeps its eave where a gable merges into it.
 
-- **Roof Structures** (dormers, porches, cupolas; added and edited in the **Roof structures** panel, picked in the 3D view; examples in `data/examples/`):
+- **Roof Structures** (dormers, porches, cupolas; added from a selected mass, picked in the 3D view or the scope control, and edited in the inspector; examples in `data/examples/`):
   - **Dormers** rising out of one roof slope, with gable, hip, shed, or flat roofs. Their walls stand clear of the roof, their roofs die into it along exact valleys, and the host roof is cut to meet them as one closed shell. A roof that would pass the host ridge is lowered to it.
   - **Wall dormers** (zero setback) carry the main wall up through the eave, which stops and is capped on either side.
   - **Recessed porches**: a dormer, usually set up the roof above an intact strip of roof and eave, whose front wall is set back (`inset`), leaving an open porch with a floor, side walls, and the dormer roof over it.
@@ -87,6 +87,7 @@ npm test
   - Secondary top-down orthographic plan view synchronized with camera controls and dynamic bounding frustum.
 
 - **Native Persistence & Interchange**:
+  - **File menu**: New building (from a preset footprint, after asking, since it replaces the current one), Open, Save `.bld`, and Export GLB.
   - **Save Project (`.bld`)**: Serializes complete footprint, volumes, roof graph, story overrides, materials, edge pitches, per-volume roof shapes, eave settings, and roof structures into a native JSON document.
   - **Load Project**: Restores saved `.bld` files or raw footprint JSON arrays.
   - **GLB Export**: One-click binary GLTF/GLB export via Three.js `GLTFExporter`, cleanly omitting editor-only visual guides, outlines, and pick targets.
