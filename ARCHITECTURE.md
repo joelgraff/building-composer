@@ -188,7 +188,9 @@ so the building stays in place in the game. Turn into a porch
 of the outline (a rectangle drawn over it, or a traced bump), or keeps the
 outline for a recessed porch, and adds the porch structure when the
 footprint is used; legs turned one at a time round a corner join into a
-wraparound. See docs/FOOTPRINT_EDITING_PLAN.md.
+wraparound. Save footprint to game writes the outline and those porches as
+the game's footprint override (`js/footprint-override.js`), keyed by the
+building's id. See docs/FOOTPRINT_EDITING_PLAN.md.
 
 **Roofs meeting their neighbors.** A gable's end meeting a neighbor's roof
 merges into it by default (its ridge runs into the neighbor's slope with

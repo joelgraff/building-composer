@@ -29,6 +29,7 @@ import { importDixonFootprint } from './import.js';
 import { toGameFrame, toComposerFrame, recenter, openRing } from './footprint-editor.js';
 import { openFootprintView } from './footprint-view.js';
 import { porchStructures } from './footprint-porch.js';
+import { buildFootprintOverride } from './footprint-override.js';
 
 const statusValue = document.getElementById('status-value');
 const areaValue = document.getElementById('area-value');
@@ -575,9 +576,7 @@ scene.add(axisHelper);
 
 function setStatus(text, tone = 'default') {
   statusValue.textContent = text;
-  statusBox.textContent = tone === 'error'
-    ? `Validation error: ${text}`
-    : text;
+  statusBox.textContent = text;
   statusBox.title = statusBox.textContent;
   statusBox.classList.toggle('error', tone === 'error');
 }
@@ -2950,7 +2949,8 @@ sendBtn.addEventListener('click', async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Composer': '1' }, body,
     });
     if (!response.ok) {
-      throw new Error(await response.text());
+      // (the status, not the body: a server without the endpoint answers with a whole HTML page)
+      throw new Error(`the game's server answered ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`);
     }
     setStatus(`Building ${placement.id} sent to the game. In the game, select it and press I.`);
   } catch (error) {
@@ -3432,9 +3432,52 @@ function useEditedFootprint(edited, porches = []) {
   });
 }
 
+/**
+ * Save footprint to game: the outline, and the porches made from it, as the
+ * game's footprint override (js/footprint-override.js), POSTed to the game's
+ * server like Send to game, or downloaded for
+ * dixon_dem/game/data/footprint_overrides/ when it doesn't answer. The
+ * game's generated building uses it once its chunk is rebuilt.
+ */
+async function saveFootprintToGame() {
+  const { placement } = modelConfig;
+  if (!loadedFootprint || !activeLayout) {
+    setStatus('Load a footprint before saving it.', 'error');
+    return;
+  }
+  if (!placement?.id) {
+    setStatus('Only a building opened from the game (its X key) has a footprint to save back to it.', 'error');
+    return;
+  }
+  const override = await buildFootprintOverride({
+    footprint: currentFootprint(), placement, structures: modelConfig.roofStructures, volumes: activeLayout.volumes,
+  });
+  const body = JSON.stringify(override, null, 2);
+  const porches = override.porches.length ? ` with ${override.porches.length} ${override.porches.length === 1 ? 'porch' : 'porches'}` : '';
+  try {
+    const response = await fetch(`/game-footprint/${encodeURIComponent(placement.id)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Composer': '1' }, body,
+    });
+    if (!response.ok) {
+      // (the status, not the body: a server without the endpoint answers with a whole HTML page)
+      throw new Error(`the game's server answered ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`);
+    }
+    setStatus(`Footprint of building ${placement.id} saved to the game${porches}. In the game, rebuild its chunk (Enter) to see it.`);
+  } catch (error) {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
+    link.download = `${placement.id}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    setStatus(`Not saved to the game (${error.message || 'no game server'}); downloaded ${placement.id}.json${porches}. Put it in dixon_dem/game/data/footprint_overrides/.`, 'error');
+  }
+}
+
 document.addEventListener('click', (event) => {
   if (event.target.closest('[data-edit-footprint]')) {
     openFootprintMode();
+  } else if (event.target.closest('[data-save-footprint]')) {
+    saveFootprintToGame();
   }
 });
 

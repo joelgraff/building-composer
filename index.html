@@ -792,6 +792,7 @@
             <button role="menuitem" data-new-footprint="wide-wing">Wider attached wing</button>
             <hr />
             <button role="menuitem" data-edit-footprint>Edit footprint…</button>
+            <button role="menuitem" data-save-footprint>Save footprint to game</button>
             <hr />
             <button role="menuitem" id="load-btn">Open .bld or footprint JSON…</button>
             <button role="menuitem" id="save-btn">Save .bld</button>
@@ -840,7 +841,10 @@
             </select>
             <div class="field-note">Marked FRONT in the views. Walls are named from it.</div>
           </div>
-          <div class="actions"><button data-edit-footprint>Edit footprint…</button></div>
+          <div class="actions">
+            <button data-edit-footprint>Edit footprint…</button>
+            <button data-save-footprint title="Write the outline (and porches made from it) to the game, for its own generated building">Save footprint to game</button>
+          </div>
         </div>
 
         <details class="section" name="inspector-section" data-inspector="building" data-default open>
@@ -1119,6 +1123,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=86"></script>
+    <script type="module" src="./js/main.js?v=88"></script>
   </body>
 </html>
