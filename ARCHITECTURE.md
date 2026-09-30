@@ -29,6 +29,13 @@ Footprint (2D polygon)
   → Facade (the surface of the extrusion, subdivided)
 ```
 
+Each mass is a solid block by default. With a walk-in interior (a building
+setting) each is instead a hollow shell: walls of a set thickness built inward
+from the footprint line (so the exterior is unchanged), a floor on the
+foundation, a ceiling at the ground story's height (upper stories stay solid
+until there are stairs), passages between neighboring masses, and doors cut
+through (`js/interior.js`).
+
 Every structural and semi-structural feature is anchored to a defined envelope
 surface. Detached objects (appurtenances) and separate structures
 (substructures) are scene-graph children, not part of the primary envelope.
@@ -39,7 +46,7 @@ surface. Detached objects (appurtenances) and separate structures
 | ------- | ----------------- | ---------------- |
 | Footprint | 2D polygon (supplied by main model) | Vertices, area, perimeter segments |
 | Foundation | Base below/at grade | Depth, above-grade height, material |
-| Walls | Vertical extrusion | Story count, per-story height, wall thickness |
+| Walls | Vertical extrusion | Story count, per-story height, material (building or per volume); wall thickness with a walk-in interior |
 | Roof | Top cap | Type (flat, gable, hip, shed, mansard, gambrel), pitch, break height and lower/upper pitches (mansard, gambrel), widow's walk height (hip), overhang/eave depth |
 | Facade | Subdivided surface of the envelope | See §4 |
 | Substructure * | Associated separate footprint (shed, garage, gazebo) | Parent reference, relative transform, own extrusion params |
@@ -432,7 +439,16 @@ A 3D model suitable for:
 - Export for rendering or game engines
 
 **Formats:** GLB/GLTF for interchange; native scene format (`.bld` or
-equivalent) for in-app persistence.
+equivalent) for in-app persistence; and the game file for the Dixon project
+(`js/game-export.js`, `format: 'dixon-composed'`): triangles in game space
+grouped by game material (`near`), the outline's convex hull and height range
+for collision, and, for a walk-in building (version 2), the surfaces to
+collide with (`collision.faces`).
+
+**Detail levels (planned).** Parts are tagged by what they are (balusters,
+dentils, grilles, sills, gutters), so the game file can carry simpler levels
+for distance and graphics quality (`near`, `mid`, `far`), simplified by what a
+part is rather than by generic decimation.
 
 ## 9. Entity Classification
 

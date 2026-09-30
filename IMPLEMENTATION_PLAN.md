@@ -881,7 +881,7 @@ A second review of the renders added:
 
 ## Footprints from the Dixon project, and angled walls
 
-Real buildings come from the Dixon Godot project (dixon_dem): its building editor (B) exports the selected building with X to `exports/composer/<id>.json` (`format: 'dixon-footprint'`: the traced outline in game meters, ground height, and the editor's fields). Load footprint imports it (`js/import.js`): the outline is turned square to the building's main axes, walls within 5 degrees of them (or within 15 cm of square on a short wall) are squared, wall lines traced within 30 cm of each other are made one (an OSM trace is no more accurate), tracing jogs under 15 cm are dropped, and walls further off square are kept as angled walls. Storeys, roof, and material fill the settings; the placement (id, rotation, center, ground) is saved in the `.bld` for the trip back to the game (not built yet).
+Real buildings come from the Dixon Godot project (dixon_dem): its building editor (B) exports the selected building with X to `exports/composer/<id>.json` (`format: 'dixon-footprint'`: the traced outline in game meters, ground height, and the editor's fields). Load footprint imports it (`js/import.js`): the outline is turned square to the building's main axes, walls within 5 degrees of them (or within 15 cm of square on a short wall) are squared, wall lines traced within 30 cm of each other are made one (an OSM trace is no more accurate), tracing jogs under 15 cm are dropped, and walls further off square are kept as angled walls. Storeys, roof, and material fill the settings; the placement (id, rotation, center, ground) is saved in the `.bld` for the trip back to the game (Send to game; see below).
 
 Angled walls (a clipped street corner, a wedge-shaped lot, a church apse), stage 1, done:
 
@@ -893,11 +893,12 @@ Angled walls (a clipped street corner, a wedge-shaped lot, a church apse), stage
 - Found on the way: `roofProfile` dropped a bend where two pairs of planes cross at the same point (both copies looked collinear with each other), which left gaps in gambrel trim.
 - Tests: `tests/angled_walls.test.js`, `tests/import.test.js`. Of the 707 OSM footprints in dixon_dem, 699 import (39 with angled walls); all build, and all but one close up (a near-round 9-sided building leaves a 1 mm sliver).
 
+The trip back to the game is done: Send to game (`js/game-export.js`) writes the composed building in game space from its `placement` (`format: 'dixon-composed'`: triangles grouped by game material, the outline's hull for collision, and the `.bld` it came from), posting it to the game (`/game-save/<id>`) or, failing that, downloading it for `dixon_dem/game/data/composed/`. A walk-in building (version 2) adds its collision surfaces; the game's loader has yet to use them. The game material names are placeholders until checked against the game.
+
 Still to do, when a real building needs it:
 
 - Stage 2: roof structures (porches, bays, dormers, hoods) on angled walls. They are placed by rectangle side (`hostSide`) today.
 - Wings turned at an angle to the main block (a church transept, the Dixon church 440071966): the wing is one volume cut by angled walls, so its roof runs along the main block's axes. It needs volumes with their own axes.
-- The trip back to the game: write the composed building out in game space from its `placement`.
 - Found while testing (predates this work): a gable over three stacked bands (building 1393801286 squared off) leaves gaps at its rake ends.
 
 ## Wraparound porches on more than one corner
