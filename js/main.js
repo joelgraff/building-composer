@@ -24,7 +24,10 @@ import { normalizeInterior } from './interior.js';
 import { normalizeDetails } from './opening-details.js';
 import { normalizeChimneys } from './chimneys.js';
 import { exportGlb } from './export.js';
-import { buildGameFile } from './game-export.js';
+import { buildGameFile, gameFileProblems } from './game-export.js';
+import {
+  FINISH_SLOTS, colorOf, familyOf, finishesFor, gameManifest, loadGameManifest,
+} from './game-materials.js';
 import { importDixonFootprint } from './import.js';
 import { toGameFrame, toComposerFrame, recenter, openRing } from './footprint-editor.js';
 import { openFootprintView } from './footprint-view.js';
@@ -83,6 +86,8 @@ const wallTrimBox = document.getElementById('wall-trim-box');
 const wallChimneysBox = document.getElementById('wall-chimneys-box');
 const volumeControlsBox = document.getElementById('volume-controls');
 const scopeCrumbs = document.getElementById('scope-crumbs');
+const gameFinishesControls = document.getElementById('game-finishes-controls');
+const gameFinishesSource = document.getElementById('game-finishes-source');
 const trimControls = document.getElementById('trim-controls');
 const inspectorTitle = document.getElementById('inspector-title');
 const inspectorSub = document.getElementById('inspector-sub');
@@ -469,6 +474,9 @@ let modelConfig = {
   wallTrim: {},
   // a volume's own wall material (a palette key), in place of the building's
   volumeMaterials: {},
+  // the Dixon game's materials chosen, for the building and by volume (see js/game-materials.js)
+  gameFinishes: {},
+  volumeGameFinishes: {},
   // a walk-in interior: the house's masses hollow, their doors cut through (see js/interior.js)
   interior: normalizeInterior(),
   // chimneys on the house's walls (see js/chimneys.js)
@@ -1366,7 +1374,52 @@ function renderVolumeControls(layout) {
         ${createMaterialOptions(modelConfig.volumeMaterials?.[volume.id] ?? '')}
       </select>
     </div>
+    ${['wall', 'roof'].map((slot) => {
+    const own = modelConfig.volumeGameFinishes?.[volume.id]?.[slot] ?? '';
+    return `
+    <div class="field">
+      <label for="${volume.id}-game-${slot}">Game ${slot} finish${swatchHtml(own)}</label>
+      <select data-volume-game-finish="${slot}" data-volume="${volume.id}" id="${volume.id}-game-${slot}">
+        ${finishOptionsHtml(slot, own, "The building's")}
+      </select>
+    </div>`;
+  }).join('')}
   `;
+}
+
+/** A small square of a game material's color, or nothing. */
+function swatchHtml(name) {
+  const color = name && colorOf(name);
+  return color ? `<span class="finish-swatch" style="background:${color}"></span>` : '';
+}
+
+/** The options for a finish slot: the game's materials for it, after one for none. */
+function finishOptionsHtml(slot, selected, noneLabel) {
+  const { category } = FINISH_SLOTS.find((entry) => entry.key === slot);
+  const names = finishesFor(category).map((m) => [m.name, m.label]);
+  // a finish the game no longer has stays listed, so it can be seen and changed
+  if (selected && !names.some(([name]) => name === selected)) {
+    names.push([selected, `${selected} (not in the game)`]);
+  }
+  return optionsHtml([['', noneLabel], ...names], selected);
+}
+
+/** The building's game finishes, one per slot (see js/game-materials.js). */
+function renderGameFinishControls(source) {
+  if (source) {
+    const { hash } = gameManifest();
+    gameFinishesSource.textContent = source === 'game'
+      ? `The game's materials (live from its server, ${hash}).`
+      : `The game's materials (Composer's bundled copy, ${hash}). Serve Composer with the game's composer_server.py for its current list.`;
+  }
+  gameFinishesControls.innerHTML = FINISH_SLOTS.map(({ key, label }) => {
+    const own = modelConfig.gameFinishes?.[key] ?? '';
+    return `
+    <div class="field">
+      <label for="game-finish-${key}">${label}${swatchHtml(own)}</label>
+      <select data-game-finish="${key}" id="game-finish-${key}">${finishOptionsHtml(key, own, 'From the Composer material')}</select>
+    </div>`;
+  }).join('');
 }
 
 function createMaterialOptions(selected) {
@@ -2216,6 +2269,8 @@ async function loadFootprint(footprintData, preserveView = true) {
     volumeRoofConnections: modelConfig.volumeRoofConnections,
     volumeRoofShapes: modelConfig.volumeRoofShapes,
     volumeEaves: modelConfig.volumeEaves,
+    gameFinishes: modelConfig.gameFinishes,
+    volumeGameFinishes: modelConfig.volumeGameFinishes,
     roofRakeDepth: modelConfig.roofRakeDepth,
     roofFasciaDepth: modelConfig.roofFasciaDepth,
     eaveSoffit: modelConfig.eaveSoffit,
@@ -2342,6 +2397,7 @@ async function loadSampleFootprint() {
   modelConfig.volumeRoofShapes = {};
   modelConfig.volumeEaves = {};
   modelConfig.volumeMaterials = {};
+  modelConfig.volumeGameFinishes = {};
   modelConfig.roofStructures = [];
   // windows, doors, chimneys, and per-wall trim address walls by position, which a new footprint renumbers
   modelConfig.openings = [];
@@ -2778,6 +2834,7 @@ function resetForNewFootprint() {
   modelConfig.volumeRoofShapes = {};
   modelConfig.volumeEaves = {};
   modelConfig.volumeMaterials = {};
+  modelConfig.volumeGameFinishes = {};
   modelConfig.edgePitchOverrides = {};
   modelConfig.roofStructures = [];
   // windows, doors, chimneys, and per-wall trim address walls by position, which a new footprint renumbers
@@ -2809,6 +2866,7 @@ function openPayload(payload) {
       Object.assign(modelConfig, result.state);
       storyCountInput.value = modelConfig.storyCount;
       wallMaterialSelect.value = modelConfig.wallMaterial;
+      renderGameFinishControls();
       roofTypeSelect.value = modelConfig.roofType;
       roofDirectionSelect.value = modelConfig.roofDirection;
       roofPitchRiseInput.value = modelConfig.roofPitchRise;
@@ -2858,6 +2916,7 @@ function openPayload(payload) {
     storyCountInput.value = modelConfig.storyCount;
     wallMaterialSelect.value = modelConfig.wallMaterial;
     roofTypeSelect.value = modelConfig.roofType;
+    renderGameFinishControls();
     syncLengthInputs();
     updateRoofPitchDisplay();
     // a building with no design yet opens in footprint mode, to check the outline first
@@ -2943,6 +3002,11 @@ sendBtn.addEventListener('click', async () => {
   }
   const project = serializeBuildingState(activeLayout, modelConfig);
   const file = buildGameFile(group, placement, project);
+  const problems = gameFileProblems(file);
+  if (problems.length) {
+    setStatus(`Not sent: ${problems.join('; ')}. Choose finishes the game has (Game finishes).`, 'error');
+    return;
+  }
   const body = JSON.stringify(file);
   try {
     const response = await fetch(`/game-save/${encodeURIComponent(placement.id)}`, {
@@ -3053,7 +3117,7 @@ roofTypeSelect.addEventListener('change', () => {
 volumeSplitSelect.addEventListener('change', () => {
   modelConfig.volumeSplit = volumeSplitSelect.value;
   // volumes are renumbered, so settings kept by volume no longer apply
-  const volumeKeys = ['volumeStoryOverrides', 'volumeKneeWalls', 'volumeFoundationHeights', 'volumeStoryHeights', 'volumeRidgeDirections', 'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves', 'volumeMaterials'];
+  const volumeKeys = ['volumeStoryOverrides', 'volumeKneeWalls', 'volumeFoundationHeights', 'volumeStoryHeights', 'volumeRidgeDirections', 'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves', 'volumeMaterials', 'volumeGameFinishes'];
   const hadVolumeSettings = volumeKeys.some((key) => Object.keys(modelConfig[key] ?? {}).length);
   volumeKeys.forEach((key) => {
     modelConfig[key] = {};
@@ -3151,6 +3215,26 @@ eaveSoffitSelect.addEventListener('change', () => setEaveValue('eaveSoffit', 'ea
 rakeSoffitSelect.addEventListener('change', () => setEaveValue('rakeSoffit', 'rakeSoffit', rakeSoffitSelect.value));
 
 volumeControlsBox.addEventListener('change', (event) => {
+  const finish = event.target.closest('select[data-volume-game-finish]');
+  if (finish) {
+    const { volume, volumeGameFinish: slot } = finish.dataset;
+    const own = { ...(modelConfig.volumeGameFinishes?.[volume] ?? {}) };
+    if (finish.value) {
+      own[slot] = finish.value;
+    } else {
+      delete own[slot];
+    }
+    modelConfig.volumeGameFinishes = { ...(modelConfig.volumeGameFinishes ?? {}), [volume]: own };
+    // its walls take the finish's Composer material, so they look like it and it applies
+    const family = slot === 'wall' && familyOf(finish.value);
+    if (family) {
+      modelConfig.volumeMaterials = { ...(modelConfig.volumeMaterials ?? {}), [volume]: family };
+    }
+    if (loadedFootprint) {
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
   const material = event.target.closest('select[data-volume-material]');
   if (material) {
     const own = { ...(modelConfig.volumeMaterials ?? {}) };
@@ -3218,6 +3302,34 @@ unitSelect.addEventListener('change', () => {
   displayUnits = unitSelect.value;
   syncUnitLabels();
   syncLengthInputs();
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
+
+gameFinishesControls.addEventListener('change', (event) => {
+  const select = event.target.closest('select[data-game-finish]');
+  if (!select) {
+    return;
+  }
+  const slot = select.dataset.gameFinish;
+  const own = { ...(modelConfig.gameFinishes ?? {}) };
+  if (select.value) {
+    own[slot] = select.value;
+  } else {
+    delete own[slot];
+  }
+  modelConfig.gameFinishes = own;
+  // walls and trim take the finish's Composer material, so they look like it and it applies
+  const family = familyOf(select.value);
+  if (family && slot === 'wall') {
+    modelConfig.wallMaterial = family;
+    wallMaterialSelect.value = family;
+  }
+  if (family && slot === 'trim') {
+    modelConfig.trim = { ...normalizeTrim(modelConfig.trim), material: family };
+  }
+  renderGameFinishControls();
   if (loadedFootprint) {
     loadFootprint(loadedFootprint);
   }
@@ -4719,9 +4831,14 @@ function structureEditorHtml(structure) {
     ? stepsFieldsHtml(normalizeSteps(structure.steps), flightFor(normalizeSteps(structure.steps), built.sillY, { deck: true }), { travel: porchStepsTravel(structure, built) })
     : [];
 
-  const materials = [selectField('Wall material', 'wallMaterial', MATERIAL_OPTIONS, structure.materials?.wall ?? '')];
+  const finishOptions = (slot) => [['', "The building's"], ...finishesFor(slot).map((m) => [m.name, m.label])];
+  const materials = [
+    selectField('Wall material', 'wallMaterial', MATERIAL_OPTIONS, structure.materials?.wall ?? ''),
+    selectField('Game wall finish', 'gameWall', finishOptions('wall'), structure.materials?.gameWall ?? ''),
+  ];
   if (!recess) {
     materials.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
+    materials.push(selectField('Game roof finish', 'gameRoof', finishOptions('roof'), structure.materials?.gameRoof ?? ''));
   }
 
   const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
@@ -5051,6 +5168,15 @@ function applyStructureFieldEdit(input) {
       }
       case 'wallMaterial': edited.materials.wall = input.value || undefined; break;
       case 'roofMaterial': edited.materials.roof = input.value || undefined; break;
+      // a game finish brings its Composer material with it, so it looks like it and applies
+      case 'gameWall':
+        edited.materials.gameWall = input.value || undefined;
+        edited.materials.wall = familyOf(input.value) ?? edited.materials.wall;
+        break;
+      case 'gameRoof':
+        edited.materials.gameRoof = input.value || undefined;
+        edited.materials.roof = familyOf(input.value) ?? edited.materials.roof;
+        break;
       default: return;
     }
   }
@@ -5131,6 +5257,15 @@ window.addEventListener('resize', resizeRenderer);
 resizeRenderer();
 animate();
 syncInspector(null);
+
+// the game's materials: its live list when served by its composer_server.py
+renderGameFinishControls('bundled');
+loadGameManifest().then((source) => {
+  renderGameFinishControls(source);
+  if (source === 'game' && loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
 
 // a footprint handed over in the address opens once the skeleton library
 // is ready (hips need it); otherwise the sample shows, rebuilt when it is

@@ -21,65 +21,71 @@
  */
 
 import * as THREE from '../node_modules/three/build/three.module.js';
+import {
+  GLASS, gameManifest, gameMaterialFor, unknownMaterials,
+} from './game-materials.js';
 
-/** The game material for a wall of each Composer palette entry. */
-export const GAME_WALLS = Object.freeze({
-  brick: 'brick_red', wood: 'siding_white', stucco: 'siding_butter', metal: 'roof_metal', stone: 'limestone', paint: 'siding_white', black: 'trim_dark',
-});
-/** ...and for a roof of each (a roof with no choice is shingled). */
-export const GAME_ROOFS = Object.freeze({ metal: 'roof_metal', wood: 'shingles_brown' });
-// Placeholder names, same as GAME_WALLS/GAME_ROOFS: confirm against the
-// Dixon game's actual material vocabulary before relying on this export.
-export const GAME_DOORS = Object.freeze({
-  brick: 'brick_red', wood: 'door_wood', stucco: 'siding_butter', metal: 'roof_metal', stone: 'limestone',
-});
-const GLASS = 'glass_clear';
-// Placeholders too: a walk-in interior's surfaces (see js/interior.js)
-export const GAME_INTERIOR = Object.freeze({
-  'interior-wall': 'plaster_white', 'interior-floor': 'floor_wood', 'interior-ceiling': 'plaster_ceiling',
-});
-const SHINGLES = 'shingles_dark';
-const MEMBRANE = 'roof_membrane';
-const FOUNDATION = 'stone_foundation';
-const TRIM = 'siding_white';
-const PORCH_FLOOR = 'trim_dark';
+export {
+  GAME_WALLS, GAME_ROOFS, GAME_DOORS, GAME_INTERIOR,
+} from './game-materials.js';
 
 const MIN_AREA = 1e-8;
-const FLAT = 0.98;
 const round = (value) => Math.round(value * 1000) / 1000;
 
 /**
- * The game material a piece of the model is made of: from its Composer
- * material's role (wall, foundation, roof) and palette entry, and its
- * direction (a roof laid flat is a membrane; the underside and edge of a
- * roof are trim).
+ * The game material a piece of the model is made of (see gameMaterialFor in
+ * js/game-materials.js): its Composer material's role and palette entry, the
+ * structure part it is, the game finishes chosen for it, and its direction.
  */
-export function gameMaterial({ role, palette, part }, normal) {
-  if (part === 'floor') {
-    return PORCH_FLOOR;
+export function gameMaterial({
+  role, palette, part, finishes,
+}, normal) {
+  return gameMaterialFor({
+    role, palette, part, finishes,
+  }, normal);
+}
+
+/**
+ * How the game's window shader shows a pane at night, as its vertex color
+ * (lit, warmth, curtain, storefront), drawn as the game draws its own
+ * buildings' (dixon_dem pipeline/buildings/facade.py window_unit): about a
+ * third lit (a shopfront, nearly half), a warmth, and a curtain. The draw is
+ * seeded by the building and the pane, so a building looks the same each
+ * time it is sent.
+ */
+export function paneLight(buildingId, paneKey, shopfront = false) {
+  const random = seededRandom(`${buildingId}|${paneKey}`);
+  const lit = random() < (shopfront ? 0.45 : 0.35) ? 1 : 0;
+  const warmth = random();
+  const curtain = [0, 0, 0.35, 0.65, 0.9][Math.floor(random() * 5)];
+  return [lit, round(warmth), curtain, shopfront ? 1 : 0];
+}
+
+/** A small seeded generator (FNV-1a of the key, then mulberry32). */
+function seededRandom(key) {
+  let seed = 0x811c9dc5;
+  for (let i = 0; i < key.length; i += 1) {
+    seed = Math.imul(seed ^ key.charCodeAt(i), 0x01000193) >>> 0;
   }
-  if (role === 'foundation') {
-    return FOUNDATION;
-  }
-  if (role === 'roof') {
-    if (normal[1] < 0.5) {
-      return TRIM;
-    }
-    if (normal[1] > FLAT) {
-      return palette === 'metal' ? GAME_ROOFS.metal : MEMBRANE;
-    }
-    return GAME_ROOFS[palette] ?? SHINGLES;
-  }
-  if (role === 'glass') {
-    return GLASS;
-  }
-  if (GAME_INTERIOR[role]) {
-    return GAME_INTERIOR[role];
-  }
-  if (role === 'door') {
-    return GAME_DOORS[palette] ?? GAME_DOORS.wood;
-  }
-  return GAME_WALLS[palette] ?? GAME_WALLS.wood;
+  return () => {
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * What stops a game file being sent: surfaces whose material the game
+ * doesn't have (it would draw them untextured).
+ * @returns {string[]} one message per unknown material, empty when it can be sent
+ */
+export function gameFileProblems(file) {
+  return unknownMaterials(Object.keys(file.near ?? {})).map((name) => {
+    const count = file.near[name].indices.length / 3;
+    return `${count} triangle${count === 1 ? '' : 's'} use "${name}", which the game doesn't have`;
+  });
 }
 
 /** What a character walks through rather than into: an open door's leaf, a window or door's frame, pane, and details (sill, shutters, grille), and skins over a wall (facade panels, trim). */
@@ -130,6 +136,11 @@ export function modelTriangles(root) {
         role: material.userData.role,
         palette: material.userData.palette,
         part: mesh.userData?.structurePart,
+        finishes: mesh.userData?.gameFinishes ?? {},
+        // a window's glass: which pane (the game lights each on its own)
+        pane: mesh.userData?.bodyPart === 'opening-pane'
+          ? { key: `${mesh.userData.openingId}:${mesh.userData.pane ?? 0}`, shopfront: mesh.userData.shopfront === true }
+          : null,
         collides: collides(mesh),
         oriented: mesh.userData?.oriented === true,
       });
@@ -272,24 +283,38 @@ export function buildGameFile(root, placement, project) {
   const outline = [];
   let y0 = Infinity;
   let y1 = -Infinity;
-  triangles.forEach((entry, i) => {
-    const [a, b, c] = entry.tri.map(toGame);
-    const n = unit(cross(sub(b, a), sub(c, a)));
+  const faced = triangles.map((entry, i) => {
+    const corners = entry.tri.map(toGame);
+    const n = unit(cross(sub(corners[1], corners[0]), sub(corners[2], corners[0])));
     const facing = outward[i] ? n : n.map((v) => -v);
-    const key = gameMaterial({ role: entry.role, palette: entry.palette, part: entry.part }, facing);
+    return {
+      entry, corners, facing, key: gameMaterial(entry, facing),
+    };
+  });
+  const panes = paneFrames(faced);
+  faced.forEach(({
+    entry, corners: [a, b, c], facing, key,
+  }, i) => {
     if (!groups.has(key)) {
       groups.set(key, { verts: [], indices: [], seen: new Map() });
     }
     const group = groups.get(key);
     const frame = textureFrame(facing);
+    // a lit window's glass runs 0-1 across its pane and carries the pane's light
+    const pane = key === GLASS && entry.pane ? panes.get(entry.pane.key) : null;
+    const light = pane ? paneLight(placement.id, entry.pane.key, entry.pane.shopfront) : [1, 1, 1, 1];
+    const uv = pane
+      ? (p) => [(dot(p, pane.u) - pane.u0) / pane.width, (dot(p, pane.v) - pane.v0) / pane.height]
+      : (p) => [dot(p, frame.u), dot(p, frame.v)];
     // Godot faces a triangle whose right-hand normal points into the building
     const order = outward[i] ? [a, c, b] : [a, b, c];
     order.forEach((p) => {
+      const [u, v] = uv(p);
       const row = [
         round(p[0]), round(p[1]), round(p[2]),
         round(facing[0]), round(facing[1]), round(facing[2]),
-        round(dot(p, frame.u)), round(dot(p, frame.v)),
-        1, 1, 1, 1,
+        round(u), round(v),
+        ...light,
       ];
       const id = row.join(',');
       if (!group.seen.has(id)) {
@@ -310,6 +335,7 @@ export function buildGameFile(root, placement, project) {
   const file = {
     format: 'dixon-composed',
     version: 1,
+    materials_version: gameManifest().hash,
     id: placement.id,
     source: placement.source ?? 'building-composer',
     placement,
@@ -330,6 +356,35 @@ export function buildGameFile(root, placement, project) {
     Object.assign(file, { version: 2, interior: true, collision: { faces } });
   }
   return file;
+}
+
+/**
+ * Each window pane's extent in its own plane, in game space: the texture
+ * frame of its first glass triangle, and the pane's least U and V and its
+ * width and height along them.
+ */
+function paneFrames(faced) {
+  const panes = new Map();
+  faced.forEach(({ entry, corners, facing, key }) => {
+    if (key !== GLASS || !entry.pane) {
+      return;
+    }
+    if (!panes.has(entry.pane.key)) {
+      panes.set(entry.pane.key, { ...textureFrame(facing), us: [], vs: [] });
+    }
+    const pane = panes.get(entry.pane.key);
+    corners.forEach((p) => {
+      pane.us.push(dot(p, pane.u));
+      pane.vs.push(dot(p, pane.v));
+    });
+  });
+  panes.forEach((pane) => {
+    pane.u0 = Math.min(...pane.us);
+    pane.v0 = Math.min(...pane.vs);
+    pane.width = Math.max(Math.max(...pane.us) - pane.u0, 1e-6);
+    pane.height = Math.max(Math.max(...pane.vs) - pane.v0, 1e-6);
+  });
+  return panes;
 }
 
 /** The convex hull of plan points (Andrew's monotone chain). */

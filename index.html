@@ -407,6 +407,16 @@
         color: var(--muted);
       }
 
+      .finish-swatch {
+        display: inline-block;
+        width: 0.8em;
+        height: 0.8em;
+        margin-left: 6px;
+        border: 1px solid var(--muted);
+        border-radius: 2px;
+        vertical-align: middle;
+      }
+
       .field input,
       .field select {
         width: 100%;
@@ -1020,6 +1030,14 @@
               <div class="field-group-label">Trim</div>
               <div id="trim-controls"></div>
             </div>
+          </div>
+        </details>
+
+        <details class="section" name="inspector-section" data-inspector="building" id="game-finishes-panel">
+          <summary>Game finishes</summary>
+          <div class="section-body">
+            <div id="game-finishes-source" class="field-note" style="margin-bottom:8px;"></div>
+            <div id="game-finishes-controls"></div>
           </div>
         </details>
 
