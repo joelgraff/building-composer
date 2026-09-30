@@ -3481,7 +3481,12 @@ function renderTrimPanel() {
     corners.push(numberField(trim.corners.style === 'quoins' ? 'Quoin width (the short ones)' : 'Board width', 'corners.width', trim.corners.width, { step: 0.02 }));
     corners.push(numberField('Projection', 'corners.projection', trim.corners.projection, { step: 0.01 }));
   }
-  trimControls.innerHTML = selectField('Trim material', 'material', materialOptions, trim.material) + groups.join('') + fieldGroup('Corners', corners);
+  const gutters = [checkField('Along the eaves', 'gutters.enabled', trim.gutters.enabled)];
+  if (trim.gutters.enabled) {
+    gutters.push(checkField('With downspouts', 'gutters.downspouts', trim.gutters.downspouts));
+  }
+  trimControls.innerHTML = selectField('Trim material', 'material', materialOptions, trim.material) + groups.join('')
+    + fieldGroup('Corners', corners) + fieldGroup('Gutters', gutters);
 }
 
 function applyTrimFieldEdit(input) {
@@ -3492,7 +3497,7 @@ function applyTrimFieldEdit(input) {
   } else if (kind === 'corners') {
     // (normalizeTrim keeps sizes in range)
     trim.corners[key] = key === 'style' ? input.value : Number(input.value) / unitFactor();
-  } else if (key === 'enabled' || key === 'dentils') {
+  } else if (key === 'enabled' || key === 'dentils' || key === 'downspouts') {
     trim[kind][key] = input.checked;
   } else {
     const range = key === 'height' ? TRIM_HEIGHT_RANGE : TRIM_PROJECTION_RANGE;

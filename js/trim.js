@@ -27,6 +27,7 @@ export const TRIM_DEFAULTS = Object.freeze({
     enabled: false, height: 0.3, projection: 0.2, dentils: false,
   }),
   corners: Object.freeze({ style: 'none', width: 0.15, projection: 0.05 }),
+  gutters: Object.freeze({ enabled: false, downspouts: true }),
 });
 
 /** What stands at the building's outside corners: nothing, a pair of corner boards, or quoins. */
@@ -72,12 +73,13 @@ export function normalizeTrim(raw) {
       width: clamp(source.corners?.width, CORNER_WIDTH_RANGE, TRIM_DEFAULTS.corners.width),
       projection: clamp(source.corners?.projection, CORNER_PROJECTION_RANGE, TRIM_DEFAULTS.corners.projection),
     },
+    gutters: { enabled: source.gutters?.enabled === true, downspouts: source.gutters?.downspouts !== false },
   };
 }
 
-/** Whether any course, or anything at the corners, is switched on. */
+/** Whether any course, anything at the corners, or gutters, are switched on. */
 export function hasTrim(trim) {
-  return Boolean(trim) && (TRIM_KINDS.some((kind) => trim[kind]?.enabled) || (trim.corners?.style ?? 'none') !== 'none');
+  return Boolean(trim) && (TRIM_KINDS.some((kind) => trim[kind]?.enabled) || (trim.corners?.style ?? 'none') !== 'none' || trim.gutters?.enabled === true);
 }
 
 /**

@@ -30,6 +30,7 @@ import { detailParts, leafSpan, normalizeDetails } from './opening-details.js';
 import {
   normalizeChimneys, chimneyPlan, chimneyParts, partTriangles as chimneyPartTriangles, CHIMNEY_REACH,
 } from './chimneys.js';
+import { gutterRing, downspoutParts, GUTTER_PROFILE } from './gutters.js';
 import {
   normalizeInterior, insetOutline, shellTriangles, apertureSolid, apertureReveals, doorLeaf, CEILING_BAND,
 } from './interior.js';
@@ -1081,7 +1082,7 @@ function withTrim(result, config) {
   const wallRuns = config.facadeLayout?.wallRuns ?? [];
   // a course runs where the building has it on, or where a wall turns it on for itself
   const anyOn = (kind) => trim[kind].enabled || Object.values(wallTrim).some((own) => own[kind] === 'on');
-  if ((!TRIM_KINDS.some(anyOn) && trim.corners.style === 'none') || wallRuns.length < 3) {
+  if ((!TRIM_KINDS.some(anyOn) && trim.corners.style === 'none' && !trim.gutters.enabled) || wallRuns.length < 3) {
     return result;
   }
   const levelConfig = { ...config, foundationDepth: config.foundationDepth ?? 0.6 };
@@ -1164,6 +1165,28 @@ function withTrim(result, config) {
       extent,
       (ring) => sweepCourse(ring, profile)
     )));
+  }
+  if (trim.gutters.enabled) {
+    // each eave's edge, read off the built roof (not the walls' roles, which needn't follow the roof as built):
+    // an edge that overhangs the wall and runs level along it is an eave; one that slopes is a rake
+    const roof = mainRoofTriangles(result.building);
+    const ring = gutterRing(houseRuns.map((run) => {
+      const at = (t, d) => [
+        run.start[0] + (run.end[0] - run.start[0]) * t + run.normal[0] * d,
+        run.start[1] + (run.end[1] - run.start[1]) * t + run.normal[1] * d,
+      ];
+      let depth = 0;
+      for (let d = 0.02; d <= 2 + 1e-9 && highestSurfaceAt(roof, ...at(0.5, d)) > run.baseY; d += 0.02) {
+        depth = d;
+      }
+      const edge = [0.2, 0.5, 0.8].map((t) => highestSurfaceAt(roof, ...at(t, Math.max(0, depth - 0.03))));
+      const level = edge.every(Number.isFinite) && Math.max(...edge) - Math.min(...edge) < 0.02;
+      return { ...run, eave: depth > 0.05 && level ? { depth, y: Math.min(...edge) } : null };
+    }));
+    addMesh('gutter', sweepCourse(ring, GUTTER_PROFILE));
+    if (trim.gutters.downspouts) {
+      addMesh('downspout', downspoutParts(ring).flatMap(chimneyPartTriangles));
+    }
   }
   if (trim.corners.style !== 'none') {
     // from on top of the water table (or the floor) up under the cornice and its dentils (or the wall top)
