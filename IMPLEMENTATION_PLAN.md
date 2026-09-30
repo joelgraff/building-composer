@@ -895,6 +895,8 @@ Angled walls (a clipped street corner, a wedge-shaped lot, a church apse), stage
 
 The trip back to the game is done: Send to game (`js/game-export.js`) writes the composed building in game space from its `placement` (`format: 'dixon-composed'`: triangles grouped by game material, the outline's hull for collision, and the `.bld` it came from), posting it to the game (`/game-save/<id>`) or, failing that, downloading it for `dixon_dem/game/data/composed/`. A walk-in building (version 2) adds its collision surfaces; the game's loader has yet to use them. The game material names are placeholders until checked against the game.
 
+Planned next (2026-09-30): a game-owned material manifest, new game materials for doors, glass, and interiors, and the game editor's fields carried into Composer ([docs/GAME_INTEGRATION_PLAN.md](docs/GAME_INTEGRATION_PLAN.md)); and a footprint editor in Composer over the game's aerial imagery, writing corrected outlines back to the game ([docs/FOOTPRINT_EDITING_PLAN.md](docs/FOOTPRINT_EDITING_PLAN.md)).
+
 Still to do, when a real building needs it:
 
 - Stage 2: roof structures (porches, bays, dormers, hoods) on angled walls. They are placed by rectangle side (`hostSide`) today.
