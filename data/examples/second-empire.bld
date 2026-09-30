@@ -1,0 +1,119 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A Second Empire house: a mansard roof (steep lower slope to a curb at 3 m, low hip above) with three dormers on the front slope, below the curb.",
+  "footprint": [
+    [
+      -7,
+      -5
+    ],
+    [
+      7,
+      -5
+    ],
+    [
+      7,
+      5
+    ],
+    [
+      -7,
+      5
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 3.2,
+  "roofType": "mansard",
+  "roofDirection": "z-min",
+  "roofPitchRise": 8,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofBreakHeight": 3,
+  "roofHeight": 3.333333333333333,
+  "volumeStoryOverrides": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": -4,
+      "width": 1.4,
+      "setback": 0.25,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.3,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 6
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 1.4,
+      "setback": 0.25,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.3,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 6
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-3",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 4,
+      "width": 1.4,
+      "setback": 0.25,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.3,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 6
+      },
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

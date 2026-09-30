@@ -1,0 +1,135 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A two-story frame Queen Anne of the 1890s like the Reagan Boyhood Home (1891): a steep gable-front main block, a two-story cross-gabled side projection, and a front porch wrapping one corner.",
+  "footprint": [
+    [
+      -4.1332591543597,
+      -6.1991300829455795
+    ],
+    [
+      3.1667408456402995,
+      -6.1991300829455795
+    ],
+    [
+      3.1667408456402995,
+      -1.0991300829455795
+    ],
+    [
+      5.616740845640299,
+      -1.0991300829455795
+    ],
+    [
+      5.616740845640299,
+      2.9008699170544205
+    ],
+    [
+      3.1667408456402995,
+      2.9008699170544205
+    ],
+    [
+      3.1667408456402995,
+      6.00086991705442
+    ],
+    [
+      -4.1332591543597,
+      6.00086991705442
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 2.9,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 10,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "volumeSplit": "auto",
+  "foundationDepth": 0.7,
+  "roofHeight": 3.0416667461395264,
+  "volumeStoryOverrides": {},
+  "volumeRidgeDirections": {
+    "volume-0": "x-min",
+    "volume-1": "z-min"
+  },
+  "volumeRoofTypes": {},
+  "volumeRoofConnections": {
+    "volume-1": "merge-plane"
+  },
+  "volumeKneeWalls": {},
+  "volumeStoryHeights": {},
+  "volumeFoundationHeights": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0.85,
+      "width": 5.6,
+      "setback": -2.4,
+      "mount": "join",
+      "depth": 2.4,
+      "wallHeight": 2.8,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 4
+      },
+      "join": "auto",
+      "plan": null,
+      "wrap": {
+        "end": "right",
+        "length": 3.1
+      },
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": -3.65,
+      "width": 3.4,
+      "setback": -1.7,
+      "mount": "join",
+      "depth": 3.4,
+      "wallHeight": 7.6,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "hip",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 20
+      },
+      "join": "auto",
+      "plan": {
+        "shape": "polygon",
+        "sides": 8
+      },
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

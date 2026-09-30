@@ -1,0 +1,105 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A story-and-a-half side-gabled bungalow of the 1910s-20s: a broad low roof on deep eaves, a wide shed dormer, and an integral porch recessed into the corner under the main roof.",
+  "footprint": [
+    [
+      -6.1,
+      -4.9
+    ],
+    [
+      6.1,
+      -4.9
+    ],
+    [
+      6.1,
+      4.9
+    ],
+    [
+      -6.1,
+      4.9
+    ]
+  ],
+  "storyCount": 1,
+  "storyHeight": 2.9,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 8,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.75,
+  "roofRakeDepth": 0.6,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "volumeSplit": "auto",
+  "foundationDepth": 0.7,
+  "kneeWallHeight": 0.9,
+  "roofHeight": 3.2666666666666666,
+  "volumeStoryOverrides": {},
+  "volumeRidgeDirections": {},
+  "volumeRoofTypes": {},
+  "volumeRoofConnections": {},
+  "volumeKneeWalls": {},
+  "volumeStoryHeights": {},
+  "volumeFoundationHeights": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "dormer",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 5,
+      "setback": 1.5,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.3,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 2
+      },
+      "join": "auto",
+      "plan": null,
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "porch",
+      "hostVolumeId": "volume-0",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 3.6,
+      "width": 5,
+      "setback": 0,
+      "mount": "recess",
+      "depth": 2.7,
+      "wallHeight": 2.4,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "flat",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "plan": null,
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

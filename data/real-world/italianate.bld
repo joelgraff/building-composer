@@ -1,0 +1,152 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A two-story brick Italianate of the 1850s-60s, like the Van Epps and Brookner houses: a near-square block with tall 12 ft stories, a low hip roof on deep bracketed eaves, a belvedere, a flat-roofed entry porch, a side bay, and a one-story rear kitchen wing.",
+  "footprint": [
+    [
+      -5.08628841607565,
+      -9.321040189125295
+    ],
+    [
+      1.91371158392435,
+      -9.321040189125295
+    ],
+    [
+      1.91371158392435,
+      -4.321040189125295
+    ],
+    [
+      5.91371158392435,
+      -4.321040189125295
+    ],
+    [
+      5.91371158392435,
+      7.878959810874704
+    ],
+    [
+      -5.08628841607565,
+      7.878959810874704
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 3.66,
+  "roofType": "hip",
+  "roofDirection": "z-min",
+  "roofPitchRise": 4,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.75,
+  "roofRakeDepth": 0.75,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "brick",
+  "volumeSplit": "auto",
+  "foundationDepth": 0.7,
+  "roofHeight": 1.8333333333333333,
+  "volumeStoryOverrides": {
+    "volume-0": 1
+  },
+  "volumeRidgeDirections": {
+    "volume-0": "z-max"
+  },
+  "volumeRoofTypes": {
+    "volume-0": "shed"
+  },
+  "volumeRoofConnections": {},
+  "volumeKneeWalls": {},
+  "volumeStoryHeights": {
+    "volume-0": 2.59
+  },
+  "volumeFoundationHeights": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "cupola",
+      "hostVolumeId": "volume-1",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 2.4,
+      "setback": "center",
+      "mount": "through",
+      "depth": 2.4,
+      "wallHeight": 1.5,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "hip",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 4
+      },
+      "join": "auto",
+      "plan": null,
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "porch",
+      "hostVolumeId": "volume-1",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 3.6,
+      "setback": -2.4,
+      "mount": "join",
+      "depth": 2.4,
+      "wallHeight": 3.3,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "flat",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "plan": null,
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-3",
+      "kind": "porch",
+      "hostVolumeId": "volume-1",
+      "hostStructureId": null,
+      "hostSide": "maxX",
+      "offset": 1.5,
+      "width": 2.8,
+      "setback": -0.9,
+      "mount": "join",
+      "depth": 0.9,
+      "wallHeight": 3.4,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "hip",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 4
+      },
+      "join": "auto",
+      "plan": {
+        "shape": "canted",
+        "angle": 45
+      },
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

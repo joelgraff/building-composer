@@ -402,6 +402,8 @@ describe('Per-volume roof shape (pitch / rise overrides)', () => {
   const layout = computeFacadeLayout(norm, { roofType: 'gable' });
   const baseConfig = {
     storyCount: 1, storyHeight: 3, roofType: 'gable', roofPitchRise: 6, roofPitchRun: 12, volumes: layout.volumes,
+    // separate roofs, so a leg's own pitch shows in its own ridge
+    volumeRoofConnections: Object.fromEntries(layout.volumes.map((volume) => [volume.id, 'standalone'])),
   };
 
   function roofMaxY(config) {
@@ -489,18 +491,20 @@ describe('Merge: shed slope below the ridge intersects the gable plane', () => {
   });
 });
 
-describe('Gable-to-gable merge (cross gable) is opt-in', () => {
+describe('Gable-to-gable merge (cross gable) is the default', () => {
   const norm = normalizeFootprint(uFootprint);
   const layout = computeFacadeLayout(norm, { roofType: 'gable' });
   const [base, leg] = layout.volumes;
   const volumes = [base, leg, layout.volumes[2]];
   const config = (extra = {}) => ({
-    roofType: 'gable', roofPitchRise: 6, roofPitchRun: 12, roofHeightMode: 'slope', volumeRoofConnections: extra.connect ? { [leg.id]: 'merge-plane' } : undefined,
+    roofType: 'gable', roofPitchRise: 6, roofPitchRun: 12, roofHeightMode: 'slope',
+    volumeRoofConnections: extra.connect === false ? { [leg.id]: 'standalone' } : extra.connect ? { [leg.id]: 'merge-plane' } : undefined,
     volumeRoofShapes: extra.shape ? { [leg.id]: extra.shape } : undefined,
   });
 
-  it('stays standalone unless the volume opts in', () => {
-    const res = resolveRoofConnections(volumes, config());
+  it('merges unless the volume is set to a standalone shell', () => {
+    assert.ok(Object.keys(resolveRoofConnections(volumes, config()).get(leg.id)).length > 0, 'merged by default');
+    const res = resolveRoofConnections(volumes, config({ connect: false }));
     assert.equal(Object.keys(res.get(leg.id)).length, 0);
     const { building } = createBuildingFromFootprint(norm, {
       storyCount: 1, storyHeight: 3, roofType: 'gable', roofPitchRise: 6, roofPitchRun: 12, volumes: layout.volumes,

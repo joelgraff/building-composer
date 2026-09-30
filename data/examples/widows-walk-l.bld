@@ -1,0 +1,77 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "A widow's walk on an L-shaped house: its continuous hip is cut flat 1.4 m above the plate, leaving one L-shaped walk, with a belvedere standing on it.",
+  "footprint": [
+    [
+      -6.666666666666667,
+      -6.666666666666666
+    ],
+    [
+      9.333333333333334,
+      -6.666666666666666
+    ],
+    [
+      9.333333333333334,
+      1.3333333333333335
+    ],
+    [
+      1.3333333333333333,
+      1.3333333333333335
+    ],
+    [
+      1.3333333333333333,
+      9.333333333333334
+    ],
+    [
+      -6.666666666666667,
+      9.333333333333334
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 3.2,
+  "roofType": "hip",
+  "roofDirection": "z-min",
+  "roofPitchRise": 8,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.6,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "roofWalkHeight": 1.4,
+  "roofHeight": 2.6666666666666665,
+  "volumeStoryOverrides": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "cupola",
+      "hostVolumeId": "volume-1",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 2.4,
+      "setback": "center",
+      "mount": "through",
+      "depth": 2.4,
+      "wallHeight": 2.2,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right",
+        "back"
+      ],
+      "inset": 0,
+      "roofType": "hip",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}

@@ -97,7 +97,7 @@
 
       .metrics .metric:nth-child(1),
       .metrics .metric:nth-child(2),
-      .metrics .metric:nth-child(n + 5) {
+      .metrics .metric:nth-child(n + 6) {
         display: none;
       }
 
@@ -121,10 +121,94 @@
         font-size: 1.1rem;
       }
 
+      .scope-panel {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        background: var(--panel-alt);
+        padding-bottom: 12px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid rgba(17, 32, 51, 0.12);
+      }
+
+      .scope-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .scope-row:first-of-type {
+        margin-top: 10px;
+      }
+
+      .scope-btn {
+        appearance: none;
+        border: 1px solid rgba(17, 32, 51, 0.14);
+        background: #fff;
+        color: var(--text);
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+        line-height: 1.3;
+      }
+
+      .scope-btn:hover {
+        border-color: rgba(50, 107, 245, 0.4);
+      }
+
+      .scope-btn.selected {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .scope-btn.structure-btn.selected {
+        background: #00a6b8;
+        border-color: #00a6b8;
+      }
+
+      .scope-structure-wrap {
+        display: inline-flex;
+        align-items: stretch;
+        gap: 2px;
+      }
+
+      .scope-structure-wrap .structure-delete {
+        border-radius: 999px;
+        width: 1.8em;
+      }
+
+      .scope-empty {
+        font-size: 0.8rem;
+        color: var(--muted);
+        margin-top: 8px;
+      }
+
+      .scope-section-label {
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin-top: 10px;
+      }
+
+      .wall-btn {
+        border-color: rgba(0, 166, 184, 0.35);
+      }
+
+      .wall-btn.selected {
+        background: #00a6b8;
+        border-color: #00a6b8;
+      }
+
       .viewer {
         position: relative;
         display: grid;
-        grid-template-rows: 1fr 180px;
+        grid-template-rows: 1fr minmax(240px, 34%);
         min-height: 0;
       }
 
@@ -146,12 +230,41 @@
         inset: 0;
       }
 
-      .top-view-panel {
+      .plan-elevation-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        min-height: 0;
+      }
+
+      .plan-panel,
+      .elevation-panel {
         position: relative;
+        min-height: 0;
         background: linear-gradient(#f6f8fa, #edf2f7);
       }
 
-      #top-view {
+      .plan-panel {
+        border-right: 1px solid rgba(17, 32, 51, 0.08);
+      }
+
+      .pane-label {
+        position: absolute;
+        top: 6px;
+        left: 8px;
+        z-index: 1;
+        font-size: 0.7rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.7);
+        padding: 2px 6px;
+        border-radius: 4px;
+        pointer-events: none;
+      }
+
+      #top-view,
+      #elevation-view {
         position: absolute;
         inset: 0;
         border: 0;
@@ -223,6 +336,119 @@
         font: inherit;
       }
 
+      .structure-row-wrap {
+        display: flex;
+        gap: 6px;
+        align-items: stretch;
+        margin-bottom: 6px;
+      }
+
+      .structure-row {
+        display: block;
+        flex: 1;
+        min-width: 0;
+        text-align: left;
+        font-weight: 600;
+      }
+
+      .structure-delete {
+        flex: none;
+        width: 2.2em;
+        font-size: 1.1rem;
+        line-height: 1;
+        padding: 0;
+      }
+
+      .structure-editor-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 10px 0 8px;
+        font-weight: 700;
+      }
+
+      .structure-editor-error {
+        background: rgba(214, 69, 69, 0.1);
+        border: 1px solid rgba(214, 69, 69, 0.3);
+        color: #c0392b;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+
+      .structure-row.selected {
+        border-color: #00a6b8;
+        box-shadow: inset 3px 0 0 #00a6b8;
+      }
+
+      .structure-row .structure-note {
+        display: block;
+        font-weight: 400;
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+
+      .structure-row .structure-note.error {
+        color: #c0392b;
+      }
+
+      .field-inline {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      .field-inline input[type="checkbox"] {
+        width: auto;
+      }
+
+      .field-group {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(17, 32, 51, 0.08);
+      }
+
+      .field-group:first-of-type {
+        margin-top: 10px;
+        padding-top: 0;
+        border-top: 0;
+      }
+
+      .field-group-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+
+      .slider-field {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .slider-field input[type="range"] {
+        flex: 1;
+        width: auto;
+        padding: 0;
+        accent-color: var(--accent);
+      }
+
+      .slider-field input.slider-value {
+        flex: 0 0 auto;
+        width: 4.6em;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        font-size: 0.85rem;
+        padding: 6px 8px;
+      }
+
       .status {
         margin-top: 18px;
         background: rgba(50, 107, 245, 0.08);
@@ -253,6 +479,7 @@
         <button id="load-btn">Load JSON</button>
         <button id="save-btn">Save .bld</button>
         <button id="export-btn">Export GLB</button>
+        <button id="send-btn">Send to game</button>
         <button id="reset-view-btn">Reset view</button>
       </div>
     </div>
@@ -260,6 +487,10 @@
     <div class="layout">
       <aside class="sidebar">
         <h2>Building</h2>
+        <div class="scope-panel">
+          <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted);">Editing</div>
+          <div id="scope-crumbs"></div>
+        </div>
         <div class="metrics">
           <div class="metric">
             <div class="metric-label">Status</div>
@@ -296,6 +527,18 @@
               </select>
             </div>
           </div>
+          <div class="metric">
+            <div class="metric-label">Front of the building</div>
+            <div class="metric-value">
+              <select id="front-select" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid rgba(17,32,51,0.12); background:#fff; font:inherit;">
+                <option value="maxZ" selected>The +Z side</option>
+                <option value="minZ">The −Z side</option>
+                <option value="maxX">The +X side</option>
+                <option value="minX">The −X side</option>
+              </select>
+              <div style="color:var(--muted); font-size:0.78rem; margin-top:4px;">Marked FRONT in the views. Walls are named from it.</div>
+            </div>
+          </div>
 
           <div class="metric">
             <div class="metric-label">Facade</div>
@@ -319,7 +562,7 @@
           </div>
         </div>
 
-        <details class="advanced-panel">
+        <details class="advanced-panel" id="facade-defaults-panel">
           <summary>Facade defaults</summary>
         <div class="panel">
           <h3>Facade controls</h3>
@@ -330,6 +573,21 @@
           <div class="field">
             <label for="story-height">Story height (<span id="story-height-unit">feet</span>)</label>
             <input id="story-height" type="number" min="0.1" max="100" step="0.1" />
+          </div>
+          <div class="field">
+            <label for="foundation-height">Floor above grade: foundation (<span class="unit-label">feet</span>)</label>
+            <input id="foundation-height" type="number" min="0" max="10" step="0.1" />
+          </div>
+          <div class="field">
+            <label class="field-inline"><input type="checkbox" id="interior-enabled" />Walk-in interior (ground floor)</label>
+          </div>
+          <div class="field" id="interior-thickness-field" style="display:none;">
+            <label for="interior-thickness">Wall thickness (<span class="unit-label">feet</span>)</label>
+            <input id="interior-thickness" type="number" min="0.3" max="1.4" step="0.05" />
+          </div>
+          <div class="field">
+            <label for="knee-wall-height">Half story above: knee wall (<span class="unit-label">feet</span>; empty for none)</label>
+            <input id="knee-wall-height" type="number" min="0" max="10" step="0.1" placeholder="none" />
           </div>
           <div class="field">
             <label for="panels-per-run">Facade panels per wall run</label>
@@ -343,18 +601,20 @@
               <option value="stucco">Stucco</option>
               <option value="metal">Metal</option>
               <option value="stone">Stone</option>
+              <option value="paint">Painted white</option>
             </select>
           </div>
         </div>
         </details>
 
-        <div class="panel">
-          <h3>Selected element</h3>
-          <div id="selected-element-label" style="font-size:0.9rem; font-weight:700; color:var(--text);">Building defaults</div>
-          <select id="element-select" hidden aria-hidden="true"></select>
-        </div>
+        <details class="advanced-panel" id="trim-panel">
+          <summary>Trim</summary>
+          <div class="panel">
+            <div id="trim-controls"></div>
+          </div>
+        </details>
 
-        <div class="panel">
+        <div class="panel" id="volume-config-panel">
           <h3>Volume Configuration</h3>
           <div id="roof-zone-target" style="font-size:0.8rem; line-height:1.4; color:var(--muted); margin-bottom:8px;"></div>
           <div id="roof-support-note" style="font-size:0.8rem; line-height:1.4; color:var(--muted); margin-bottom:10px;"></div>
@@ -365,6 +625,8 @@
               <option value="gable">Gable</option>
               <option value="hip">Hip</option>
               <option value="shed">Shed</option>
+              <option value="mansard">Mansard</option>
+              <option value="gambrel">Gambrel</option>
             </select>
           </div>
           <div class="field">
@@ -376,14 +638,40 @@
               <option value="z-max">High edge: Z-max</option>
             </select>
           </div>
-          <div class="field">
+          <div class="field" id="roof-pitch-field">
             <label for="roof-pitch-rise">Roof pitch rise (per 12 run)</label>
             <input id="roof-pitch-rise" type="number" min="1" max="24" step="1" value="6" />
             <div id="roof-pitch-display" style="font-size:0.8rem; color:var(--muted);">6:12 (approximately 26.6°)</div>
           </div>
-          <div class="field">
+          <div class="field" id="roof-height-field">
             <label for="roof-height">Roof rise (<span id="roof-height-unit">feet</span>)</label>
             <input id="roof-height" type="number" min="0.1" max="100" step="0.1" />
+          </div>
+          <div id="two-slope-fields" style="display:none;">
+            <div class="field">
+              <label for="roof-break-height">Break height (<span class="unit-label">feet</span>)</label>
+              <input id="roof-break-height" type="number" min="0.1" max="100" step="0.1" />
+            </div>
+            <div class="field">
+              <label for="roof-lower-pitch">Lower slope pitch (rise per 12 run)</label>
+              <input id="roof-lower-pitch" type="number" min="1" max="72" step="1" />
+            </div>
+            <div class="field">
+              <label for="roof-upper-pitch">Upper slope pitch (rise per 12 run; 0 for a flat top)</label>
+              <input id="roof-upper-pitch" type="number" min="0" max="24" step="1" />
+            </div>
+          </div>
+          <div class="field" id="roof-walk-field" style="display:none;">
+            <label class="field-inline"><input type="checkbox" id="roof-walk-enabled" />Widow's walk (a flat top in place of the ridge)</label>
+            <div id="roof-walk-height-row" style="display:none; margin-top:6px;">
+              <label for="roof-walk-height">Walk height (<span class="unit-label">feet</span> above the plate)</label>
+              <div class="slider-field">
+                <input id="roof-walk-slider" type="range" step="any" />
+                <input id="roof-walk-height" class="slider-value" type="number" step="0.1" />
+              </div>
+            </div>
+            <div id="roof-walk-size" style="margin-top:4px; font-size:0.85em; opacity:0.75;"></div>
+            <div id="walk-railing-controls" style="margin-top:8px;"></div>
           </div>
           <div class="field">
             <label for="roof-eave-depth">Eave depth (<span id="roof-eave-unit">feet</span>)</label>
@@ -411,6 +699,14 @@
               <option value="flat">Flat (level from fascia)</option>
             </select>
           </div>
+          <div class="field" id="volume-split-field" style="display:none;">
+            <label for="volume-split">Volumes</label>
+            <select id="volume-split">
+              <option value="auto" selected>Follow the massing (automatic)</option>
+              <option value="z">Blocks run along X</option>
+              <option value="x">Blocks run along Z</option>
+            </select>
+          </div>
           <div class="field" id="roof-height-mode-field" style="display:none;">
             <label for="roof-height-mode">Ridge Control</label>
             <select id="roof-height-mode">
@@ -431,7 +727,41 @@
           <div id="volume-controls"></div>
         </div>
 
-        <details class="advanced-panel" open>
+        <div class="panel">
+          <h3>Roof structures</h3>
+          <div class="field">
+            <label for="structure-preset">Add</label>
+            <select id="structure-preset"></select>
+          </div>
+          <div class="field">
+            <label for="structure-side">Facing</label>
+            <select id="structure-side">
+              <option value="minZ">Z-min side</option>
+              <option value="maxZ">Z-max side</option>
+              <option value="minX">X-min side</option>
+              <option value="maxX">X-max side</option>
+            </select>
+          </div>
+          <div class="actions" style="margin-bottom:10px;">
+            <button id="structure-add-btn">Add</button>
+          </div>
+          <div id="structure-editor"></div>
+        </div>
+
+        <div class="panel" id="wall-info-panel" style="display:none;">
+          <h3>Selected wall</h3>
+          <div id="wall-info-summary" style="font-size:0.9rem; line-height:1.6; color:var(--text); margin-bottom:12px;"></div>
+          <div id="wall-panel-materials"></div>
+          <div id="wall-trim-box"></div>
+          <div id="wall-chimneys-box"></div>
+          <div class="field-group">
+            <div class="field-group-label">Windows &amp; doors</div>
+            <div id="wall-openings-box"></div>
+            <div id="opening-editor"></div>
+          </div>
+        </div>
+
+        <details class="advanced-panel">
           <summary>Roof graph & edge roles</summary>
           <div class="panel">
             <div id="roof-graph-summary" style="font-size:0.85rem; line-height:1.4; color:var(--text); margin-bottom:8px;">No roof graph computed.</div>
@@ -455,13 +785,6 @@
           </div>
         </details>
 
-        <details class="advanced-panel">
-          <summary>Facade panel materials</summary>
-          <div class="panel">
-            <div id="panel-materials"></div>
-          </div>
-        </details>
-
         <div class="status" id="status-box">
           Load a closed, CCW footprint to generate the base massing.
         </div>
@@ -471,8 +794,15 @@
         <div class="viewport-shell">
           <canvas id="viewport"></canvas>
         </div>
-        <div class="top-view-panel">
-          <canvas id="top-view"></canvas>
+        <div class="plan-elevation-row">
+          <div class="plan-panel">
+            <div class="pane-label">Plan</div>
+            <canvas id="top-view"></canvas>
+          </div>
+          <div class="elevation-panel">
+            <div class="pane-label" id="elevation-label">Elevation</div>
+            <canvas id="elevation-view"></canvas>
+          </div>
         </div>
       </main>
     </div>
@@ -487,6 +817,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=20"></script>
+    <script type="module" src="./js/main.js?v=76"></script>
   </body>
 </html>

@@ -1,0 +1,120 @@
+{
+  "format": "building-composer",
+  "version": 1,
+  "note": "The most common Midwestern farmhouse and town house of 1860-1900: a two-story gable-front \"upright\" with a lower one-and-a-half-story side wing, and a porch in the ell along the wing.",
+  "footprint": [
+    [
+      -5.965732546705998,
+      -4.047295968534907
+    ],
+    [
+      6.834267453294003,
+      -4.047295968534907
+    ],
+    [
+      6.834267453294003,
+      2.9527040314650934
+    ],
+    [
+      -0.4657325467059979,
+      2.9527040314650934
+    ],
+    [
+      -0.4657325467059979,
+      5.152704031465093
+    ],
+    [
+      -5.965732546705998,
+      5.152704031465093
+    ]
+  ],
+  "storyCount": 2,
+  "storyHeight": 2.9,
+  "roofType": "gable",
+  "roofDirection": "z-min",
+  "roofPitchRise": 10,
+  "roofPitchRun": 12,
+  "roofHeightMode": "slope",
+  "roofEaveDepth": 0.35,
+  "roofRakeDepth": 0.25,
+  "roofFasciaDepth": 0.1524,
+  "eaveSoffit": "flat",
+  "rakeSoffit": "sloped",
+  "wallMaterial": "wood",
+  "volumeSplit": "auto",
+  "foundationDepth": 0.7,
+  "roofHeight": 2.916666666666667,
+  "volumeStoryOverrides": {
+    "volume-1": 1
+  },
+  "volumeRidgeDirections": {
+    "volume-0": "x-min",
+    "volume-1": "z-min"
+  },
+  "volumeRoofTypes": {},
+  "volumeRoofConnections": {},
+  "volumeKneeWalls": {
+    "volume-1": 0.9
+  },
+  "volumeStoryHeights": {},
+  "volumeFoundationHeights": {},
+  "roofStructures": [
+    {
+      "id": "structure-1",
+      "kind": "porch",
+      "hostVolumeId": "volume-1",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 0,
+      "width": 7.3,
+      "setback": -2.2,
+      "mount": "join",
+      "depth": 2.2,
+      "wallHeight": 2.6,
+      "baseHeight": "ground",
+      "support": "auto",
+      "openSides": [
+        "front",
+        "left",
+        "right"
+      ],
+      "inset": 0,
+      "roofType": "shed",
+      "ridge": "perpendicular",
+      "roofShape": {
+        "mode": "slope",
+        "pitchRise": 3
+      },
+      "join": "auto",
+      "plan": null,
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    },
+    {
+      "id": "structure-2",
+      "kind": "dormer",
+      "hostVolumeId": "volume-1",
+      "hostStructureId": null,
+      "hostSide": "maxZ",
+      "offset": 1.5,
+      "width": 1.4,
+      "setback": 0.4,
+      "mount": "join",
+      "depth": null,
+      "wallHeight": 1.1,
+      "baseHeight": null,
+      "support": "auto",
+      "openSides": [],
+      "inset": 0,
+      "roofType": "gable",
+      "ridge": "perpendicular",
+      "roofShape": null,
+      "join": "auto",
+      "plan": null,
+      "wrap": null,
+      "eaves": {},
+      "materials": {}
+    }
+  ]
+}
