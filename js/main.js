@@ -799,27 +799,35 @@ function massName(volume, allVolumes) {
   return labels.length ? `${size}, on the ${labels.join(' and ')}` : size;
 }
 
-/** A structure's rows in the scope control: its label, any build problem, and a delete button. */
-function structureRowHtml(structure) {
-  const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
-  const problem = entry?.errors?.[0] ?? entry?.warnings?.[0];
-  const note = problem
-    ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(nameSides(problem.message))}</span>`
-    : '';
-  return `<div class="structure-row-wrap scope-structure-wrap"><button class="structure-row scope-btn structure-btn${structure.id === selectedStructureId ? ' selected' : ''}" data-structure-id="${structure.id}">`
-    + `${escapeHtml(structureLabel(structure, modelConfig.frontSide, { withHost: false }))}${note}</button>`
-    + `<button class="structure-delete" data-delete-structure="${structure.id}" title="Delete ${escapeHtml(structure.id)}" aria-label="Delete ${escapeHtml(structure.id)}">×</button></div>`;
+// The scope tree's expanded nodes (`mass:<id>`, `walls:<mass id>`,
+// `structure:<id>`), kept across its re-renders. The path to a new selection
+// is added when the selection changes; a node the person collapses stays
+// collapsed until the selection moves again.
+const treeExpanded = new Set();
+let treeSelectionKey = null;
+
+/** One row of the scope tree: a twisty (or a spacer), the item's button, and for a structure its delete button. */
+function treeRowHtml({ depth, key = null, expanded = false, button, extra = '' }) {
+  const twisty = key
+    ? `<button class="tree-twisty" data-tree-toggle="${key}" aria-label="${expanded ? 'Collapse' : 'Expand'}" aria-expanded="${expanded}">${expanded ? '▾' : '▸'}</button>`
+    : '<span class="tree-twisty"></span>';
+  return `<div class="tree-row" style="--depth:${depth}">${twisty}${button}${extra}</div>`;
 }
 
-/**
- * The scope control pinned at the top of the sidebar: Building, then each
- * mass, then (once a mass is selected) the structures standing on it.
- * Choosing an entry is the only way selectedElementId/selectedStructureId
- * change from the sidebar; a 3D click sets the same state (see pickAtPointer).
- */
-/** A wall or structure-run row for the scope control: a button plus its own hover/select styling. */
-function wallRowHtml(id, label) {
-  return `<button class="scope-btn wall-btn${id === selectedWallId ? ' selected' : ''}" data-wall-id="${id}">${escapeHtml(label)}</button>`;
+/** A wall, structure wall, or railing row in the scope tree. */
+function wallRowHtml(id, label, depth) {
+  return treeRowHtml({
+    depth,
+    button: `<button class="tree-item wall-item${id === selectedWallId ? ' selected' : ''}" data-wall-id="${id}">${escapeHtml(label)}</button>`,
+  });
+}
+
+/** The id of the structure a structure wall or railing run belongs to (a wraparound's parts carry `<structure>-<part>`). */
+function runStructureId(run) {
+  if (structureRecord(run.structureId)) {
+    return run.structureId;
+  }
+  return modelConfig.roofStructures.find((candidate) => run.structureId.startsWith(`${candidate.id}-`))?.id ?? null;
 }
 
 /**
@@ -874,69 +882,169 @@ function disambiguatedWallLabel(run, layout) {
   return index >= 0 ? labels[index] : footprintWallLabel(run, layout);
 }
 
+/** The tree keys from the building down to the selection, opened when the selection changes. */
+function selectionTreePath(layout) {
+  const keys = [];
+  const run = selectedWallId ? findRun(selectedWallId, layout) : null;
+  let structureId = selectedStructureId;
+  if (run && run.runType !== 'wall') {
+    structureId = runStructureId(run) ?? structureId;
+  }
+  const seen = new Set();
+  for (let current = structureId ? structureRecord(structureId) : null; current && !seen.has(current.id); current = current.hostStructureId ? structureRecord(current.hostStructureId) : null) {
+    seen.add(current.id);
+    keys.push(`structure:${current.id}`);
+  }
+  if (run?.runType === 'wall') {
+    keys.push(`walls:${run.volumeId}`);
+  }
+  const massId = run?.runType === 'wall' ? run.volumeId : structureId ? structureHostVolumeId(structureRecord(structureId)) : selectedElementId;
+  if (layout.volumes.some((volume) => volume.id === massId)) {
+    keys.push(`mass:${massId}`);
+  }
+  return keys;
+}
+
+/** A structure's rows in the scope tree: itself (label, any build problem, delete), then when open its walls, railings, and the structures standing on it. */
+function structureTreeHtml(structure, layout, depth) {
+  const key = `structure:${structure.id}`;
+  const walls = (layout.structureWallRuns ?? []).filter((run) => runStructureId(run) === structure.id);
+  const rails = (layout.railRuns ?? []).filter((run) => runStructureId(run) === structure.id);
+  const stacked = modelConfig.roofStructures.filter((candidate) => candidate.hostStructureId === structure.id);
+  const hasChildren = walls.length || rails.length || stacked.length;
+  const expanded = hasChildren && treeExpanded.has(key);
+  const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
+  const problem = entry?.errors?.[0] ?? entry?.warnings?.[0];
+  const note = problem
+    ? `<span class="structure-note${entry.errors.length ? ' error' : ''}">${escapeHtml(nameSides(problem.message))}</span>`
+    : '';
+  const label = escapeHtml(structureLabel(structure, modelConfig.frontSide, { withHost: false }));
+  let html = treeRowHtml({
+    depth,
+    key: hasChildren ? key : null,
+    expanded,
+    button: `<button class="tree-item structure-item${structure.id === selectedStructureId && !selectedWallId ? ' selected' : ''}" data-structure-id="${structure.id}">${label}${note}</button>`,
+    extra: `<button class="tree-delete" data-delete-structure="${structure.id}" title="Delete ${label}" aria-label="Delete ${label}">×</button>`,
+  });
+  if (expanded) {
+    // a wraparound's parts each have a front wall and railing: number the repeats (see dedupeLabels)
+    const runs = [...walls, ...rails];
+    const labels = dedupeLabels(runs.map((run) => (rails.includes(run)
+      ? `Railing, ${run.wall}`
+      : `${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`)));
+    html += runs.map((run, index) => wallRowHtml(run.id, labels[index], depth + 1)).join('');
+    html += stacked.map((candidate) => structureTreeHtml(candidate, layout, depth + 1)).join('');
+  }
+  return html;
+}
+
+/**
+ * The scope tree pinned at the top of the sidebar: the building, its
+ * masses, and under each mass its walls and the structures standing on it
+ * (and under a structure its own walls, railings, and stacked structures).
+ * Choosing a row selects that item, as a click on it in a view does (see
+ * applyPickSelection); the inspector below follows (see syncInspector).
+ */
 function renderScopeControl(layout) {
-  const buildingRow = `<button class="scope-btn${selectedElementId === 'building-defaults' ? ' selected' : ''}" data-scope="building">Building</button>`;
-  const massRow = layout.volumes.map((volume) => `<button class="scope-btn${selectedElementId === volume.id ? ' selected' : ''}" data-scope="${volume.id}">${escapeHtml(massName(volume, layout.volumes))}</button>`).join('');
-  const mass = layout.volumes.find((volume) => volume.id === selectedElementId);
-  let wallsSection = '';
-  let structureRow = '';
-  if (mass) {
-    if (selectedStructureId) {
-      // the selected structure's own facade surfaces (withStructureFacades), not the house wall it stands on
-      const walls = (layout.structureWallRuns ?? []).filter((run) => run.structureId === selectedStructureId);
-      const rails = (layout.railRuns ?? []).filter((run) => run.structureId === selectedStructureId);
-      const rows = [
-        ...walls.map((run) => wallRowHtml(run.id, `${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`)),
-        ...rails.map((run) => wallRowHtml(run.id, `Railing, ${run.wall}`)),
-      ];
-      if (rows.length) {
-        wallsSection = `<div class="scope-section-label">Walls</div><div class="scope-row">${rows.join('')}</div>`;
-      }
-    } else {
-      const massWalls = layout.wallRuns.filter((run) => run.volumeId === mass.id);
-      if (massWalls.length) {
-        const rows = massWalls.map((run) => wallRowHtml(run.id, disambiguatedWallLabel(run, layout))).join('');
-        wallsSection = `<div class="scope-section-label">Walls</div><div class="scope-row">${rows}</div>`;
+  const selectionKey = `${selectedElementId}|${selectedStructureId}|${selectedWallId}`;
+  if (selectionKey !== treeSelectionKey) {
+    treeSelectionKey = selectionKey;
+    selectionTreePath(layout).forEach((key) => treeExpanded.add(key));
+  }
+  const buildingSelected = selectedElementId === 'building-defaults' && !selectedStructureId && !selectedWallId;
+  let html = treeRowHtml({
+    depth: 0,
+    button: `<button class="tree-item${buildingSelected ? ' selected' : ''}" data-scope="building">Building</button>`,
+  });
+  layout.volumes.forEach((volume) => {
+    const key = `mass:${volume.id}`;
+    const expanded = treeExpanded.has(key);
+    const massSelected = selectedElementId === volume.id && !selectedStructureId && !selectedWallId;
+    html += treeRowHtml({
+      depth: 1,
+      key,
+      expanded,
+      button: `<button class="tree-item${massSelected ? ' selected' : ''}" data-scope="${volume.id}">${escapeHtml(massName(volume, layout.volumes))}</button>`,
+    });
+    if (!expanded) {
+      return;
+    }
+    const massWalls = layout.wallRuns.filter((run) => run.volumeId === volume.id);
+    if (massWalls.length) {
+      const wallsKey = `walls:${volume.id}`;
+      const wallsExpanded = treeExpanded.has(wallsKey);
+      html += treeRowHtml({
+        depth: 2,
+        key: wallsKey,
+        expanded: wallsExpanded,
+        button: `<button class="tree-item tree-group" data-tree-toggle="${wallsKey}">Walls (${massWalls.length})</button>`,
+      });
+      if (wallsExpanded) {
+        html += massWalls.map((run) => wallRowHtml(run.id, disambiguatedWallLabel(run, layout), 3)).join('');
       }
     }
-    const onThisMass = modelConfig.roofStructures.filter((structure) => structureHostVolumeId(structure) === mass.id);
-    structureRow = `<div class="scope-section-label">Structures</div>${onThisMass.length
-      ? `<div class="scope-row">${onThisMass.map(structureRowHtml).join('')}</div>`
-      : '<div class="scope-empty">No roof structures on this mass yet.</div>'}`;
+    const onThisMass = modelConfig.roofStructures.filter((structure) => !structure.hostStructureId && structure.hostVolumeId === volume.id);
+    html += onThisMass.map((structure) => structureTreeHtml(structure, layout, 2)).join('');
+  });
+  scopeCrumbs.innerHTML = html;
+  scopeCrumbs.querySelector('.tree-item.selected')?.scrollIntoView({ block: 'nearest' });
+}
+
+/** Selects a wall run from the tree: its structure (for a structure's wall or railing) or its mass comes with it. */
+function selectWallRun(wallId) {
+  if (wallId === selectedWallId) {
+    selectedWallId = null;
+    return;
   }
-  scopeCrumbs.innerHTML = `<div class="scope-row">${buildingRow}${massRow}</div>${wallsSection}${structureRow}`;
+  const run = findRun(wallId, activeLayout);
+  selectedWallId = wallId;
+  if (!run) {
+    return;
+  }
+  if (run.runType === 'wall') {
+    selectedStructureId = null;
+    selectedElementId = run.volumeId;
+  } else {
+    selectedStructureId = runStructureId(run) ?? selectedStructureId;
+  }
 }
 
 scopeCrumbs.addEventListener('click', (event) => {
+  const toggle = event.target.closest('[data-tree-toggle]');
+  if (toggle) {
+    const key = toggle.dataset.treeToggle;
+    if (treeExpanded.has(key)) {
+      treeExpanded.delete(key);
+    } else {
+      treeExpanded.add(key);
+    }
+    if (activeLayout) {
+      renderScopeControl(activeLayout);
+    }
+    return;
+  }
   const remove = event.target.closest('[data-delete-structure]');
   if (remove) {
     deleteStructure(remove.dataset.deleteStructure);
     return;
   }
   const wallBtn = event.target.closest('[data-wall-id]');
-  if (wallBtn) {
-    selectedWallId = wallBtn.dataset.wallId === selectedWallId ? null : wallBtn.dataset.wallId;
-    if (loadedFootprint) {
-      loadFootprint(loadedFootprint);
-    }
-    return;
-  }
   const structureBtn = event.target.closest('[data-structure-id]');
-  if (structureBtn) {
-    selectedWallId = null;
-    selectedStructureId = structureBtn.dataset.structureId === selectedStructureId ? null : structureBtn.dataset.structureId;
-    if (loadedFootprint) {
-      loadFootprint(loadedFootprint);
-    }
-    return;
-  }
   const scopeBtn = event.target.closest('[data-scope]');
-  if (!scopeBtn) {
+  if (wallBtn) {
+    selectWallRun(wallBtn.dataset.wallId);
+  } else if (structureBtn) {
+    const id = structureBtn.dataset.structureId;
+    const reselect = id === selectedStructureId && !selectedWallId;
+    selectedWallId = null;
+    selectedStructureId = reselect ? null : id;
+  } else if (scopeBtn) {
+    selectedStructureId = null;
+    selectedWallId = null;
+    selectedElementId = scopeBtn.dataset.scope === 'building' ? 'building-defaults' : scopeBtn.dataset.scope;
+  } else {
     return;
   }
-  selectedStructureId = null;
-  selectedWallId = null;
-  selectedElementId = scopeBtn.dataset.scope;
   if (loadedFootprint) {
     loadFootprint(loadedFootprint);
   }
@@ -2958,6 +3066,54 @@ function applyPickSelection({ volumeId, structureId, wallId }) {
   selectedElementId = volumeId;
   loadFootprint(loadedFootprint);
 }
+
+/**
+ * Esc walks the selection up one level: a window or door to its wall, a wall
+ * to its structure or mass, a stacked structure to the one it stands on, a
+ * structure to its mass, a mass to the building. Delete removes the selected
+ * window, door, or structure (after asking: there's no undo); a wall or a
+ * mass isn't something to delete. Keys typed into a field are left alone.
+ */
+document.addEventListener('keydown', (event) => {
+  if (!loadedFootprint || event.ctrlKey || event.metaKey || event.altKey) {
+    return;
+  }
+  if (event.target.closest?.('input, select, textarea, [contenteditable="true"]')) {
+    return;
+  }
+  if (event.key === 'Escape') {
+    if (selectedOpeningId) {
+      selectedOpeningId = null;
+    } else if (selectedWallId) {
+      selectedWallId = null;
+    } else if (selectedStructureId) {
+      selectedStructureId = structureRecord(selectedStructureId)?.hostStructureId ?? null;
+    } else if (selectedElementId !== 'building-defaults') {
+      selectedElementId = 'building-defaults';
+    } else {
+      return;
+    }
+    event.preventDefault();
+    loadFootprint(loadedFootprint);
+    return;
+  }
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    if (selectedOpeningId) {
+      event.preventDefault();
+      if (window.confirm(`Delete ${selectedOpeningId}?`)) {
+        deleteOpening(selectedOpeningId);
+      }
+    } else if (selectedStructureId && !selectedWallId) {
+      event.preventDefault();
+      const structure = structureRecord(selectedStructureId);
+      const stacked = modelConfig.roofStructures.some((candidate) => candidate.hostStructureId === selectedStructureId);
+      const label = structure ? structureLabel(structure, modelConfig.frontSide, { withHost: false }) : selectedStructureId;
+      if (window.confirm(`Delete the ${label.toLowerCase()}${stacked ? ' and the structures standing on it' : ''}?`)) {
+        deleteStructure(selectedStructureId);
+      }
+    }
+  }
+});
 
 /** Wires up click-to-select and hover cues on a view's canvas, against its own camera. */
 function wireViewSelection(canvas, viewCamera) {

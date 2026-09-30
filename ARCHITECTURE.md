@@ -137,9 +137,13 @@ roof assemblies.
 
 **Selected-element editing.** The sidebar is an inspector for one selected
 target: the building, a mass (volume), a wall, or a roof structure. The scope
-control at its top picks the target (Building, each mass, then the selected
-mass's walls and structures); a click in the 3D, plan, or elevation view picks
-the same targets, and a click on empty ground goes back to the building. The
+tree at its top picks the target: the building, its masses, under each mass
+its walls and the structures standing on it, and under a structure its own
+walls, railings, and stacked structures; the path to a selection opens when
+the selection changes. A click in the 3D, plan, or elevation view picks the
+same targets, and a click on empty ground goes back to the building. Esc
+walks the selection up one level; Delete removes the selected window, door, or
+structure after asking (there is no undo). The
 deepest selection wins: a wall shows the wall's panel, not its mass's. Each
 sidebar part names the targets it serves (`data-inspector` in `index.html`),
 and `syncInspector` in `js/main.js` shows only those and titles the inspector.
