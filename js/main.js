@@ -21,6 +21,7 @@ import {
 } from './trim.js';
 import { normalizeRailing } from './railings.js';
 import { normalizeInterior } from './interior.js';
+import { normalizeDetails } from './opening-details.js';
 import { exportGlb } from './export.js';
 import { buildGameFile } from './game-export.js';
 import { importDixonFootprint } from './import.js';
@@ -1033,7 +1034,7 @@ function renderVolumeControls(layout) {
 }
 
 function createMaterialOptions(selected) {
-  return ['wood', 'brick', 'stucco', 'metal', 'stone', 'paint']
+  return ['wood', 'brick', 'stucco', 'metal', 'stone', 'paint', 'black']
     .map((key) => `<option value="${key}"${key === selected ? ' selected' : ''}>${key[0].toUpperCase()}${key.slice(1)}</option>`)
     .join('');
 }
@@ -1318,6 +1319,25 @@ function openingEditorHtml(opening) {
   if (opening.kind === 'door') {
     materials.push(selectField('Door material', 'panelMaterial', MATERIAL_OPTIONS, opening.materials?.panel ?? ''));
   }
+  const details = normalizeDetails(opening.kind, opening.details);
+  const heads = [['none', 'Plain casing'], ['cap', 'A cap over the head']];
+  const detailFields = opening.kind === 'door'
+    ? [
+      selectField('Leaves', 'details.leaves', [['1', 'A single door'], ['2', 'A pair']], String(details.leaves)),
+      numberField('Sidelights (each; 0 for none)', 'details.sidelights', details.sidelights, { step: 0.05 }),
+      numberField('Transom (0 for none)', 'details.transom', details.transom, { step: 0.05 }),
+      selectField('Head', 'details.head', heads, details.head),
+    ]
+    : [
+      selectField('Grille', 'details.grille', [['none', 'None (one pane)'], ['1/1', 'One over one'], ['2/2', 'Two over two'], ['6/6', 'Six over six'], ['9/9', 'Nine over nine']], details.grille),
+      selectField('Top', 'details.top', [['flat', 'Flat'], ['arch', 'Arched']], details.top),
+      selectField('Head', 'details.head', heads, details.head),
+      checkField('A sill under it', 'details.sill', details.sill),
+      checkField('Shutters', 'details.shutters', details.shutters),
+    ];
+  if (opening.kind === 'window' && details.shutters) {
+    materials.push(selectField('Shutter material', 'shutterMaterial', MATERIAL_OPTIONS.filter(([key]) => key), opening.materials?.shutter ?? 'black'));
+  }
   // steps are built only from a door in the house's own walls (see withOpenings)
   const onHouseWall = activeLayout?.wallRuns.some((run) => run.id === opening.hostWallRunId);
   const entryFields = opening.kind === 'door' && onHouseWall ? stepsFieldsHtml(normalizeSteps(opening.steps), doorFlight(opening), { door: true }) : [];
@@ -1331,6 +1351,7 @@ function openingEditorHtml(opening) {
   }
   return `<div class="structure-editor-head"><span>Editing ${escapeHtml(opening.id)}</span></div>${errorBanner}`
     + fieldGroup('Placement', placement)
+    + fieldGroup('Details', detailFields)
     + fieldGroup('Entry', entryFields)
     + fieldGroup('Materials', materials);
 }
@@ -1424,6 +1445,17 @@ function applyOpeningFieldEdit(input) {
   const edited = { ...record, materials: { ...record.materials } };
   const length = () => (Number(input.value) || 0) / unitFactor();
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+  if (input.dataset.field.startsWith('details.')) {
+    const key = input.dataset.field.slice('details.'.length);
+    const lengths = ['sidelights', 'transom'];
+    const value = input.type === 'checkbox' ? input.checked
+      : key === 'leaves' ? Number(input.value)
+        : lengths.includes(key) ? (Number(input.value) || 0) / unitFactor()
+          : input.value;
+    edited.details = normalizeDetails(record.kind, { ...record.details, [key]: value });
+    rebuildWithOpenings(modelConfig.openings.map((opening) => (opening.id === record.id ? edited : opening)));
+    return;
+  }
   if (input.dataset.field.startsWith('steps.')) {
     edited.steps = applyStepsField(record.steps, input, doorFlight(record));
     rebuildWithOpenings(modelConfig.openings.map((opening) => (opening.id === record.id ? edited : opening)));
@@ -1455,6 +1487,7 @@ function applyOpeningFieldEdit(input) {
     case 'frameMaterial': edited.materials.frame = input.value || undefined; break;
     case 'panelMaterial': edited.materials.panel = input.value || undefined; break;
     case 'hinge': edited.hinge = input.value; break;
+    case 'shutterMaterial': edited.materials.shutter = input.value || undefined; break;
     default: return;
   }
   rebuildWithOpenings(modelConfig.openings.map((opening) => (opening.id === record.id ? edited : opening)));
@@ -2977,7 +3010,7 @@ function nameSideControls() {
   });
 }
 const STRUCTURE_ROOF_OPTIONS = [['gable', 'Gable'], ['hip', 'Hip'], ['shed', 'Shed'], ['flat', 'Flat']];
-const MATERIAL_OPTIONS = [['', 'Building default'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['metal', 'Metal'], ['stone', 'Stone'], ['paint', 'Painted white']];
+const MATERIAL_OPTIONS = [['', 'Building default'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['metal', 'Metal'], ['stone', 'Stone'], ['paint', 'Painted white'], ['black', 'Painted black']];
 
 function structureRecord(id) {
   return modelConfig.roofStructures.find((structure) => structure.id === id) ?? null;

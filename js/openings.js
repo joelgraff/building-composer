@@ -43,6 +43,7 @@ export const STEP_LANDING_RANGE = Object.freeze([0.6, 4]);
 export const STEP_DIRECTIONS = Object.freeze(['front', 'left', 'right']);
 
 import { normalizeRailing } from './railings.js';
+import { normalizeDetails, openingPolygon } from './opening-details.js';
 
 const finite = (value, fallback) => (Number.isFinite(value) ? value : fallback);
 const plainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {});
@@ -62,6 +63,9 @@ const plainObject = (value) => (value && typeof value === 'object' && !Array.isA
  *   range (DOOR_SILL_MAX) rather than left editable like a window ledge.
  * - `steps` (a door's only): the flight of steps from its threshold down to
  *   grade (see normalizeSteps; on by default; built only on footprint walls).
+ * - `details`: its sill, head, grille, shutters, and top (a window's), or
+ *   its leaves, sidelights, transom, and head (a door's); see
+ *   normalizeDetails in js/opening-details.js.
  * - `hinge` (a door's only): the jamb it's hung on, `'left'` or `'right'` as
  *   seen from outside; a door cut into a walk-in room stands open about it.
  *
@@ -86,6 +90,7 @@ export function normalizeOpening(raw) {
     height: Math.max(MIN_OPENING_SIZE, finite(raw.height, preset.height)),
     sillHeight: kind === 'door' ? Math.min(DOOR_SILL_MAX, sillHeight) : sillHeight,
     materials: plainObject(raw.materials),
+    details: normalizeDetails(kind, raw.details),
     ...(kind === 'door' ? { steps: normalizeSteps(raw.steps), hinge: raw.hinge === 'right' ? 'right' : 'left' } : {}),
   };
 }
@@ -207,11 +212,10 @@ export function resolveOpening(opening, hostWallRun, config = {}) {
       start: hostWallRun.start, end: hostWallRun.end, normal: hostWallRun.normal, right: hostWallRun.right, baseY: hostWallRun.baseY ?? 0,
     },
     materials: opening.materials,
+    details: normalizeDetails(opening.kind, opening.details),
   };
   return { resolved, errors, warnings };
 }
-
-const rect = (u0, v0, u1, v1) => [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
 
 /**
  * A resolved opening's outer casing rectangle and inner opening rectangle,
@@ -221,9 +225,11 @@ const rect = (u0, v0, u1, v1) => [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
  */
 export function openingOutline(resolved) {
   const casing = FRAME_CASING_WIDTH;
+  // an arched window's casing follows its arch round
+  const top = resolved.kind === 'window' ? resolved.details?.top : 'flat';
   return {
-    outer: rect(resolved.u0 - casing, resolved.v0 - casing, resolved.u1 + casing, resolved.v1 + casing),
-    inner: rect(resolved.u0, resolved.v0, resolved.u1, resolved.v1),
+    outer: openingPolygon(resolved.u0 - casing, resolved.v0 - casing, resolved.u1 + casing, resolved.v1 + casing, top),
+    inner: openingPolygon(resolved.u0, resolved.v0, resolved.u1, resolved.v1, top),
   };
 }
 

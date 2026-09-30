@@ -26,6 +26,7 @@ import {
   computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, makeEavePlane, makeEdgePlane, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
 } from './roof-planes.js';
 import { buildCutRoof } from './cut-roofs.js';
+import { detailParts, leafSpan, normalizeDetails } from './opening-details.js';
 import {
   normalizeInterior, insetOutline, shellTriangles, apertureSolid, apertureReveals, doorLeaf, CEILING_BAND,
 } from './interior.js';
@@ -394,10 +395,12 @@ function doorCut(group, resolved, host) {
   if (resolved.u0 < Math.min(...across) - 1e-6 || resolved.u1 > Math.max(...across) + 1e-6) {
     return warning('it runs into the corner, past the room\'s width');
   }
+  // the doorway is its leaves' part (its sidelights and transom stay glazed on the wall)
+  const leaf = leafSpan(resolved);
   return {
     room,
     span: {
-      u0: resolved.u0, u1: resolved.u1, y0, y1, d0: -room.wallThickness, d1: 0.2,
+      u0: leaf.u0, u1: leaf.u1, y0, y1: host.baseY + leaf.v1, d0: -room.wallThickness, d1: 0.2,
     },
   };
 }
@@ -438,16 +441,35 @@ function buildOpeningMeshes(resolved, materials, glazing, flight = null, { open 
   const frameMesh = new THREE.Mesh(frameGeometry, frameMaterial);
   frameMesh.userData = { openingId: resolved.id, bodyPart: 'opening-frame' };
 
-  const paneGeometry = new THREE.PlaneGeometry(resolved.u1 - resolved.u0, resolved.v1 - resolved.v0);
-  const isWindow = resolved.kind === 'window';
-  const paneMaterial = isWindow ? glazing : paletteMaterial(resolved.materials.panel ?? 'wood', 'door');
-  const paneMesh = new THREE.Mesh(paneGeometry, paneMaterial);
-  paneMesh.position.set((resolved.u0 + resolved.u1) / 2, (resolved.v0 + resolved.v1) / 2, -(FRAME_DEPTH - PANE_RECESS));
-  paneMesh.userData = { openingId: resolved.id, bodyPart: 'opening-pane' };
-
+  // its glass and door panels, and its details (see js/opening-details.js), in the
+  // same frame: u along x, v up, and out from the wall along -z
+  const { boxes, panes } = detailParts(resolved, { open });
+  const partMaterials = {
+    frame: frameMaterial,
+    shutter: paletteMaterial(resolved.materials.shutter ?? 'black', 'wall'),
+    glass: glazing,
+    panel: paletteMaterial(resolved.materials.panel ?? 'wood', 'door'),
+  };
   const group = new THREE.Group();
-  // (a door cut through into a walk-in room stands open: its leaf is built in the room)
-  group.add(...(open ? [frameMesh] : [frameMesh, paneMesh]));
+  group.add(frameMesh);
+  panes.forEach(({ points, material }) => {
+    const paneMesh = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(points.map(([u, v]) => new THREE.Vector2(u, v)))), partMaterials[material]);
+    paneMesh.position.z = -(FRAME_DEPTH - PANE_RECESS);
+    paneMesh.userData = { openingId: resolved.id, bodyPart: 'opening-pane' };
+    group.add(paneMesh);
+  });
+  ['frame', 'shutter'].forEach((material) => {
+    const geometries = boxes.filter((part) => part.material === material).map((part) => {
+      const geometry = new THREE.BoxGeometry(part.u1 - part.u0, part.v1 - part.v0, part.d1 - part.d0);
+      geometry.translate((part.u0 + part.u1) / 2, (part.v0 + part.v1) / 2, -(part.d0 + part.d1) / 2);
+      return geometry;
+    });
+    if (geometries.length) {
+      const mesh = new THREE.Mesh(mergeFlatGeometries(geometries), partMaterials[material]);
+      mesh.userData = { openingId: resolved.id, bodyPart: 'opening-detail' };
+      group.add(mesh);
+    }
+  });
   if (flight) {
     group.add(buildDoorSteps(resolved, flight, materials.foundation));
   }
@@ -815,9 +837,17 @@ function withOpenings(result, config) {
       if (cut?.room) {
         cutThroughWall(result.building, cut.room, resolved.frame, cut.span, materials);
         const panel = paletteMaterial(resolved.materials.panel ?? 'wood', 'door');
-        const leaf = new THREE.Mesh(trianglesToGeometry(doorLeaf(resolved.frame, cut.span, cut.room.wallThickness, opening.hinge)), panel);
-        leaf.userData = { openingId: resolved.id, bodyPart: 'door-leaf', collides: false, oriented: true };
-        result.building.add(leaf);
+        // a pair stands open about both jambs, a single leaf about its hinge
+        const { span } = cut;
+        const middle = (span.u0 + span.u1) / 2;
+        const leaves = normalizeDetails('door', resolved.details).leaves === 2
+          ? [[{ ...span, u1: middle }, 'right'], [{ ...span, u0: middle }, 'left']]
+          : [[span, opening.hinge]];
+        leaves.forEach(([leafSpanned, hinge]) => {
+          const leaf = new THREE.Mesh(trianglesToGeometry(doorLeaf(resolved.frame, leafSpanned, cut.room.wallThickness, hinge)), panel);
+          leaf.userData = { openingId: resolved.id, bodyPart: 'door-leaf', collides: false, oriented: true };
+          result.building.add(leaf);
+        });
       } else if (cut?.warning) {
         warnings.push(cut.warning);
       }

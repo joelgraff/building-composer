@@ -24,7 +24,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 
 /** The game material for a wall of each Composer palette entry. */
 export const GAME_WALLS = Object.freeze({
-  brick: 'brick_red', wood: 'siding_white', stucco: 'siding_butter', metal: 'roof_metal', stone: 'limestone', paint: 'siding_white',
+  brick: 'brick_red', wood: 'siding_white', stucco: 'siding_butter', metal: 'roof_metal', stone: 'limestone', paint: 'siding_white', black: 'trim_dark',
 });
 /** ...and for a roof of each (a roof with no choice is shingled). */
 export const GAME_ROOFS = Object.freeze({ metal: 'roof_metal', wood: 'shingles_brown' });
@@ -82,8 +82,8 @@ export function gameMaterial({ role, palette, part }, normal) {
   return GAME_WALLS[palette] ?? GAME_WALLS.wood;
 }
 
-/** What a character walks through rather than into: an open door's leaf, a window or door's frame and pane, and skins over a wall (facade panels, trim). */
-const PASSABLE = new Set(['door-leaf', 'opening-frame', 'opening-pane', 'facade-panel', 'trim']);
+/** What a character walks through rather than into: an open door's leaf, a window or door's frame, pane, and details (sill, shutters, grille), and skins over a wall (facade panels, trim). */
+const PASSABLE = new Set(['door-leaf', 'opening-frame', 'opening-pane', 'opening-detail', 'facade-panel', 'trim']);
 
 /** Whether a mesh goes into the game's collision mesh (see buildGameFile). */
 function collides(mesh) {

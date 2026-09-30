@@ -11,6 +11,7 @@ export const MATERIAL_PALETTE = Object.freeze({
   metal: { label: 'Metal', color: 0x66727c, roughness: 0.42, metalness: 0.65 },
   stone: { label: 'Stone', color: 0x8d8880, roughness: 0.94, metalness: 0.01 },
   paint: { label: 'Painted white', color: 0xf1eee6, roughness: 0.7, metalness: 0 },
+  black: { label: 'Painted black', color: 0x2e3236, roughness: 0.6, metalness: 0 },
 });
 
 export const MATERIALS = Object.freeze({

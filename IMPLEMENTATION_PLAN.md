@@ -221,7 +221,7 @@ Roof-zone test fixtures:
 ### Phase 6 — Facade modifiers
 
 #### Task 6: Windows, doors, and parametric facade openings
-Status: First pass done (`js/openings.js`). A wall can be filled with windows in one go: so many to a story, in equal bays lined up floor to floor, clear of its doors (`windowGrid`). Openings are frame-and-pane appliqué on the wall face, not cuts, on footprint walls and on roof structures' own walls (a dormer's face, a tower's sides), kept within the wall's visible shape.
+Status: First pass done (`js/openings.js`). Windows have a sill, and can have a cap over the head, a grille (one over one to nine over nine), shutters, and an arched top; doors can be a pair, with sidelights, a transom, and a cap (`js/opening-details.js`; a walk-in doorway is cut through the leaves only). A wall can be filled with windows in one go: so many to a story, in equal bays lined up floor to floor, clear of its doors (`windowGrid`). Openings are frame-and-pane appliqué on the wall face, not cuts, on footprint walls and on roof structures' own walls (a dormer's face, a tower's sides), kept within the wall's visible shape.
 
 Requirements:
 - Place windows and doors on facade panels using story + wall-run addressing.
