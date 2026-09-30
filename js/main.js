@@ -87,7 +87,8 @@ const structureAddSummary = document.getElementById('structure-add-summary');
 const facadeSummaryBox = document.getElementById('facade-summary-box');
 const roofGraphSummary = document.getElementById('roof-graph-summary');
 const roofGraphEdges = document.getElementById('roof-graph-edges');
-const sampleBtn = document.getElementById('sample-btn');
+const fileMenu = document.getElementById('file-menu');
+const issuesBtn = document.getElementById('issues-btn');
 const footprintSelect = document.getElementById('footprint-select');
 const loadBtn = document.getElementById('load-btn');
 const saveBtn = document.getElementById('save-btn');
@@ -574,13 +575,42 @@ function setStatus(text, tone = 'default') {
   statusBox.textContent = tone === 'error'
     ? `Validation error: ${text}`
     : text;
-  statusBox.style.background = tone === 'error'
-    ? 'rgba(214, 69, 69, 0.08)'
-    : 'rgba(50, 107, 245, 0.08)';
-  statusBox.style.borderColor = tone === 'error'
-    ? 'rgba(214, 69, 69, 0.22)'
-    : 'rgba(50, 107, 245, 0.18)';
+  statusBox.title = statusBox.textContent;
+  statusBox.classList.toggle('error', tone === 'error');
 }
+
+/**
+ * The status bar's count of what wasn't built (structures and windows or
+ * doors refused by validation). Clicking it selects the first one; its row
+ * in the tree or wall panel says why.
+ */
+function renderIssueCount() {
+  const structures = activeStructureEntries.filter((entry) => entry.errors?.length);
+  const openings = activeOpeningEntries.filter((entry) => entry.errors?.length);
+  const count = structures.length + openings.length;
+  issuesBtn.hidden = count === 0;
+  issuesBtn.textContent = `${count} not built`;
+  issuesBtn.title = [
+    ...structures.map((entry) => `${entry.id}: ${nameSides(entry.errors[0].message)}`),
+    ...openings.map((entry) => `${entry.id}: ${entry.errors[0].message}`),
+  ].join('\n');
+}
+
+issuesBtn.addEventListener('click', () => {
+  const structure = activeStructureEntries.find((entry) => entry.errors?.length);
+  const opening = activeOpeningEntries.find((entry) => entry.errors?.length);
+  if (structure && structureRecord(structure.id)) {
+    selectedWallId = null;
+    selectedStructureId = structure.id;
+  } else if (opening && openingRecord(opening.id)) {
+    focusWallRun(openingRecord(opening.id).hostWallRunId);
+    selectedOpeningId = opening.id;
+    pendingSidebarFocus = '#opening-editor';
+  } else {
+    return;
+  }
+  loadFootprint(loadedFootprint);
+});
 
 function updateMetrics(metrics) {
   const { area, perimeter, centroid, bbox } = metrics;
@@ -2263,6 +2293,7 @@ async function loadFootprint(footprintData, preserveView = true) {
   renderScopeControl(activeLayout);
   renderWallInfoPanel(activeLayout);
   syncInspector(activeLayout);
+  renderIssueCount();
   if (pendingSidebarFocus) {
     scrollSidebarTo(document.querySelector(pendingSidebarFocus));
     pendingSidebarFocus = null;
@@ -3207,7 +3238,44 @@ function handleRegionMaterialChange(event) {
 storyMaterialsBox.addEventListener('change', handleRegionMaterialChange);
 wallPanelMaterialsBox.addEventListener('change', handleRegionMaterialChange);
 
-sampleBtn.addEventListener('click', () => {
+/** Opens or closes the File menu (its button's aria-expanded and the list's hidden). */
+function setFileMenuOpen(open) {
+  fileMenu.querySelector('.menu-button').setAttribute('aria-expanded', String(open));
+  fileMenu.querySelector('.menu-list').hidden = !open;
+}
+
+fileMenu.querySelector('.menu-button').addEventListener('click', () => {
+  setFileMenuOpen(fileMenu.querySelector('.menu-list').hidden);
+});
+// any choice in the menu, a click elsewhere, or Esc closes it
+fileMenu.querySelector('.menu-list').addEventListener('click', (event) => {
+  if (event.target.closest('button')) {
+    setFileMenuOpen(false);
+  }
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!fileMenu.contains(event.target)) {
+    setFileMenuOpen(false);
+  }
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !fileMenu.querySelector('.menu-list').hidden) {
+    setFileMenuOpen(false);
+    event.stopImmediatePropagation();
+  }
+}, true);
+
+// A new building from a preset footprint replaces the current one (there's no undo): ask first.
+fileMenu.addEventListener('click', (event) => {
+  const item = event.target.closest('[data-new-footprint]');
+  if (!item) {
+    return;
+  }
+  const name = item.textContent.trim();
+  if (loadedFootprint && !window.confirm(`Start a new building on the ${name} footprint? This replaces the current building; save it first to keep it.`)) {
+    return;
+  }
+  footprintSelect.value = item.dataset.newFootprint;
   loadSampleFootprint();
 });
 

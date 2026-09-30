@@ -146,7 +146,11 @@ on a window or door selects it on its wall, with its editor brought into view;
 on a chimney, the wall it stands against with that chimney's settings; on a
 house roof, the mass under it with its Roof section open. Esc
 walks the selection up one level; Delete removes the selected window, door, or
-structure after asking (there is no undo). The
+structure after asking (there is no undo). The toolbar holds a File menu (New
+building from a preset footprint, Open, Save, Export GLB), Send to game, Reset
+view, and the display units; a status bar under the views shows the last
+message and a count of what wasn't built, which selects the first such item
+when clicked. The
 deepest selection wins: a wall shows the wall's panel, not its mass's. Each
 sidebar part names the targets it serves (`data-inspector` in `index.html`),
 and `syncInspector` in `js/main.js` shows only those and titles the inspector.

@@ -530,16 +530,115 @@
         padding: 6px 8px;
       }
 
-      .status {
-        margin-top: 18px;
-        background: rgba(50, 107, 245, 0.08);
-        color: var(--text);
-        border: 1px solid rgba(50, 107, 245, 0.18);
-        border-radius: 8px;
-        padding: 10px 12px;
-        font-size: 0.9rem;
-        line-height: 1.4;
+      .toolbar {
+        justify-content: flex-start;
       }
+
+      .toolbar .actions {
+        margin-left: auto;
+      }
+
+      .menubar {
+        display: flex;
+        gap: 4px;
+        margin-left: 12px;
+      }
+
+      .menu {
+        position: relative;
+      }
+
+      .menu-button {
+        background: none;
+        border-color: transparent;
+      }
+
+      .menu-button[aria-expanded="true"] {
+        background: rgba(50, 107, 245, 0.1);
+      }
+
+      .menu-list {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        z-index: 20;
+        min-width: 230px;
+        padding: 6px;
+        display: grid;
+        background: var(--panel);
+        border: 1px solid rgba(17, 32, 51, 0.12);
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(17, 32, 51, 0.14);
+      }
+
+      .menu-list[hidden] {
+        display: none;
+      }
+
+      .menu-list button {
+        text-align: left;
+        border: 0;
+        background: none;
+        font-weight: 500;
+        padding: 7px 10px;
+        border-radius: 6px;
+      }
+
+      .menu-list button:hover,
+      .menu-list button:focus-visible {
+        background: rgba(50, 107, 245, 0.1);
+      }
+
+      .menu-list hr {
+        width: 100%;
+        border: 0;
+        border-top: 1px solid rgba(17, 32, 51, 0.08);
+        margin: 4px 0;
+      }
+
+      .menu-heading {
+        padding: 6px 10px 2px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+
+      .statusbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 5px 18px;
+        background: var(--panel);
+        border-top: 1px solid rgba(17, 32, 51, 0.08);
+        font-size: 0.84rem;
+        min-height: 30px;
+      }
+
+      .status {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--muted);
+      }
+
+      .status.error {
+        color: #c0392b;
+        font-weight: 600;
+      }
+
+      .issues {
+        padding: 3px 10px;
+        border-radius: 999px;
+        border-color: rgba(214, 69, 69, 0.3);
+        background: rgba(214, 69, 69, 0.08);
+        color: #c0392b;
+        font-size: 0.8rem;
+      }
+
 
       @media (max-width: 900px) {
         .layout {
@@ -555,12 +654,33 @@
   <body>
     <div class="toolbar">
       <div class="brand">Building Composer</div>
+      <nav class="menubar">
+        <div class="menu" id="file-menu">
+          <button class="menu-button" aria-haspopup="menu" aria-expanded="false">File ▾</button>
+          <div class="menu-list" role="menu" hidden>
+            <div class="menu-heading">New building</div>
+            <button role="menuitem" data-new-footprint="sample">Rectangle</button>
+            <button role="menuitem" data-new-footprint="l">L shape</button>
+            <button role="menuitem" data-new-footprint="u">U shape</button>
+            <button role="menuitem" data-new-footprint="narrow-lean-to">Narrow rear lean-to</button>
+            <button role="menuitem" data-new-footprint="wide-wing">Wider attached wing</button>
+            <hr />
+            <button role="menuitem" id="load-btn">Open .bld or footprint JSON…</button>
+            <button role="menuitem" id="save-btn">Save .bld</button>
+            <hr />
+            <button role="menuitem" id="export-btn">Export GLB</button>
+          </div>
+        </div>
+      </nav>
+      <select id="footprint-select" aria-label="Footprint type" hidden>
+        <option value="sample" selected>Rectangle</option>
+        <option value="u">U shape</option>
+        <option value="l">L shape</option>
+        <option value="narrow-lean-to">Narrow rear lean-to</option>
+        <option value="wide-wing">Wider attached wing</option>
+      </select>
       <div class="actions">
-        <button id="sample-btn" class="primary">Load footprint</button>
-        <button id="load-btn">Load JSON</button>
-        <button id="save-btn">Save .bld</button>
-        <button id="export-btn">Export GLB</button>
-        <button id="send-btn">Send to game</button>
+        <button id="send-btn" class="primary">Send to game</button>
         <button id="reset-view-btn">Reset view</button>
         <select id="unit-select" class="toolbar-select" aria-label="Display units">
           <option value="imperial" selected>Feet</option>
@@ -581,16 +701,6 @@
         </div>
 
         <div class="panel" data-inspector="building">
-          <div class="field">
-            <label for="footprint-select">Footprint type</label>
-            <select id="footprint-select" aria-label="Footprint type">
-              <option value="sample" selected>Rectangle</option>
-              <option value="u">U shape</option>
-              <option value="l">L shape</option>
-              <option value="narrow-lean-to">Narrow rear lean-to</option>
-              <option value="wide-wing">Wider attached wing</option>
-            </select>
-          </div>
           <div class="field">
             <label for="front-select">Front of the building</label>
             <select id="front-select">
@@ -845,9 +955,6 @@
         </details>
 
         <span id="status-value" hidden>Waiting</span>
-        <div class="status" id="status-box">
-          Load a closed, CCW footprint to generate the base massing.
-        </div>
       </aside>
 
       <main class="viewer">
@@ -867,6 +974,11 @@
       </main>
     </div>
 
+    <footer class="statusbar">
+      <div class="status" id="status-box">Load a closed, CCW footprint to generate the base massing.</div>
+      <button id="issues-btn" class="issues" hidden></button>
+    </footer>
+
     <input id="file-input" type="file" accept="application/json,.json,.bld" hidden />
 
     <script type="importmap">
@@ -877,6 +989,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=82"></script>
+    <script type="module" src="./js/main.js?v=84"></script>
   </body>
 </html>
