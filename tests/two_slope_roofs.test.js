@@ -231,10 +231,14 @@ describe('two-slope roofs with structures, roles, and persistence', () => {
     const along = edge([-10, -5], [10, -5]); // parallel to the ridge
     const across = edge([10, -5], [10, 5]);
     assert.equal(classifyEdgeRole(across, volumes, { roofType: 'mansard' }).role, 'eave');
-    const ridgeAxis = volumes[0].ridgeAxis;
+    // A single-rectangle roof's ridge axis follows config.roofDirection, the
+    // same as gable/hip (see resolveVolumeRidgeDirections in js/facade.js),
+    // not the volume's own automatic axis, so it's given explicitly here
+    // rather than read off volumes[0].ridgeAxis.
+    const ridgeAxis = 'x';
     const [eaveEdge, rakeEdge] = ridgeAxis === 'x' ? [along, across] : [across, along];
-    assert.equal(classifyEdgeRole(eaveEdge, volumes, { roofType: 'gambrel' }).role, 'eave');
-    assert.equal(classifyEdgeRole(rakeEdge, volumes, { roofType: 'gambrel' }).role, 'rake');
+    assert.equal(classifyEdgeRole(eaveEdge, volumes, { roofType: 'gambrel', roofDirection: ridgeAxis }).role, 'eave');
+    assert.equal(classifyEdgeRole(rakeEdge, volumes, { roofType: 'gambrel', roofDirection: ridgeAxis }).role, 'rake');
   });
 
   it('keep the building-wide mansard settings in .bld files', () => {

@@ -34,7 +34,13 @@ describe('Roof Graph & Edge Role Classification', () => {
   it('correctly classifies rectangular edges for gable roof (2 eaves, 2 rakes)', () => {
     const norm = normalizeFootprint(sampleFootprint);
     const volumes = decomposeIntoVolumes(norm);
-    // Longitudinal span is X (length 20, width 15), so ridgeAxis is 'x'
+    // A single-volume (fully rectangular) footprint has no massing of its own
+    // to derive a ridge from, so the builder (createRoofGeometry) always
+    // takes the building-level roofDirection as the ridge axis here,
+    // regardless of the footprint's own aspect ratio (20 x 15). 'z' means
+    // the ridge runs along z, so the eaves are the walls parallel to z
+    // (vertical orientation) and the rakes are the walls at the gable ends
+    // (horizontal orientation).
     const graph = buildRoofGraph(norm, volumes, { roofType: 'gable', roofDirection: 'z' });
 
     assert.equal(graph.summary.eavesCount, 2);
@@ -45,9 +51,9 @@ describe('Roof Graph & Edge Role Classification', () => {
     assert.equal(eaves.length, 2);
     assert.equal(rakes.length, 2);
 
-    // Eaves are parallel to ridge (horizontal), rakes are perpendicular (vertical)
-    eaves.forEach((e) => assert.equal(e.orientation, 'horizontal'));
-    rakes.forEach((e) => assert.equal(e.orientation, 'vertical'));
+    // Eaves are parallel to ridge (vertical), rakes are perpendicular (horizontal)
+    eaves.forEach((e) => assert.equal(e.orientation, 'vertical'));
+    rakes.forEach((e) => assert.equal(e.orientation, 'horizontal'));
   });
 
   it('correctly classifies rectangular edges for shed roof', () => {
