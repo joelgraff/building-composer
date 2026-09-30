@@ -263,13 +263,12 @@ function buildOpeningMeshes(resolved, materials, glazing, flight = null) {
 }
 
 /** Whether a door's steps would run into a structure standing in front of it (a porch's floor, a bay). */
-function doorStepsBlocked(resolved, flight, plans) {
+function doorStepPlans(resolved, flight) {
   const { start, end, normal } = resolved.frame;
   const mid = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2];
   const right = [(end[0] - start[0]), (end[1] - start[1])].map((c) => c / Math.hypot(end[0] - start[0], end[1] - start[1]));
   const center = (resolved.u0 + resolved.u1) / 2;
-  const gap = 1e-3;
-  return flight.pieces.some(({
+  return flight.pieces.map(({
     profile, at, toward, width,
   }) => {
     const out = Math.max(...profile.map(([o]) => o));
@@ -279,8 +278,37 @@ function doorStepsBlocked(resolved, flight, plans) {
       .map(([u, d]) => [mid[0] + right[0] * (center + u) + normal[0] * d, mid[1] + right[1] * (center + u) + normal[1] * d]);
     const xs = corners.map(([x]) => x);
     const zs = corners.map(([, z]) => z);
-    return plans.some((b) => Math.min(...xs) < b.maxX - gap && Math.max(...xs) > b.minX + gap && Math.min(...zs) < b.maxZ - gap && Math.max(...zs) > b.minZ + gap);
+    return {
+      minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs),
+    };
   });
+}
+
+/** Whether two plan rectangles overlap (more than touching). */
+function plansOverlap(a, b) {
+  const gap = 1e-3;
+  return a.minX < b.maxX - gap && a.maxX > b.minX + gap && a.minZ < b.maxZ - gap && a.maxZ > b.minZ + gap;
+}
+
+/**
+ * Why a door's steps can't be built where they'd stand, or null: a structure
+ * standing in front of the door (a porch's floor, a bay), the house itself
+ * (a flight run along the wall into an inside corner), or another flight of
+ * steps already there.
+ */
+function doorStepsConflict(resolved, flight, { structures, masses, steps }) {
+  const plans = doorStepPlans(resolved, flight);
+  const hits = (list) => plans.some((plan) => list.some((other) => plansOverlap(plan, other)));
+  if (hits(structures)) {
+    return 'steps left off: a porch or other structure stands in front of the door';
+  }
+  if (hits(masses)) {
+    return 'steps left off: they would run into the house';
+  }
+  if (hits(steps)) {
+    return 'steps left off: they would run into another flight of steps';
+  }
+  return null;
 }
 
 /** Porch steps are this wide unless set otherwise, and never wider than the porch's open front. */
@@ -303,6 +331,10 @@ function withPorchSteps(result, config) {
     const center = opening.point((opening.from + opening.to) / 2);
     const normal = PORCH_OUTWARD[opening.side];
     result.building.add(buildStepsAt(center, normal, opening.width, opening.flight, material, { structureId: resolved.id, bodyPart: 'porch-steps' }));
+    const corners = [opening.point(opening.from), opening.point(opening.to)].flatMap(([x, z]) => [[x, z], [x + normal[0] * opening.flight.depth, z + normal[1] * opening.flight.depth]]);
+    result.stepPlans = [...(result.stepPlans ?? []), {
+      minX: Math.min(...corners.map(([x]) => x)), maxX: Math.max(...corners.map(([x]) => x)), minZ: Math.min(...corners.map(([, z]) => z)), maxZ: Math.max(...corners.map(([, z]) => z)),
+    }];
     // railings down both sides of the flight, from the deck's edge (a post frames each side there)
     const steps = normalizeSteps(resolved.steps);
     if (steps.railings.enabled) {
@@ -539,6 +571,13 @@ function withOpenings(result, config) {
   const glazing = glazingMaterial();
   const structureWalls = (result.structureFacades ?? []).flatMap((facade) => facade.wallRuns);
   const standingPlans = (result.roofStructures ?? []).filter((entry) => entry.resolved?.standing).map((entry) => entry.resolved.bounds);
+  const massPlans = (config.volumes ?? []).map(({
+    id, minX, maxX, minZ, maxZ,
+  }) => ({
+    id, minX, maxX, minZ, maxZ,
+  }));
+  // flights already placed (a porch's, then each door's in turn)
+  const stepPlans = [...(result.stepPlans ?? [])];
   const entries = openings.map((opening) => {
     const wallRun = wallRuns.find((run) => run.id === opening.hostWallRunId);
     const structureWall = !wallRun && structureWalls.find((run) => run.id === opening.hostWallRunId);
@@ -555,7 +594,16 @@ function withOpenings(result, config) {
       const steps = normalizeSteps(opening.steps);
       const width = steps.width ?? (resolved.u1 - resolved.u0) + 2 * (FRAME_CASING_WIDTH + STEP_SIDE_MARGIN);
       const doorFlight = opening.kind === 'door' && steps.enabled && wallRun ? doorStepPieces(steps, host.baseY + resolved.sillHeight, width) : null;
-      const flight = doorFlight && !doorStepsBlocked(resolved, doorFlight, standingPlans) ? doorFlight : null;
+      // (the door's own mass is behind it: an angled wall's mass reaches past it in plan)
+      const masses = massPlans.filter((mass) => mass.id !== wallRun?.volumeId);
+      const conflict = doorFlight && doorStepsConflict(resolved, doorFlight, { structures: standingPlans, masses, steps: stepPlans });
+      if (conflict) {
+        warnings.push({ code: 'steps-left-off', message: conflict });
+      }
+      const flight = doorFlight && !conflict ? doorFlight : null;
+      if (flight) {
+        stepPlans.push(...doorStepPlans(resolved, flight));
+      }
       result.building.add(buildOpeningMeshes(resolved, materials, glazing, flight));
       if (flight && steps.railings.enabled) {
         // the door's frame to world: u across the wall from the door's center, d out from it
@@ -908,6 +956,7 @@ function withStructuresAndWalks(built, config, skeletonWalks = []) {
   addRailings(result, config, roofWalks);
   delete result.railGaps;
   delete result.stairRails;
+  delete result.stepPlans;
   return { ...result, roofWalks };
 }
 

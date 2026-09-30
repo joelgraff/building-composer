@@ -480,6 +480,42 @@ describe('entry steps', () => {
     assert.ok(points.some(([x]) => x < 1 - 0.6) && points.some(([x]) => x > 1 + 0.6), 'both sides');
   });
 
+  const leftOff = (built, id) => built.openings.find((entry) => entry.id === id).warnings.find((w) => w.code === 'steps-left-off')?.message;
+
+  it('says why a door\'s steps were left off: a porch in front of it', () => {
+    const built = build([{ id: 'd', kind: 'door', hostWallRunId: 'wall-run-0', offset: 1 }], { roofStructures: normalizeRoofStructures([porch()]) });
+    assert.match(leftOff(built, 'd'), /porch/);
+    assert.deepEqual(built.openings[0].errors, [], 'the door itself still builds');
+  });
+
+  it('... another door\'s steps in the way', () => {
+    const built = build(normalizeOpenings([
+      { id: 'a', kind: 'door', hostWallRunId: 'wall-run-0', offset: -1.5, steps: { landing: 1.5, direction: 'left' } },
+      // a's flight runs toward +x (its left, facing -z) to x = 0.03; b's straight flight stands from x = -0.19
+      { id: 'b', kind: 'door', hostWallRunId: 'wall-run-0', offset: 0.5 },
+    ]));
+    assert.equal(leftOff(built, 'a'), undefined);
+    assert.match(leftOff(built, 'b'), /another flight/);
+    assert.equal(stepsOf(built).length, 1);
+  });
+
+  it('... the house itself, where a stoop\'s flight runs into an inside corner', () => {
+    const ell = [[-6, -4], [6, -4], [6, 0], [0, 0], [0, 4], [-6, 4]];
+    const layout = computeFacadeLayout(ell, { volumeSplit: 'auto' });
+    // the wall along z = 0 from x = 6 to 0, facing +z; the wing's wall rises at x = 0
+    const wall = layout.wallRuns.find((run) => Math.abs(run.start[1]) < 1e-9 && Math.abs(run.end[1]) < 1e-9);
+    const built = createBuildingFromFootprint(ell, {
+      storyCount: 1, storyHeight: 3, foundationDepth: 0.7, roofType: 'gable', roofDirection: 'x', roofHeight: 2,
+      volumes: layout.volumes, facadeLayout: layout,
+      openings: normalizeOpenings(['left', 'right'].map((direction, i) => ({
+        id: `s${i}`, kind: 'door', hostWallRunId: wall.id, offset: (i === 0 ? 1 : -1) * 2.2, steps: { landing: 1.2, direction },
+      }))),
+    });
+    const messages = ['s0', 's1'].map((id) => leftOff(built, id));
+    assert.ok(messages.some((m) => /house/.test(m ?? '')), `${messages}`);
+    assert.ok(messages.some((m) => m === undefined), 'the one running away from the corner builds');
+  });
+
   it('saves whether a door has steps', () => {
     const layout = computeFacadeLayout(footprint, {});
     const openings = normalizeOpenings([{ kind: 'door', hostWallRunId: 'wall-run-0', steps: false }, { kind: 'door', hostWallRunId: 'wall-run-1', offset: 2 }]);

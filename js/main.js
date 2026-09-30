@@ -1256,6 +1256,10 @@ function openingEditorHtml(opening) {
   // steps are built only from a door in the house's own walls (see withOpenings)
   const onHouseWall = activeLayout?.wallRuns.some((run) => run.id === opening.hostWallRunId);
   const entryFields = opening.kind === 'door' && onHouseWall ? stepsFieldsHtml(normalizeSteps(opening.steps), doorFlight(opening), { door: true }) : [];
+  const leftOff = entry?.warnings?.find((warning) => warning.code === 'steps-left-off');
+  if (leftOff) {
+    entryFields.splice(1, 0, `<div class="structure-note">${escapeHtml(leftOff.message)}</div>`);
+  }
   return `<div class="structure-editor-head"><span>Editing ${escapeHtml(opening.id)}</span></div>${errorBanner}`
     + fieldGroup('Placement', placement)
     + fieldGroup('Entry', entryFields)
