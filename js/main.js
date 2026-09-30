@@ -1255,7 +1255,7 @@ function openingEditorHtml(opening) {
   }
   // steps are built only from a door in the house's own walls (see withOpenings)
   const onHouseWall = activeLayout?.wallRuns.some((run) => run.id === opening.hostWallRunId);
-  const entryFields = opening.kind === 'door' && onHouseWall ? stepsFieldsHtml(normalizeSteps(opening.steps), doorFlight(opening)) : [];
+  const entryFields = opening.kind === 'door' && onHouseWall ? stepsFieldsHtml(normalizeSteps(opening.steps), doorFlight(opening), { door: true }) : [];
   return `<div class="structure-editor-head"><span>Editing ${escapeHtml(opening.id)}</span></div>${errorBanner}`
     + fieldGroup('Placement', placement)
     + fieldGroup('Entry', entryFields)
@@ -1265,7 +1265,9 @@ function openingEditorHtml(opening) {
 /** The flight a door's steps make from its threshold, or null (see withOpenings). */
 function doorFlight(opening) {
   const host = openingHost(opening.hostWallRunId);
-  return host ? flightFor(normalizeSteps(opening.steps), host.baseY + opening.sillHeight) : null;
+  const steps = normalizeSteps(opening.steps);
+  // a stoop's flight runs off its landing, which is its top step
+  return host ? flightFor(steps, host.baseY + opening.sillHeight, { deck: steps.direction !== 'front' }) : null;
 }
 
 /**
@@ -1274,7 +1276,7 @@ function doorFlight(opening) {
  * to fit the door or porch), tread depth, and either a riser height the
  * number of steps follows from, or the number of steps.
  */
-function stepsFieldsHtml(steps, flight, { travel = null } = {}) {
+function stepsFieldsHtml(steps, flight, { travel = null, door = false } = {}) {
   const parts = [checkField('Steps down to the ground', 'steps.enabled', steps.enabled)];
   if (!steps.enabled) {
     return parts;
@@ -1283,6 +1285,11 @@ function stepsFieldsHtml(steps, flight, { travel = null } = {}) {
     // a porch's steps can move along its front (a door's stay on the door)
     parts.push(sliderField('Along the front (from its middle)', 'steps.offset', steps.offset, -travel, travel));
   }
+  if (door) {
+    // a deep landing with the flight off its side is a stoop
+    parts.push(numberField('Landing depth (empty for the usual)', 'steps.landing', steps.landing, { step: 0.1, placeholder: 'usual' }));
+    parts.push(selectField('Flight runs', 'steps.direction', [['front', 'Straight out'], ['left', 'Along the wall, to the left'], ['right', 'Along the wall, to the right']], steps.direction));
+  }
   parts.push(numberField('Width (empty to fit)', 'steps.width', steps.width, { step: 0.1, placeholder: 'fit' }));
   parts.push(numberField('Tread depth', 'steps.tread', steps.tread, { step: 0.05 }));
   parts.push(selectField('Size by', 'steps.sizeBy', [['riser', 'Riser height'], ['count', 'Number of steps']], steps.count === null ? 'riser' : 'count'));
@@ -1290,7 +1297,8 @@ function stepsFieldsHtml(steps, flight, { travel = null } = {}) {
     ? numberField('Riser height', 'steps.riser', steps.riser, { step: 0.02 })
     : numberField('Number of steps', 'steps.count', steps.count, { length: false, step: 1 }));
   if (flight) {
-    parts.push(`<div class="scope-empty">${flight.built} ${flight.built === 1 ? 'step' : 'steps'}, ${formatLength(flight.riser, 2)} risers, running out ${formatLength(flight.depth, 1)}</div>`);
+    const runs = door && steps.direction !== 'front' ? 'along the wall' : 'out';
+    parts.push(`<div class="scope-empty">${flight.built} ${flight.built === 1 ? 'step' : 'steps'}, ${formatLength(flight.riser, 2)} risers, running ${runs} ${formatLength(flight.depth, 1)}</div>`);
   }
   return parts;
 }
@@ -1315,6 +1323,8 @@ function applyStepsField(steps, input, flight) {
     case 'riser': if (given) { next.riser = meters; } break;
     case 'count': if (given) { next.count = Number(input.value); } break;
     case 'offset': if (given) { next.offset = meters; } break;
+    case 'landing': next.landing = given ? meters : null; break;
+    case 'direction': next.direction = input.value; break;
     case 'sizeBy': next.count = input.value === 'count' ? (flight?.built ?? 3) : null; break;
     default: break;
   }

@@ -270,7 +270,7 @@ describe('windows on a roof structure\'s own walls', () => {
 describe('entry steps', () => {
   it('a door has steps unless turned off; a window never does', () => {
     assert.deepEqual(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door' }).steps, {
-      enabled: true, width: null, tread: STEP_TREAD, riser: 0.18, count: null, offset: 0,
+      enabled: true, width: null, tread: STEP_TREAD, riser: 0.18, count: null, offset: 0, landing: null, direction: 'front',
     });
     assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door', steps: false }).steps.enabled, false, 'an older file\'s plain off');
     assert.equal(normalizeOpening({ hostWallRunId: 'wall-run-0', kind: 'door', steps: true }).steps.enabled, true);
@@ -369,9 +369,11 @@ describe('entry steps', () => {
   });
 
   it('keeps sizes in range; a count of steps is whole', () => {
-    const steps = normalizeSteps({ width: 20, tread: 0.1, riser: 0.4, count: 3.6 });
+    const steps = normalizeSteps({
+      width: 20, tread: 0.1, riser: 0.4, count: 3.6, landing: 9, direction: 'up',
+    });
     assert.deepEqual(steps, {
-      enabled: true, width: 8, tread: 0.2, riser: 0.25, count: 4, offset: 0,
+      enabled: true, width: 8, tread: 0.2, riser: 0.25, count: 4, offset: 0, landing: 4, direction: 'front',
     });
   });
 
@@ -399,6 +401,37 @@ describe('entry steps', () => {
     // two steps below the deck, three risers: the flight runs out (3 - 1) treads
     assert.ok(Math.abs(porchBox.max.z - porchBox.min.z - 2 * 0.5) < 1e-6);
     assert.equal(porchStepsOf(build([], { roofStructures: normalizeRoofStructures([porch({ steps: { enabled: false } })]) })).length, 0);
+  });
+
+  it('a deeper landing pushes a straight flight out', () => {
+    const [{ box }] = stepsOf(build([{ kind: 'door', hostWallRunId: 'wall-run-0', offset: 1, steps: { landing: 2 } }]));
+    assert.ok(Math.abs(-4 - box.min.z - (2 + 3 * STEP_TREAD)) < 1e-6);
+  });
+
+  it('a stoop: a landing, and a flight down along the wall to either side of it', () => {
+    // wall-run-0 is the z = -4 wall, facing -z: seen from outside (looking toward +z), left is +x
+    const halfWidth = 0.9 / 2 + FRAME_CASING_WIDTH + STEP_SIDE_MARGIN;
+    const flightDepth = 3 * STEP_TREAD; // 0.7 m: four risers, the landing the top step
+    const stoop = (direction) => stepsOf(build([{
+      kind: 'door', hostWallRunId: 'wall-run-0', offset: 1, steps: { landing: 1.5, direction },
+    }]))[0];
+    const left = stoop('left');
+    assert.ok(Math.abs(left.box.min.z - -5.5) < 1e-6 && Math.abs(left.box.max.z - -4) < 1e-6, 'as deep as the landing');
+    assert.ok(Math.abs(left.box.min.x - (1 - halfWidth)) < 1e-6 && Math.abs(left.box.max.x - (1 + halfWidth + flightDepth)) < 1e-6, 'running off its left side');
+    assert.ok(Math.abs(left.box.max.y - 0.7) < 1e-6 && Math.abs(left.box.min.y) < 1e-6);
+    const right = stoop('right');
+    assert.ok(Math.abs(right.box.max.x - (1 + halfWidth)) < 1e-6 && Math.abs(right.box.min.x - (1 - halfWidth - flightDepth)) < 1e-6, 'or its right');
+    // the flight steps down away from the landing: one riser high at its far end
+    const p = left.mesh.geometry.getAttribute('position');
+    const e = left.mesh.matrixWorld.elements;
+    let farTop = 0;
+    for (let i = 0; i < p.count; i += 1) {
+      const [x, y, z] = [p.getX(i), p.getY(i), p.getZ(i)];
+      const wx = e[0] * x + e[4] * y + e[8] * z + e[12];
+      const wy = e[1] * x + e[5] * y + e[9] * z + e[13];
+      if (wx > left.box.max.x - 0.2) farTop = Math.max(farTop, wy);
+    }
+    assert.ok(Math.abs(farTop - 0.7 / 4) < 1e-6, `${farTop}`);
   });
 
   it('saves whether a door has steps', () => {

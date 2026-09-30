@@ -38,6 +38,9 @@ export const STEP_WIDTH_RANGE = Object.freeze([0.6, 8]);
 export const STEP_TREAD_RANGE = Object.freeze([0.2, 0.6]);
 export const STEP_RISER_RANGE = Object.freeze([0.1, 0.25]);
 export const STEP_COUNT_RANGE = Object.freeze([1, 40]);
+export const STEP_LANDING_RANGE = Object.freeze([0.6, 4]);
+/** Which way a door's flight runs down from its landing: straight out, or along the wall to the left or right (as seen from outside). */
+export const STEP_DIRECTIONS = Object.freeze(['front', 'left', 'right']);
 
 const finite = (value, fallback) => (Number.isFinite(value) ? value : fallback);
 const plainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {});
@@ -375,6 +378,10 @@ export function shapeLimit(opening, host, field, from, to) {
  * - `offset`: a porch's steps' center along its front, from the front's
  *   middle, to the right as seen from outside (a door's steps stay centered
  *   on the door).
+ * - `landing` (a door's): the landing's depth out from the wall, or null for
+ *   STEP_LANDING; with a deep landing and a flight off its side, a stoop.
+ * - `direction` (a door's): which way the flight runs from the landing, see
+ *   STEP_DIRECTIONS.
  */
 export function normalizeSteps(raw) {
   const source = raw === false ? { enabled: false } : raw && typeof raw === 'object' ? raw : {};
@@ -387,6 +394,8 @@ export function normalizeSteps(raw) {
     riser: inRange(source.riser, STEP_RISER_RANGE) ?? STEP_RISER,
     count: count === null ? null : Math.round(count),
     offset: Number.isFinite(source.offset) ? source.offset : 0,
+    landing: inRange(source.landing, STEP_LANDING_RANGE),
+    direction: STEP_DIRECTIONS.includes(source.direction) ? source.direction : 'front',
   };
 }
 
@@ -436,9 +445,46 @@ export function stepFlight(rise, {
  */
 export function flightFor(steps, rise, { deck = false } = {}) {
   return stepFlight(rise, {
-    landing: deck ? 0 : STEP_LANDING,
+    landing: deck ? 0 : steps.landing ?? STEP_LANDING,
     tread: steps.tread,
     riser: steps.riser,
     count: steps.count === null ? null : steps.count + (deck ? 1 : 0),
   });
+}
+
+/**
+ * A door's steps as plan pieces around the door, `width` wide at the door and
+ * `rise` up to its threshold: in the door's frame, u across the wall from the
+ * door's center (+u to the left as seen from outside) and d out from the
+ * wall. A flight straight out is one piece (its profile includes the
+ * landing); a flight to either side is a landing (a flat block) and a flight
+ * off its side whose top step is the landing, running along the wall and
+ * as wide as the landing is deep. Each piece: its side `profile` ([out, up]
+ * from where it starts), where it starts (`at`, [u, d]), which way it runs
+ * (`toward`, [du, dd]), and how wide it is (`width`, across it from `at`
+ * along [dd, -du]). Null when there is nothing to climb.
+ */
+export function doorStepPieces(steps, rise, width) {
+  if (steps.direction === 'front') {
+    const flight = flightFor(steps, rise);
+    return flight && {
+      flight,
+      pieces: [{ profile: flight.profile, at: [-width / 2, 0], toward: [0, 1], width }],
+    };
+  }
+  const landing = steps.landing ?? STEP_LANDING;
+  const flight = flightFor(steps, rise, { deck: true });
+  if (!(rise >= STEP_MIN_RISE)) {
+    return null;
+  }
+  const block = { profile: [[0, 0], [landing, 0], [landing, rise], [0, rise]], at: [-width / 2, 0], toward: [0, 1], width };
+  if (!flight) {
+    return { flight: { depth: landing }, pieces: [block] };
+  }
+  // left (as seen from outside) is +u; the flight's width runs from the wall out
+  const side = steps.direction === 'left' ? 1 : -1;
+  const run = side > 0
+    ? { profile: flight.profile, at: [width / 2, landing], toward: [1, 0], width: landing }
+    : { profile: flight.profile, at: [-width / 2, 0], toward: [-1, 0], width: landing };
+  return { flight: { ...flight, depth: landing }, pieces: [block, run] };
 }
