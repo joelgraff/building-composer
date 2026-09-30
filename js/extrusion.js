@@ -28,6 +28,9 @@ import {
 import { buildCutRoof } from './cut-roofs.js';
 import { detailParts, leafSpan, normalizeDetails } from './opening-details.js';
 import {
+  normalizeChimneys, chimneyPlan, chimneyParts, partTriangles as chimneyPartTriangles, CHIMNEY_REACH,
+} from './chimneys.js';
+import {
   normalizeInterior, insetOutline, shellTriangles, apertureSolid, apertureReveals, doorLeaf, CEILING_BAND,
 } from './interior.js';
 
@@ -919,6 +922,69 @@ function lowestSurfaceAbove(triangles, x, z, floorY) {
   return best;
 }
 
+/** The highest roof surface straight above (x, z), or -Infinity where there's none. */
+function highestSurfaceAt(triangles, x, z) {
+  let best = -Infinity;
+  triangles.forEach(([a, b, c]) => {
+    const det = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2]);
+    if (Math.abs(det) < 1e-12) {
+      return;
+    }
+    const l1 = ((x - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (z - a[2])) / det;
+    const l2 = ((b[0] - a[0]) * (z - a[2]) - (x - a[0]) * (b[2] - a[2])) / det;
+    if (l1 < -1e-9 || l2 < -1e-9 || l1 + l2 > 1 + 1e-9) {
+      return;
+    }
+    best = Math.max(best, a[1] + l1 * (b[1] - a[1]) + l2 * (c[1] - a[1]));
+  });
+  return best;
+}
+
+/**
+ * The chimneys (config.chimneys, see js/chimneys.js) on the house's own
+ * walls: each from the ground (outside) or its volume's wall top (inside)
+ * up `aboveRoof` over the highest roof within CHIMNEY_REACH of it, found on
+ * the built roof (sampled over a grid round the chimney), and never lower
+ * than that over the wall top. A chimney whose wall isn't there is noted in
+ * `result.chimneys`.
+ */
+function withChimneys(result, config) {
+  const chimneys = normalizeChimneys(config.chimneys);
+  if (!chimneys.length) {
+    return { ...result, chimneys: [] };
+  }
+  const wallRuns = config.facadeLayout?.wallRuns ?? [];
+  const levelConfig = { ...config, foundationDepth: config.foundationDepth ?? 0.6 };
+  const roof = mainRoofTriangles(result.building);
+  const entries = chimneys.map((chimney) => {
+    const run = wallRuns.find((candidate) => candidate.id === chimney.hostWallRunId);
+    if (!run) {
+      return { id: chimney.id, chimney, errors: [{ code: 'no-host', message: "its wall doesn't exist" }] };
+    }
+    const plateY = volumeFoundationHeight(run.volumeId, levelConfig) + volumeWallHeight(run.volumeId, config);
+    const plan = chimneyPlan(chimney, run);
+    const xs = plan.map(([x]) => x);
+    const zs = plan.map(([, z]) => z);
+    const [minX, maxX, minZ, maxZ] = [Math.min(...xs) - CHIMNEY_REACH, Math.max(...xs) + CHIMNEY_REACH, Math.min(...zs) - CHIMNEY_REACH, Math.max(...zs) + CHIMNEY_REACH];
+    let roofTop = plateY;
+    const steps = 12;
+    for (let i = 0; i <= steps; i += 1) {
+      for (let j = 0; j <= steps; j += 1) {
+        roofTop = Math.max(roofTop, highestSurfaceAt(roof, minX + ((maxX - minX) * i) / steps, minZ + ((maxZ - minZ) * j) / steps));
+      }
+    }
+    const bottom = chimney.position === 'inside' ? plateY : 0;
+    const triangles = chimneyParts(plan, bottom, roofTop + chimney.aboveRoof).flatMap(chimneyPartTriangles);
+    const mesh = new THREE.Mesh(trianglesToGeometry(triangles), paletteMaterial(chimney.material, 'wall'));
+    mesh.userData = { chimneyId: chimney.id, bodyPart: 'chimney' };
+    result.building.add(mesh);
+    return {
+      id: chimney.id, chimney, errors: [], top: roofTop + chimney.aboveRoof,
+    };
+  });
+  return { ...result, chimneys: entries };
+}
+
 /** A volume's stories, as volumeWallHeight counts them. */
 export function volumeStories(volumeId, config) {
   const count = (volumeId && config.volumeStoryOverrides?.[volumeId]) ?? config.storyCount ?? 1;
@@ -1204,7 +1270,7 @@ function chainRuns(runs) {
  */
 function withStructuresAndWalks(built, config, skeletonWalks = []) {
   const walks = [...skeletonWalks, ...built.roofZones.filter((zone) => !zone.skeleton).flatMap(zoneWalk)];
-  const result = withTrim(withOpenings(withPorchSteps(withRoofStructures(built, config), config), config), config);
+  const result = withChimneys(withTrim(withOpenings(withPorchSteps(withRoofStructures(built, config), config), config), config), config);
   // railings stop at anything standing on the walk
   const standing = result.structureSolids ?? [];
   delete result.structureSolids;

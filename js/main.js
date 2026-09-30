@@ -22,6 +22,7 @@ import {
 import { normalizeRailing } from './railings.js';
 import { normalizeInterior } from './interior.js';
 import { normalizeDetails } from './opening-details.js';
+import { normalizeChimneys } from './chimneys.js';
 import { exportGlb } from './export.js';
 import { buildGameFile } from './game-export.js';
 import { importDixonFootprint } from './import.js';
@@ -76,6 +77,7 @@ const wallPanelMaterialsBox = document.getElementById('wall-panel-materials');
 const wallOpeningsBox = document.getElementById('wall-openings-box');
 const openingEditor = document.getElementById('opening-editor');
 const wallTrimBox = document.getElementById('wall-trim-box');
+const wallChimneysBox = document.getElementById('wall-chimneys-box');
 const volumeControlsBox = document.getElementById('volume-controls');
 const scopeCrumbs = document.getElementById('scope-crumbs');
 const facadeDefaultsPanel = document.getElementById('facade-defaults-panel');
@@ -453,6 +455,8 @@ let modelConfig = {
   volumeMaterials: {},
   // a walk-in interior: the house's masses hollow, their doors cut through (see js/interior.js)
   interior: normalizeInterior(),
+  // chimneys on the house's walls (see js/chimneys.js)
+  chimneys: [],
   // a widow's walk's railings (see js/railings.js)
   walkRailings: normalizeRailing(),
   // where an imported footprint came from, to put the building back (see import.js)
@@ -1071,6 +1075,7 @@ function renderWallInfoPanel(layout) {
     wallOpeningsBox.innerHTML = '';
     openingEditor.innerHTML = '';
     wallTrimBox.innerHTML = '';
+    wallChimneysBox.innerHTML = '';
     // no wall (or a structure/rail run) is selected, so no window/door on a
     // wall can be either — every place that clears selectedWallId funnels
     // through this one render, rather than each needing its own reset
@@ -1085,6 +1090,7 @@ function renderWallInfoPanel(layout) {
     const wallName = `${run.wall[0].toUpperCase()}${run.wall.slice(1)} wall`;
     wallInfoSummary.innerHTML = `<strong>${escapeHtml(wallName)}</strong> of the ${escapeHtml(owner.toLowerCase())}<br>Length: ${formatLength(run.length)}`;
     wallPanelMaterialsBox.innerHTML = '';
+    wallChimneysBox.innerHTML = '';
     renderWallTrimBox(run);
     renderOpeningsBox(run);
     return;
@@ -1105,8 +1111,62 @@ function renderWallInfoPanel(layout) {
     </div>
   `).join('');
   renderWallTrimBox(run);
+  renderChimneysBox(run);
   renderOpeningsBox(run);
 }
+
+/** This wall's chimneys: each one's settings, and adding one outside it or through the roof. */
+function renderChimneysBox(run) {
+  const onWall = modelConfig.chimneys.filter((chimney) => chimney.hostWallRunId === run.id);
+  const rows = onWall.map((chimney) => {
+    const travel = Math.max(0, run.length / 2 - chimney.width / 2);
+    const fields = [
+      selectField('Stands', 'position', [['outside', 'Outside, against the wall'], ['inside', 'Inside, through the roof']], chimney.position),
+      sliderField('Along the wall (from its middle)', 'offset', chimney.offset, -travel, travel),
+      numberField('Width', 'width', chimney.width, { step: 0.1 }),
+      numberField('Depth', 'depth', chimney.depth, { step: 0.1 }),
+      ...(chimney.position === 'inside' ? [numberField('In from the wall', 'inset', chimney.inset, { step: 0.1 })] : []),
+      numberField('Above the roof', 'aboveRoof', chimney.aboveRoof, { step: 0.1 }),
+      selectField('Material', 'material', MATERIAL_OPTIONS.filter(([key]) => key), chimney.material),
+      `<div class="actions" style="margin:4px 0 8px;"><button data-delete-chimney="${chimney.id}">Remove this chimney</button></div>`,
+    ];
+    return `<div data-chimney-id="${chimney.id}">${fieldGroup(`Chimney (${chimney.id})`, fields)}</div>`;
+  });
+  wallChimneysBox.innerHTML = fieldGroup('Chimneys', [
+    ...rows,
+    '<div class="actions" style="margin:4px 0 8px;"><button data-add-chimney="outside">Add a chimney outside</button><button data-add-chimney="inside">Add one through the roof</button></div>',
+  ]);
+}
+
+function rebuildWithChimneys(chimneys) {
+  modelConfig.chimneys = normalizeChimneys(chimneys);
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+}
+
+wallChimneysBox.addEventListener('click', (event) => {
+  const add = event.target.closest('[data-add-chimney]');
+  if (add && selectedWallId) {
+    rebuildWithChimneys([...modelConfig.chimneys, { hostWallRunId: selectedWallId, position: add.dataset.addChimney }]);
+    return;
+  }
+  const remove = event.target.closest('[data-delete-chimney]');
+  if (remove) {
+    rebuildWithChimneys(modelConfig.chimneys.filter((chimney) => chimney.id !== remove.dataset.deleteChimney));
+  }
+});
+
+wallChimneysBox.addEventListener('change', (event) => {
+  const input = event.target.closest('[data-field]');
+  const id = event.target.closest('[data-chimney-id]')?.dataset.chimneyId;
+  if (!input || !id) {
+    return;
+  }
+  const lengths = ['offset', 'width', 'depth', 'inset', 'aboveRoof'];
+  const value = lengths.includes(input.dataset.field) ? (Number(input.value) || 0) / unitFactor() : input.value;
+  rebuildWithChimneys(modelConfig.chimneys.map((chimney) => (chimney.id === id ? { ...chimney, [input.dataset.field]: value } : chimney)));
+});
 
 /** This wall's own trim: each course as the building has it, or turned on or off here. */
 function renderWallTrimBox(run) {
@@ -1840,6 +1900,7 @@ async function loadFootprint(footprintData, preserveView = true) {
     wallTrim: modelConfig.wallTrim,
     volumeMaterials: modelConfig.volumeMaterials,
     interior: modelConfig.interior,
+    chimneys: modelConfig.chimneys,
     walkRailings: modelConfig.walkRailings,
     roofBreakHeight: modelConfig.roofBreakHeight,
     roofLowerPitchRise: modelConfig.roofLowerPitchRise,
@@ -1934,8 +1995,9 @@ async function loadSampleFootprint() {
   modelConfig.volumeEaves = {};
   modelConfig.volumeMaterials = {};
   modelConfig.roofStructures = [];
-  // windows, doors, and per-wall trim address walls by position, which a new footprint renumbers
+  // windows, doors, chimneys, and per-wall trim address walls by position, which a new footprint renumbers
   modelConfig.openings = [];
+  modelConfig.chimneys = [];
   modelConfig.wallTrim = {};
   modelConfig.placement = undefined;
   modelConfig.frontSide = 'maxZ';
@@ -2290,8 +2352,9 @@ function resetForNewFootprint() {
   modelConfig.volumeMaterials = {};
   modelConfig.edgePitchOverrides = {};
   modelConfig.roofStructures = [];
-  // windows, doors, and per-wall trim address walls by position, which a new footprint renumbers
+  // windows, doors, chimneys, and per-wall trim address walls by position, which a new footprint renumbers
   modelConfig.openings = [];
+  modelConfig.chimneys = [];
   modelConfig.wallTrim = {};
   modelConfig.placement = undefined;
   modelConfig.frontSide = 'maxZ';
