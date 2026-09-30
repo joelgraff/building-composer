@@ -106,6 +106,7 @@ building-composer/
 │   ├── extrusion.js       # 3D procedural geometry builders for walls, roofs, foundation; roof merge resolver
 │   ├── facade.js          # Facade layout (with roof structure surfaces), volume decomposition, roof graph, .bld persistence
 │   ├── footprint.js       # 2D polygon validation, normalization, and metrics
+│   ├── footprint-editor.js # Footprint editor core: edits, snapping, validation, undo, placement
 │   ├── main.js            # UI controller, scene management, dual viewport rendering
 │   ├── materials.js       # Shared PBR material definitions and palette presets
 │   ├── roof-planes.js     # Roof eave planes and their heights (shared by roofs and structures)

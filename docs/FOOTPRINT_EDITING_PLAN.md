@@ -4,6 +4,8 @@ The footprints the Dixon game exports come from OSM, Microsoft's ML footprints, 
 
 Status: planned (2026-09-30). Decisions in [Decisions](#decisions) were made with the project owner.
 
+Progress: phase 2 (editor core) is done: `js/footprint-editor.js`, tested in `tests/footprint_editor.test.js`. `squareFootprint` in `js/import.js` now takes its tolerances and a fixed rotation as options, for the editor's re-square; imports use the same defaults as before.
+
 ## The problem
 
 Where footprints come from today (`dixon_dem`):
