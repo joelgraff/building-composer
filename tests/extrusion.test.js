@@ -131,3 +131,56 @@ describe('Extrusion & 3D Building Massing', () => {
     });
   });
 });
+
+describe('a volume\'s own wall material', () => {
+  const ell = [[-6, -4], [6, -4], [6, 0], [0, 0], [0, 4], [-6, 4]];
+  const build = (config = {}) => {
+    const layout = computeFacadeLayout(ell, { volumeSplit: 'auto' });
+    return {
+      layout,
+      built: createBuildingFromFootprint(ell, {
+        storyCount: 1, storyHeight: 3, foundationDepth: 0.7, roofType: 'gable', roofDirection: 'x', roofHeight: 2,
+        volumes: layout.volumes, facadeLayout: layout, wallMaterial: 'wood', ...config,
+      }),
+    };
+  };
+  const wallPalettes = (built) => {
+    const out = {};
+    built.building.traverse((mesh) => {
+      if (mesh.userData?.bodyPart === 'walls') out[mesh.userData.volumeId ?? 'all'] = mesh.material.userData.palette;
+    });
+    return out;
+  };
+
+  it('clads that volume\'s walls, the rest keeping the building\'s', () => {
+    const { layout } = build();
+    const [main, wing] = layout.volumes;
+    const { built } = build({ volumeMaterials: { [wing.id]: 'brick' } });
+    assert.deepEqual(wallPalettes(built), { [main.id]: 'wood', [wing.id]: 'brick' });
+  });
+
+  it('leaves one solid wall when no volume has its own', () => {
+    assert.deepEqual(wallPalettes(build().built), { all: 'wood' });
+    assert.deepEqual(wallPalettes(build({ volumeMaterials: { 'volume-99': 'brick' } }).built), { all: 'wood' });
+  });
+
+  it('holds with volumes on their own story counts too', () => {
+    const { layout } = build();
+    const [main, wing] = layout.volumes;
+    const { built } = build({ volumeMaterials: { [wing.id]: 'stone' }, volumeStoryOverrides: { [main.id]: 2 } });
+    assert.deepEqual(wallPalettes(built), { [main.id]: 'wood', [wing.id]: 'stone' });
+  });
+
+  it('frames a window left to default in its own volume\'s material', () => {
+    const { layout } = build();
+    const [, wing] = layout.volumes;
+    const wall = layout.wallRuns.find((run) => run.volumeId === wing.id);
+    const { built } = build({
+      volumeMaterials: { [wing.id]: 'brick' },
+      openings: [{ id: 'w', kind: 'window', hostWallRunId: wall.id, offset: 0, width: 0.8, height: 1, sillHeight: 0.9, materials: {} }],
+    });
+    let frame;
+    built.building.traverse((mesh) => { if (mesh.userData?.bodyPart === 'opening-frame') frame = mesh; });
+    assert.equal(frame.material.userData.palette, 'brick');
+  });
+});

@@ -62,6 +62,8 @@ const plainObject = (value) => (value && typeof value === 'object' && !Array.isA
  *   range (DOOR_SILL_MAX) rather than left editable like a window ledge.
  * - `steps` (a door's only): the flight of steps from its threshold down to
  *   grade (see normalizeSteps; on by default; built only on footprint walls).
+ * - `hinge` (a door's only): the jamb it's hung on, `'left'` or `'right'` as
+ *   seen from outside; a door cut into a walk-in room stands open about it.
  *
  * @returns {object|null}
  */
@@ -84,7 +86,7 @@ export function normalizeOpening(raw) {
     height: Math.max(MIN_OPENING_SIZE, finite(raw.height, preset.height)),
     sillHeight: kind === 'door' ? Math.min(DOOR_SILL_MAX, sillHeight) : sillHeight,
     materials: plainObject(raw.materials),
-    ...(kind === 'door' ? { steps: normalizeSteps(raw.steps) } : {}),
+    ...(kind === 'door' ? { steps: normalizeSteps(raw.steps), hinge: raw.hinge === 'right' ? 'right' : 'left' } : {}),
   };
 }
 

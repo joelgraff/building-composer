@@ -136,3 +136,15 @@ describe('porches recessed into the house', () => {
     assert.deepEqual(onL(3), [], 'on the outside stretch');
   });
 });
+
+describe('a recessed porch in a walk-in house', () => {
+  it('stays closed round the room, with a floor of its own where the room\'s was cut away', () => {
+    [recess(), recess(corner)].forEach((fields, i) => {
+      const { result } = build([fields], { interior: { enabled: true, wallThickness: 0.2 } });
+      assert.deepEqual(result.roofStructures[0].errors, []);
+      const floor = trianglesOf(result, (data) => data.structurePart === 'floor');
+      assert.ok(floor.length > 0, `${i}: a floor`);
+      assertWatertight(result, `recess ${i} with an interior`);
+    });
+  });
+});

@@ -4,6 +4,7 @@ import { cutRole } from './cut-roofs.js';
 import { normalizeOpenings } from './openings.js';
 import { normalizeTrim, normalizeWallTrim } from './trim.js';
 import { normalizeRailing } from './railings.js';
+import { normalizeInterior } from './interior.js';
 
 /**
  * Facade subdivision helpers for Task 3.
@@ -675,6 +676,8 @@ export function serializeBuildingState(layout, modelConfig) {
     openings: modelConfig.openings ?? [],
     trim: normalizeTrim(modelConfig.trim),
     wallTrim: normalizeWallTrim(modelConfig.wallTrim),
+    volumeMaterials: modelConfig.volumeMaterials ?? {},
+    interior: normalizeInterior(modelConfig.interior),
     walkRailings: normalizeRailing(modelConfig.walkRailings),
     // where the footprint came from, to put the building back (see import.js)
     placement: modelConfig.placement ?? null,
@@ -754,6 +757,9 @@ export function deserializeBuildingState(data) {
     }
     return hostOk;
   });
+  // a volume's own wall material, kept for the volumes the footprint still cuts
+  const volumeMaterials = Object.fromEntries(Object.entries(data.volumeMaterials && typeof data.volumeMaterials === 'object' ? data.volumeMaterials : {})
+    .filter(([volumeId, key]) => volumeIds.has(volumeId) && typeof key === 'string'));
   // per-wall trim, kept for the walls that still exist (a structure's while it does)
   const wallTrim = Object.fromEntries(Object.entries(normalizeWallTrim(data.wallTrim))
     .filter(([wallId]) => wallRunIds.has(wallId) || onKeptStructure(wallId)));
@@ -805,6 +811,9 @@ export function deserializeBuildingState(data) {
       // trim courses; an older file has none, so every course is off
       trim: normalizeTrim(data.trim),
       wallTrim,
+      volumeMaterials,
+      // a walk-in interior; an older file's building is solid
+      interior: normalizeInterior(data.interior),
       // a widow's walk's railings; an older file's walk has the plain default
       walkRailings: normalizeRailing(data.walkRailings),
       placement: data.placement && typeof data.placement === 'object' ? data.placement : undefined,

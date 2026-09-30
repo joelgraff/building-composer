@@ -4,6 +4,7 @@ import { computeFacadeLayout } from '../js/facade.js';
 import { createBuildingFromFootprint } from '../js/extrusion.js';
 import { normalizeRoofStructures } from '../js/roof-structures.js';
 import { buildGameFile, gameMaterial } from '../js/game-export.js';
+import { segmentHits } from './helpers/mesh.js';
 
 const RECT = [[-5, -4], [5, -4], [5, 4], [-5, 4]];
 const ELL = [[-6, -4], [6, -4], [6, 0], [0, 0], [0, 4], [-6, 4]];
@@ -95,5 +96,56 @@ describe('the file for the game', () => {
     assert.equal(gameMaterial({ role: 'door', palette: 'wood' }, [1, 0, 0]), 'door_wood');
     assert.equal(gameMaterial({ role: 'door', palette: 'brick' }, [1, 0, 0]), 'brick_red');
     assert.equal(gameMaterial({ role: 'door' }, [1, 0, 0]), 'door_wood', 'no palette falls back to wood');
+  });
+});
+
+describe('a walk-in building for the game', () => {
+  const door = { id: 'd', kind: 'door', hostWallRunId: 'wall-run-0', offset: 1, width: 0.9, height: 2.05, sillHeight: 0, materials: {}, steps: { enabled: false } };
+  // (the door needs the walls' layout to hang on)
+  const walkIn = (interior = { enabled: true }) => build(RECT, {
+    storyCount: 1, interior, openings: [door], facadeLayout: computeFacadeLayout(RECT, { volumeSplit: 'auto' }),
+  });
+  const placement = { rotation: 0, center: [0, 0], id: 'w' };
+
+  it('a solid building\'s file is unchanged: version 1, collide with the hull', () => {
+    const file = buildGameFile(walkIn({ enabled: false }), placement);
+    assert.equal(file.version, 1);
+    assert.equal('collision' in file, false);
+    assert.equal('interior' in file, false);
+  });
+
+  it('carries its surfaces to collide with: the floor and walls in, the open door leaf out', () => {
+    const file = buildGameFile(walkIn(), placement);
+    assert.equal(file.version, 2);
+    assert.equal(file.interior, true);
+    const faces = file.collision.faces;
+    assert.equal(faces.length % 9, 0);
+    const triangles = [];
+    for (let i = 0; i < faces.length; i += 9) {
+      triangles.push([faces.slice(i, i + 3), faces.slice(i + 3, i + 6), faces.slice(i + 6, i + 9)]);
+    }
+    // the room's floor, at the foundation top (0.6), inside the walls
+    assert.ok(triangles.some((tri) => tri.every(([x, y, z]) => Math.abs(y - 0.6) < 1e-3 && Math.abs(x) < 4.9 && Math.abs(z) < 3.9)));
+    // no leaf: nothing stands in the room beside the hinge jamb (x from 1.36 to 1.405, z from -3.8 in)
+    assert.ok(!triangles.some((tri) => tri.every(([x, y, z]) => x > 1.35 && x < 1.41 && z > -3.79 && y > 0.7 && y < 2.6)));
+    // and straight in through the doorway's middle, from outside into the room, nothing to collide with
+    const through = segmentHits(triangles, [1, 1.6, -6], [1, 1.6, 0]);
+    assert.deepEqual(through, []);
+  });
+
+  it('faces the room\'s walls into the room', () => {
+    const file = buildGameFile(walkIn(), placement);
+    const inner = file.near.plaster_white;
+    assert.ok(inner && inner.verts.length);
+    // the room is round the origin: its walls' inner faces (0.2 in from the footprint) face toward it
+    // (the door's jambs, lined in the same plaster, face into the doorway instead)
+    const onInnerFace = ([x, , z, nx, , nz]) => (Math.abs(Math.abs(x) - 4.8) < 1e-3 && Math.abs(nx) > 0.5)
+      || (Math.abs(Math.abs(z) - 3.8) < 1e-3 && Math.abs(nz) > 0.5);
+    const checked = inner.verts.filter(onInnerFace);
+    assert.ok(checked.length > 0);
+    checked.forEach((v) => {
+      const [x, , z, nx, , nz] = v;
+      assert.ok(nx * x + nz * z < 0, `${v}`);
+    });
   });
 });

@@ -56,10 +56,24 @@ export function createMaterials(config = {}) {
   foundation.userData = { role: 'foundation' };
   const roof = MATERIALS.roof.clone();
   roof.userData = { role: 'roof' };
+  // a walk-in interior's surfaces (see js/interior.js)
+  const interiorSurface = (color, role) => {
+    const material = new THREE.MeshStandardMaterial({
+      color, roughness: 0.9, metalness: 0, side: THREE.DoubleSide,
+    });
+    material.userData = { role };
+    return material;
+  };
+  const interiorWall = interiorSurface(0xebe6dc, 'interior-wall');
+  const interiorFloor = interiorSurface(0x9c7a55, 'interior-floor');
+  const interiorCeiling = interiorSurface(0xf4f1ea, 'interior-ceiling');
   return {
     wall,
     foundation,
     roof,
+    interiorWall,
+    interiorFloor,
+    interiorCeiling,
     outline: MATERIALS.outline.clone(),
     ground: MATERIALS.ground.clone(),
   };

@@ -235,6 +235,9 @@ Status: First pass done (`js/trim.js`). Building-wide water table, belt courses 
 Requirements:
 - Add trim features as surface modifiers on the facade envelope.
 
+### Walk-in interiors (navigable shells)
+Status: First pass done (`js/interior.js`), opt-in per building ("Walk-in interior" in Facade defaults, off by default). Each mass is a hollow shell: walls of a set thickness built inward from the footprint line (so everything on the outside stays where it was), a floor on the foundation, and a ceiling at the ground story's height (upper stories stay solid until there are stairs). Neighboring masses are joined by passages cut through their shared walls; doors in the house's walls are cut through into the room and drawn standing open (hinge side per door); windows stay closed. The game file for a walk-in building (version 2) adds `collision.faces`, the triangles to collide with (door leaves, frames, and skins left out); the Dixon game's loader still needs to read it (see js/game-export.js). Not yet: interior partitions, stairs and upper floors, roof structures' interiors (a bay or tower stays closed off from the house), and confirmed game material names for the interior surfaces.
+
 ### Phase 8 — Footprint modifiers
 
 #### Task 8: Steps, window wells, stoops
@@ -322,8 +325,9 @@ Remaining Task 9 work:
   That section supersedes the earlier note that a general skeleton solve was
   the whole follow-up. An unweighted skeleton already covers equal-height,
   equal-pitch hips.
-- Per-volume material assignment (currently shares the building-wide wall
-  material).
+- ~~Per-volume material assignment~~ done: a volume can have its own wall
+  material (`volumeMaterials`), its walls then built on their own; a window's
+  or door's frame left to default follows its volume's.
 
 ### Phase 10 — Envelope modifiers
 

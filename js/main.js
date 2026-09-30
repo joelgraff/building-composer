@@ -20,6 +20,7 @@ import {
   normalizeTrim, normalizeWallTrim, TRIM_HEIGHT_RANGE, TRIM_PROJECTION_RANGE,
 } from './trim.js';
 import { normalizeRailing } from './railings.js';
+import { normalizeInterior } from './interior.js';
 import { exportGlb } from './export.js';
 import { buildGameFile } from './game-export.js';
 import { importDixonFootprint } from './import.js';
@@ -39,6 +40,9 @@ const storyCountInput = document.getElementById('story-count');
 const storyHeightInput = document.getElementById('story-height');
 const kneeWallInput = document.getElementById('knee-wall-height');
 const foundationInput = document.getElementById('foundation-height');
+const interiorEnabledInput = document.getElementById('interior-enabled');
+const interiorThicknessField = document.getElementById('interior-thickness-field');
+const interiorThicknessInput = document.getElementById('interior-thickness');
 const panelsPerRunInput = document.getElementById('panels-per-run');
 const roofTypeSelect = document.getElementById('roof-type');
 const roofDirectionSelect = document.getElementById('roof-direction');
@@ -444,6 +448,10 @@ let modelConfig = {
   trim: normalizeTrim(),
   // trim courses turned on or off wall by wall, by wall run id (see normalizeWallTrim)
   wallTrim: {},
+  // a volume's own wall material (a palette key), in place of the building's
+  volumeMaterials: {},
+  // a walk-in interior: the house's masses hollow, their doors cut through (see js/interior.js)
+  interior: normalizeInterior(),
   // a widow's walk's railings (see js/railings.js)
   walkRailings: normalizeRailing(),
   // where an imported footprint came from, to put the building back (see import.js)
@@ -484,6 +492,10 @@ function syncUnitLabels() {
 function syncLengthInputs() {
   storyHeightInput.value = (modelConfig.storyHeight * unitFactor()).toFixed(1);
   foundationInput.value = ((modelConfig.foundationDepth ?? 0.7) * unitFactor()).toFixed(1);
+  const interior = normalizeInterior(modelConfig.interior);
+  interiorEnabledInput.checked = interior.enabled;
+  interiorThicknessField.style.display = interior.enabled ? '' : 'none';
+  interiorThicknessInput.value = (interior.wallThickness * unitFactor()).toFixed(2);
   kneeWallInput.value = modelConfig.kneeWallHeight > 0 ? (modelConfig.kneeWallHeight * unitFactor()).toFixed(1) : '';
   roofHeightInput.value = (modelConfig.roofHeight * unitFactor()).toFixed(1);
   roofEaveDepthInput.value = (modelConfig.roofEaveDepth * unitFactor()).toFixed(1);
@@ -1010,11 +1022,18 @@ function renderVolumeControls(layout) {
     ${lengthField('volumeStoryHeights', 'Story height', modelConfig.volumeStoryHeights[volume.id], modelConfig.storyHeight, 'story-height')}
     ${lengthField('volumeKneeWalls', 'Half story above: knee wall', modelConfig.volumeKneeWalls[volume.id], modelConfig.kneeWallHeight, 'knee')}
     ${lengthField('volumeFoundationHeights', 'Floor above grade (foundation)', modelConfig.volumeFoundationHeights[volume.id], modelConfig.foundationDepth ?? 0.7, 'foundation')}
+    <div class="field">
+      <label for="${volume.id}-material">Wall material</label>
+      <select data-volume-material="${volume.id}" id="${volume.id}-material">
+        <option value="">The building's</option>
+        ${createMaterialOptions(modelConfig.volumeMaterials?.[volume.id] ?? '')}
+      </select>
+    </div>
   `;
 }
 
 function createMaterialOptions(selected) {
-  return ['wood', 'brick', 'stucco', 'metal', 'stone']
+  return ['wood', 'brick', 'stucco', 'metal', 'stone', 'paint']
     .map((key) => `<option value="${key}"${key === selected ? ' selected' : ''}>${key[0].toUpperCase()}${key.slice(1)}</option>`)
     .join('');
 }
@@ -1260,6 +1279,10 @@ function openingEditorHtml(opening) {
   if (leftOff) {
     entryFields.splice(1, 0, `<div class="structure-note">${escapeHtml(leftOff.message)}</div>`);
   }
+  if (opening.kind === 'door' && onHouseWall && normalizeInterior(modelConfig.interior).enabled) {
+    // (cut through into the room, a door stands open about its hinge)
+    entryFields.unshift(selectField('Hinged on (seen from outside)', 'hinge', [['left', 'The left'], ['right', 'The right']], opening.hinge ?? 'left'));
+  }
   return `<div class="structure-editor-head"><span>Editing ${escapeHtml(opening.id)}</span></div>${errorBanner}`
     + fieldGroup('Placement', placement)
     + fieldGroup('Entry', entryFields)
@@ -1385,6 +1408,7 @@ function applyOpeningFieldEdit(input) {
     }
     case 'frameMaterial': edited.materials.frame = input.value || undefined; break;
     case 'panelMaterial': edited.materials.panel = input.value || undefined; break;
+    case 'hinge': edited.hinge = input.value; break;
     default: return;
   }
   rebuildWithOpenings(modelConfig.openings.map((opening) => (opening.id === record.id ? edited : opening)));
@@ -1731,6 +1755,8 @@ async function loadFootprint(footprintData, preserveView = true) {
     openings: modelConfig.openings,
     trim: modelConfig.trim,
     wallTrim: modelConfig.wallTrim,
+    volumeMaterials: modelConfig.volumeMaterials,
+    interior: modelConfig.interior,
     walkRailings: modelConfig.walkRailings,
     roofBreakHeight: modelConfig.roofBreakHeight,
     roofLowerPitchRise: modelConfig.roofLowerPitchRise,
@@ -1743,6 +1769,9 @@ async function loadFootprint(footprintData, preserveView = true) {
   roofStructureIssues = unbuilt.length
     ? `Roof structures not built: ${unbuilt.map((entry) => `${entry.id} (${entry.errors.map((e) => nameSides(e.message)).join(' ')})`).join('; ')}`
     : '';
+  // (a walk-in interior's volumes too narrow for a room, or passages left out, join them)
+  const interiorNotes = (building.userData.interiorWarnings ?? []).map((warning) => warning.message);
+  roofStructureIssues = [roofStructureIssues, ...interiorNotes].filter(Boolean).join(' ');
   if (roofStructureIssues) {
     setStatus(roofStructureIssues, 'error');
   }
@@ -1820,6 +1849,7 @@ async function loadSampleFootprint() {
   modelConfig.volumeRoofConnections = {};
   modelConfig.volumeRoofShapes = {};
   modelConfig.volumeEaves = {};
+  modelConfig.volumeMaterials = {};
   modelConfig.roofStructures = [];
   // windows, doors, and per-wall trim address walls by position, which a new footprint renumbers
   modelConfig.openings = [];
@@ -2174,6 +2204,7 @@ function resetForNewFootprint() {
   modelConfig.volumeRoofConnections = {};
   modelConfig.volumeRoofShapes = {};
   modelConfig.volumeEaves = {};
+  modelConfig.volumeMaterials = {};
   modelConfig.edgePitchOverrides = {};
   modelConfig.roofStructures = [];
   // windows, doors, and per-wall trim address walls by position, which a new footprint renumbers
@@ -2379,6 +2410,23 @@ storyCountInput.addEventListener('input', () => {
   }
 });
 
+interiorEnabledInput.addEventListener('change', () => {
+  modelConfig.interior = normalizeInterior({ ...modelConfig.interior, enabled: interiorEnabledInput.checked });
+  syncLengthInputs();
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
+
+interiorThicknessInput.addEventListener('change', () => {
+  const meters = Number(interiorThicknessInput.value) / unitFactor();
+  modelConfig.interior = normalizeInterior({ ...modelConfig.interior, wallThickness: Number.isFinite(meters) && interiorThicknessInput.value !== '' ? meters : undefined });
+  syncLengthInputs();
+  if (loadedFootprint) {
+    loadFootprint(loadedFootprint);
+  }
+});
+
 foundationInput.addEventListener('change', () => {
   modelConfig.foundationDepth = Math.max(0, Number(foundationInput.value) || 0) / unitFactor();
   if (loadedFootprint) {
@@ -2422,7 +2470,7 @@ roofTypeSelect.addEventListener('change', () => {
 volumeSplitSelect.addEventListener('change', () => {
   modelConfig.volumeSplit = volumeSplitSelect.value;
   // volumes are renumbered, so settings kept by volume no longer apply
-  const volumeKeys = ['volumeStoryOverrides', 'volumeKneeWalls', 'volumeFoundationHeights', 'volumeStoryHeights', 'volumeRidgeDirections', 'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves'];
+  const volumeKeys = ['volumeStoryOverrides', 'volumeKneeWalls', 'volumeFoundationHeights', 'volumeStoryHeights', 'volumeRidgeDirections', 'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves', 'volumeMaterials'];
   const hadVolumeSettings = volumeKeys.some((key) => Object.keys(modelConfig[key] ?? {}).length);
   volumeKeys.forEach((key) => {
     modelConfig[key] = {};
@@ -2520,6 +2568,20 @@ eaveSoffitSelect.addEventListener('change', () => setEaveValue('eaveSoffit', 'ea
 rakeSoffitSelect.addEventListener('change', () => setEaveValue('rakeSoffit', 'rakeSoffit', rakeSoffitSelect.value));
 
 volumeControlsBox.addEventListener('change', (event) => {
+  const material = event.target.closest('select[data-volume-material]');
+  if (material) {
+    const own = { ...(modelConfig.volumeMaterials ?? {}) };
+    if (material.value) {
+      own[material.dataset.volumeMaterial] = material.value;
+    } else {
+      delete own[material.dataset.volumeMaterial];
+    }
+    modelConfig.volumeMaterials = own;
+    if (loadedFootprint) {
+      loadFootprint(loadedFootprint);
+    }
+    return;
+  }
   const input = event.target.closest('input[data-volume-length]');
   if (!input) {
     return;

@@ -26,6 +26,9 @@ import {
   computeVolumeEavePlanes, defaultHighEdgeForAxis, evalPlaneHeight, evalZoneHeight, makeEavePlane, makeEdgePlane, TWO_SLOPE_ROOF_TYPES, twoSlopeSides,
 } from './roof-planes.js';
 import { buildCutRoof } from './cut-roofs.js';
+import {
+  normalizeInterior, insetOutline, shellTriangles, apertureSolid, apertureReveals, doorLeaf, CEILING_BAND,
+} from './interior.js';
 
 export { computeVolumeEavePlanes, evalZoneHeight };
 
@@ -81,6 +84,10 @@ export function createBuildingFromFootprint(footprint, config = {}) {
     && volumes.some((volume) => Math.abs(plateOf(volume.id) - (buildingFoundation + buildingWallHeight)) > 1e-9);
   const mixedFloors = volumes.length > 1
     && volumes.some((volume) => Math.abs(volumeFoundationHeight(volume.id, levelConfig) - buildingFoundation) > 1e-9);
+  // a volume with its own wall material needs walls of its own
+  const ownMaterials = volumes.length > 1 && volumes.some((volume) => MATERIAL_PALETTE[config.volumeMaterials?.[volume.id]]);
+  // a walk-in interior hollows each volume's walls on their own
+  const hollow = volumes.length > 0 && normalizeInterior(config.interior).enabled;
 
   if (hasVolumeOverrides) {
     return withStructuresAndWalks(createMultiVolumeBuilding(volumes, overrides, {
@@ -90,6 +97,8 @@ export function createBuildingFromFootprint(footprint, config = {}) {
       volumeStoryHeights: config.volumeStoryHeights,
       volumeFoundationHeights: config.volumeFoundationHeights,
       storyCount, storyHeight, foundationDepth, roofEaveDepth, roofType, roofHeight, roofPitchRise, roofPitchRun, roofHeightMode: config.roofHeightMode, volumeRidgeDirections: config.volumeRidgeDirections, volumeRoofTypes: config.volumeRoofTypes, volumeRoofConnections: config.volumeRoofConnections, volumeRoofShapes: config.volumeRoofShapes,
+      volumeMaterials: config.volumeMaterials,
+      interior: config.interior,
       ...pickEaveConfig({ ...config, roofEaveDepth }),
     }), config);
   }
@@ -104,21 +113,14 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   const resolvedRoofPitchRise = primaryRoofZone?.roofPitchRise ?? roofPitchRise;
   const resolvedRoofPitchRun = primaryRoofZone?.roofPitchRun ?? roofPitchRun;
 
-  if (mixedFloors) {
-    // one roof over volumes on different floors: each its own walls, up to the shared plate
+  if (mixedFloors || ownMaterials || hollow) {
+    // one roof over volumes on different floors, clad differently, or hollow: each its own walls, up to the shared plate
     volumes.forEach((volume) => {
-      const bounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
-      const floor = volumeFoundationHeight(volume.id, levelConfig);
-      const volumeWalls = new THREE.Mesh(createBoxWallGeometry(bounds, foundationHeight + totalHeight - floor, volume.outline), materials.wall);
-      volumeWalls.position.y = floor;
-      volumeWalls.userData = { volumeId: volume.id, bodyPart: 'walls' };
-      group.add(volumeWalls);
-      if (floor > 1e-9) {
-        const volumeFoundation = new THREE.Mesh(createBoxWallGeometry(bounds, floor, volume.outline), materials.foundation);
-        volumeFoundation.userData = { volumeId: volume.id };
-        group.add(volumeFoundation);
-      }
+      addVolumeBody(group, volume, {
+        floorY: volumeFoundationHeight(volume.id, levelConfig), topY: foundationHeight + totalHeight, config: levelConfig, materials,
+      });
     });
+    cutPassages(group, volumes, materials);
   } else {
     const shape = buildShape(footprint, 0);
     const wallGeometry = new THREE.ExtrudeGeometry(shape, {
@@ -187,6 +189,7 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   }
 
   group.userData = {
+    ...group.userData,
     storyCount,
     storyHeight,
     foundationDepth,
@@ -205,6 +208,206 @@ export function createBuildingFromFootprint(footprint, config = {}) {
   }, config, skeletonWalks.map((walk) => ({ ...walk, y: roof.position.y + walk.height })));
 }
 
+/**
+ * A volume's walls and foundation, from its floor (`floorY`) up to its wall
+ * top (`topY`): a closed solid, or with a walk-in interior on (see
+ * js/interior.js) a hollow shell over an open-topped foundation, with its
+ * room recorded in `group.userData.interiorRooms` for the doors and the
+ * passages between rooms to be cut through. A volume too narrow for a room
+ * stays solid, noted in `group.userData.interiorWarnings`. A volume on a
+ * slab at grade (a garage) has no foundation wall.
+ */
+function addVolumeBody(group, volume, {
+  floorY, topY, config, materials,
+}) {
+  const bounds = {
+    minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ,
+  };
+  const outline = volume.outline ?? [[bounds.minX, bounds.minZ], [bounds.maxX, bounds.minZ], [bounds.maxX, bounds.maxZ], [bounds.minX, bounds.maxZ]];
+  const wallMaterial = volumeWallMaterial(volume.id, config, materials);
+  const interior = normalizeInterior(config.interior);
+  const inset = interior.enabled ? insetOutline(outline, interior.wallThickness) : null;
+  if (interior.enabled && !inset) {
+    group.userData.interiorWarnings = [...(group.userData.interiorWarnings ?? []), { code: 'interior-too-thin', volumeId: volume.id, message: `${volume.id} is too narrow for a room inside its walls: left solid.` }];
+  }
+  if (inset) {
+    // the room reaches the ground story's ceiling: the first floor line, or just under the wall top of a single story
+    const { count, height, hasKneeWall } = volumeStories(volume.id, config);
+    const ceilingY = Math.min(count > 1 || hasKneeWall ? floorY + height : topY, topY - CEILING_BAND);
+    const shell = shellTriangles({
+      outline, inset, floorY, ceilingY, topY,
+    });
+    const add = (triangles, material, bodyPart) => {
+      const mesh = new THREE.Mesh(trianglesToGeometry(triangles), material);
+      // wound from the mass into the air, which the game export trusts (see buildGameFile)
+      mesh.userData = { volumeId: volume.id, bodyPart, oriented: true };
+      group.add(mesh);
+    };
+    add(shell.outer, wallMaterial, 'walls');
+    add(shell.inner, materials.interiorWall, 'interior-wall');
+    add(shell.floor, materials.interiorFloor, 'interior-floor');
+    add(shell.ceiling, materials.interiorCeiling, 'interior-ceiling');
+    if (floorY > 1e-9) {
+      // open on top: the room's floor and the wall's underside close it
+      const sides = outline.flatMap(([x, z], i) => {
+        const [nx, nz] = outline[(i + 1) % outline.length];
+        return [[[x, 0, z], [nx, 0, nz], [nx, floorY, nz]], [[x, 0, z], [nx, floorY, nz], [x, floorY, z]]];
+      });
+      const bottom = outline.slice(1, -1).map((_, k) => [[outline[0][0], 0, outline[0][1]], [outline[k + 1][0], 0, outline[k + 1][1]], [outline[k + 2][0], 0, outline[k + 2][1]]]);
+      const foundation = new THREE.Mesh(trianglesToGeometry([...sides, ...bottom]), materials.foundation);
+      foundation.userData = { volumeId: volume.id };
+      group.add(foundation);
+    }
+    group.userData.interiorRooms = [...(group.userData.interiorRooms ?? []), {
+      volumeId: volume.id, outline, inset, floorY, ceilingY, topY, wallThickness: interior.wallThickness,
+    }];
+    return;
+  }
+  const walls = new THREE.Mesh(createBoxWallGeometry(bounds, topY - floorY, volume.outline), wallMaterial);
+  walls.position.y = floorY;
+  walls.userData = { volumeId: volume.id, bodyPart: 'walls' };
+  group.add(walls);
+  if (floorY > 1e-9) {
+    const foundation = new THREE.Mesh(createBoxWallGeometry(bounds, floorY, volume.outline), materials.foundation);
+    foundation.userData = { volumeId: volume.id };
+    group.add(foundation);
+  }
+}
+
+/** The tallest and narrowest a passage between two rooms may be and still be cut. */
+const MIN_PASSAGE_HEIGHT = 2;
+const MIN_PASSAGE_WIDTH = 0.6;
+
+/**
+ * Cuts an aperture (see apertureSolid) out of a room's walls, both skins, and
+ * any facade panel over them, and lines the cut with reveals so the wall
+ * stays closed. `frame` is the wall's run (start, end, normal, right) and
+ * `span` the cut's u0/u1 (from the run's midpoint), y0/y1, and d0/d1.
+ */
+function cutThroughWall(group, room, frame, span, materials) {
+  const solid = apertureSolid(frame, span);
+  group.children.filter((mesh) => mesh.isMesh && (
+    (mesh.userData?.volumeId === room.volumeId && ['walls', 'interior-wall'].includes(mesh.userData.bodyPart))
+    || mesh.userData?.bodyPart === 'facade-panel'
+  )).forEach((mesh) => {
+    const { x, y, z } = mesh.position;
+    const triangles = geometryTriangles(mesh.geometry).map((tri) => tri.map(([px, py, pz]) => [px + x, py + y, pz + z]));
+    const kept = clipOutsideConvexSolid(triangles, solid);
+    if (kept.length === triangles.length && kept.every((tri, i) => tri.every((p, k) => p.every((v, j) => v === triangles[i][k][j])))) {
+      return;
+    }
+    mesh.geometry.dispose();
+    mesh.geometry = trianglesToGeometry(kept.map((tri) => tri.map(([px, py, pz]) => [px - x, py - y, pz - z])));
+  });
+  const reveals = new THREE.Mesh(trianglesToGeometry(apertureReveals(frame, span, room.wallThickness)), materials.interiorWall);
+  reveals.userData = { volumeId: room.volumeId, bodyPart: 'interior-wall', oriented: true };
+  group.add(reveals);
+}
+
+/**
+ * Walk-in rooms of neighboring volumes joined: a passage through each
+ * volume's wall on the line they share, as wide as the shared span less a
+ * wall's thickness at either end, from the higher floor to the lower
+ * ceiling. Where one floor stands higher, the lower room's wall below the
+ * passage is its riser. Too low or too narrow a passage is left out, noted
+ * in `group.userData.interiorWarnings`.
+ */
+function cutPassages(group, volumes, materials) {
+  const rooms = new Map((group.userData.interiorRooms ?? []).map((room) => [room.volumeId, room]));
+  if (rooms.size < 2) {
+    return;
+  }
+  findVolumeAdjacencies(volumes).forEach(({
+    volumeAId, sideA, volumeBId, sideB, axis, overlapMin, overlapMax,
+  }) => {
+    const [a, b] = [rooms.get(volumeAId), rooms.get(volumeBId)];
+    if (!a || !b) {
+      return;
+    }
+    const volumeA = volumes.find((volume) => volume.id === volumeAId);
+    const line = volumeA[sideA];
+    const t = Math.max(a.wallThickness, b.wallThickness);
+    const width = overlapMax - overlapMin - 2 * t;
+    const y0 = Math.max(a.floorY, b.floorY);
+    const y1 = Math.min(a.ceilingY, b.ceilingY);
+    if (width < MIN_PASSAGE_WIDTH || y1 - y0 < MIN_PASSAGE_HEIGHT) {
+      group.userData.interiorWarnings = [...(group.userData.interiorWarnings ?? []), {
+        code: 'passage-too-small', volumeIds: [volumeAId, volumeBId], message: `No way through between ${volumeAId} and ${volumeBId}: too ${width < MIN_PASSAGE_WIDTH ? 'narrow' : 'low'} a passage.`,
+      }];
+      return;
+    }
+    const [start, end] = axis === 'z' ? [[line, overlapMin], [line, overlapMax]] : [[overlapMin, line], [overlapMax, line]];
+    const right = axis === 'z' ? [0, 1] : [1, 0];
+    const half = (overlapMax - overlapMin) / 2;
+    const outward = (side) => ({
+      minX: [-1, 0], maxX: [1, 0], minZ: [0, -1], maxZ: [0, 1],
+    })[side];
+    [[a, sideA], [b, sideB]].forEach(([room, side]) => {
+      cutThroughWall(group, room, {
+        start, end, normal: outward(side), right,
+      }, {
+        u0: -half + t, u1: half - t, y0, y1, d0: -room.wallThickness, d1: 0.01,
+      }, materials);
+    });
+  });
+}
+
+/**
+ * Where a door in a house wall is cut through into a walk-in room: the room
+ * it opens into (the one its middle, half a wall in from the face, stands
+ * in: a wall can run along more than one volume) and the cut's span. Null
+ * without walk-in rooms; a warning instead where the door can't be cut: taller
+ * than the room's ceiling, or running into the corner past the room's width.
+ */
+function doorCut(group, resolved, host) {
+  const rooms = group.userData.interiorRooms ?? [];
+  if (!rooms.length) {
+    return null;
+  }
+  const { start, end, normal, right } = resolved.frame;
+  const mid = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2];
+  const along = (resolved.u0 + resolved.u1) / 2;
+  const inside = (outline, [x, z]) => {
+    const turn = Math.sign(outline.reduce((sum, [ax, az], i) => {
+      const [bx, bz] = outline[(i + 1) % outline.length];
+      return sum + ax * bz - bx * az;
+    }, 0));
+    return outline.every(([ax, az], i) => {
+      const [bx, bz] = outline[(i + 1) % outline.length];
+      return turn * ((bx - ax) * (z - az) - (bz - az) * (x - ax)) >= -1e-9;
+    });
+  };
+  const room = rooms.find((candidate) => {
+    const d = candidate.wallThickness / 2;
+    return inside(candidate.outline, [mid[0] + right[0] * along - normal[0] * d, mid[1] + right[1] * along - normal[1] * d]);
+  });
+  if (!room) {
+    return null;
+  }
+  const y0 = host.baseY + resolved.v0;
+  const y1 = host.baseY + resolved.v1;
+  const across = room.inset.map(([x, z]) => (x - mid[0]) * right[0] + (z - mid[1]) * right[1]);
+  const warning = (why) => ({ warning: { code: 'door-not-cut', message: `not cut through into the room: ${why}` } });
+  if (y1 > room.ceilingY - 1e-6) {
+    return warning('taller than the room\'s ceiling');
+  }
+  if (resolved.u0 < Math.min(...across) - 1e-6 || resolved.u1 > Math.max(...across) + 1e-6) {
+    return warning('it runs into the corner, past the room\'s width');
+  }
+  return {
+    room,
+    span: {
+      u0: resolved.u0, u1: resolved.u1, y0, y1, d0: -room.wallThickness, d1: 0.2,
+    },
+  };
+}
+
+/** A volume's wall material: its own (`volumeMaterials`), or the building's. */
+function volumeWallMaterial(volumeId, config, materials) {
+  const key = config.volumeMaterials?.[volumeId];
+  return MATERIAL_PALETTE[key] ? paletteMaterial(key, 'wall') : materials.wall;
+}
+
 /** How far a window/door's whole appliqué (frame + pane) sits proud of the wall face, to avoid z-fighting. */
 const OPENING_OUTWARD_NUDGE = 0.01;
 
@@ -216,7 +419,7 @@ const OPENING_OUTWARD_NUDGE = 0.01;
  * comment for why). Built in the wall's own (u, v, depth) frame, then
  * oriented into world space.
  */
-function buildOpeningMeshes(resolved, materials, glazing, flight = null) {
+function buildOpeningMeshes(resolved, materials, glazing, flight = null, { open = false } = {}) {
   const { outer, inner } = openingOutline(resolved);
   const frameShape = new THREE.Shape(outer.map(([u, v]) => new THREE.Vector2(u, v)));
   frameShape.holes.push(new THREE.Path(inner.map(([u, v]) => new THREE.Vector2(u, v))));
@@ -243,7 +446,8 @@ function buildOpeningMeshes(resolved, materials, glazing, flight = null) {
   paneMesh.userData = { openingId: resolved.id, bodyPart: 'opening-pane' };
 
   const group = new THREE.Group();
-  group.add(frameMesh, paneMesh);
+  // (a door cut through into a walk-in room stands open: its leaf is built in the room)
+  group.add(...(open ? [frameMesh] : [frameMesh, paneMesh]));
   if (flight) {
     group.add(buildDoorSteps(resolved, flight, materials.foundation));
   }
@@ -604,7 +808,20 @@ function withOpenings(result, config) {
       if (flight) {
         stepPlans.push(...doorStepPlans(resolved, flight));
       }
-      result.building.add(buildOpeningMeshes(resolved, materials, glazing, flight));
+      // a frame left to default takes its wall's material: its own volume's, where that differs
+      const wallMaterial = wallRun ? volumeWallMaterial(wallRun.volumeId, config, materials) : materials.wall;
+      // a door in a walk-in room's wall is cut through it, and stands open
+      const cut = opening.kind === 'door' && wallRun ? doorCut(result.building, resolved, host) : null;
+      if (cut?.room) {
+        cutThroughWall(result.building, cut.room, resolved.frame, cut.span, materials);
+        const panel = paletteMaterial(resolved.materials.panel ?? 'wood', 'door');
+        const leaf = new THREE.Mesh(trianglesToGeometry(doorLeaf(resolved.frame, cut.span, cut.room.wallThickness, opening.hinge)), panel);
+        leaf.userData = { openingId: resolved.id, bodyPart: 'door-leaf', collides: false, oriented: true };
+        result.building.add(leaf);
+      } else if (cut?.warning) {
+        warnings.push(cut.warning);
+      }
+      result.building.add(buildOpeningMeshes(resolved, { ...materials, wall: wallMaterial }, glazing, flight, { open: Boolean(cut?.room) }));
       if (flight && steps.railings.enabled) {
         // the door's frame to world: u across the wall from the door's center, d out from it
         const { start, end, normal } = resolved.frame;
@@ -1346,6 +1563,8 @@ function buildRecess(resolved, host, result, materials) {
   const wallFaces = new Map(walls.map((wall) => [wall.wall, polygonsToTriangles([wall.polygon])]));
   const rectangle = (y) => [[bounds.minX, y, bounds.minZ], [bounds.maxX, y, bounds.minZ], [bounds.maxX, y, bounds.maxZ], [bounds.minX, y, bounds.maxZ]];
   const aboveGround = !Number.isFinite(resolved.foundationTopY) || sillY > resolved.foundationTopY + 1e-6;
+  // a walk-in room's floor was cut away with the rest (there's no solid foundation top under it)
+  const hollow = Boolean(result.building.userData.interiorRooms?.length);
   // where the host's eave soffit meets its wall below the ceiling, the host
   // wall carries on down to it across the opening
   const headers = resolved.openSides.flatMap((wallName) => {
@@ -1370,8 +1589,8 @@ function buildRecess(resolved, host, result, materials) {
     ['walls', [...wallFaces.values()].flat(), structureMaterials.wall],
     ['header', headers, materials.wall],
     ['ceiling', polygonsToTriangles([rectangle(plateY)]), structureMaterials.wall],
-    // on the ground the host's foundation top is the floor
-    ['floor', aboveGround ? polygonsToTriangles([rectangle(sillY)]) : [], materials.roof],
+    // on the ground the host's foundation top is the floor (unless the host is hollow)
+    ['floor', aboveGround || hollow ? polygonsToTriangles([rectangle(sillY)]) : [], materials.roof],
     ['posts', openSidePosts(resolved, []), structureMaterials.wall],
   ];
   parts.forEach(([part, triangles, material]) => {
@@ -2034,17 +2253,9 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
     );
     const wallBounds = { minX: volume.minX, maxX: volume.maxX, minZ: volume.minZ, maxZ: volume.maxZ };
 
-    const walls = new THREE.Mesh(createBoxWallGeometry(wallBounds, totalHeight, volume.outline), materials.wall);
-    walls.position.y = volumeFoundation;
-    walls.userData = { volumeId: volume.id, bodyPart: 'walls' };
-    group.add(walls);
-
-    // a volume on a slab at grade (a garage) has no foundation wall
-    if (volumeFoundation > 1e-9) {
-      const foundation = new THREE.Mesh(createBoxWallGeometry(wallBounds, volumeFoundation, volume.outline), materials.foundation);
-      foundation.userData = { volumeId: volume.id };
-      group.add(foundation);
-    }
+    addVolumeBody(group, volume, {
+      floorY: volumeFoundation, topY: volumeFoundation + totalHeight, config: heightConfig, materials,
+    });
 
     const roofDirectionForVolume = volume.ridgeAxis;
     const params = volumeRoofParams(volume.id, halfSpanForBounds(wallBounds, roofDirectionForVolume), config);
@@ -2157,7 +2368,8 @@ function createMultiVolumeBuilding(volumes, overrides, config) {
     roof.geometry = flatShaded(trianglesToGeometry(triangles.map((tri) => tri.map(([px, py, pz]) => [px, py - y, pz]))));
   });
 
-  group.userData = { multiVolume: true, volumeCount: volumes.length };
+  cutPassages(group, roofVolumes, materials);
+  group.userData = { ...group.userData, multiVolume: true, volumeCount: volumes.length };
   return {
     building: group, foundationHeight, totalHeight: maxTotalHeight, roofZones,
   };

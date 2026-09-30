@@ -108,3 +108,24 @@ export function uncoveredEdges(tris, edges = openTriangleEdges(tris), tolerance 
     });
   });
 }
+
+/** The triangles the straight segment p -> q passes through. */
+export function segmentHits(triangles, p, q) {
+  return triangles.filter((tri) => {
+    const [a, b, c] = tri;
+    const e1 = b.map((v, i) => v - a[i]);
+    const e2 = c.map((v, i) => v - a[i]);
+    const dir = q.map((v, i) => v - p[i]);
+    const h = [dir[1] * e2[2] - dir[2] * e2[1], dir[2] * e2[0] - dir[0] * e2[2], dir[0] * e2[1] - dir[1] * e2[0]];
+    const det = e1[0] * h[0] + e1[1] * h[1] + e1[2] * h[2];
+    if (Math.abs(det) < 1e-12) return false;
+    const s0 = p.map((v, i) => v - a[i]);
+    const u = (s0[0] * h[0] + s0[1] * h[1] + s0[2] * h[2]) / det;
+    if (u < 0 || u > 1) return false;
+    const qv = [s0[1] * e1[2] - s0[2] * e1[1], s0[2] * e1[0] - s0[0] * e1[2], s0[0] * e1[1] - s0[1] * e1[0]];
+    const v = (dir[0] * qv[0] + dir[1] * qv[1] + dir[2] * qv[2]) / det;
+    if (v < 0 || u + v > 1) return false;
+    const t = (e2[0] * qv[0] + e2[1] * qv[1] + e2[2] * qv[2]) / det;
+    return t >= 0 && t <= 1;
+  });
+}

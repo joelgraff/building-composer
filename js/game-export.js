@@ -8,6 +8,16 @@
  * moves with the placement saved at import (game = center + R(rotation) *
  * Composer point) and its height stays relative to the ground; the game adds
  * the ground level under its building.
+ *
+ * Collision. A solid building (version 1) is a block: its `hull`, from `y0`
+ * to `y1`. A walk-in building (version 2, `interior: true`; see
+ * js/interior.js) also carries `collision.faces`: every triangle a character
+ * should collide with, as flat [x, y, z, x, y, z, x, y, z, ...] in game space
+ * (heights relative to the ground, as in `near`), meant to be used
+ * double-sided (Godot: ConcavePolygonShape3D.set_faces). It leaves out what
+ * a character passes through: open door leaves, window and door frames and
+ * panes, and the skins over the walls (facade panels, trim). A loader should
+ * collide with `collision` when it's there, and fall back to the hull.
  */
 
 import * as THREE from '../node_modules/three/build/three.module.js';
@@ -24,6 +34,10 @@ export const GAME_DOORS = Object.freeze({
   brick: 'brick_red', wood: 'door_wood', stucco: 'siding_butter', metal: 'roof_metal', stone: 'limestone',
 });
 const GLASS = 'glass_clear';
+// Placeholders too: a walk-in interior's surfaces (see js/interior.js)
+export const GAME_INTERIOR = Object.freeze({
+  'interior-wall': 'plaster_white', 'interior-floor': 'floor_wood', 'interior-ceiling': 'plaster_ceiling',
+});
 const SHINGLES = 'shingles_dark';
 const MEMBRANE = 'roof_membrane';
 const FOUNDATION = 'stone_foundation';
@@ -59,10 +73,21 @@ export function gameMaterial({ role, palette, part }, normal) {
   if (role === 'glass') {
     return GLASS;
   }
+  if (GAME_INTERIOR[role]) {
+    return GAME_INTERIOR[role];
+  }
   if (role === 'door') {
     return GAME_DOORS[palette] ?? GAME_DOORS.wood;
   }
   return GAME_WALLS[palette] ?? GAME_WALLS.wood;
+}
+
+/** What a character walks through rather than into: an open door's leaf, a window or door's frame and pane, and skins over a wall (facade panels, trim). */
+const PASSABLE = new Set(['door-leaf', 'opening-frame', 'opening-pane', 'facade-panel', 'trim']);
+
+/** Whether a mesh goes into the game's collision mesh (see buildGameFile). */
+function collides(mesh) {
+  return mesh.userData?.collides !== false && !PASSABLE.has(mesh.userData?.bodyPart);
 }
 
 /** Whether the mesh or anything above it is only for the editor's eyes. */
@@ -101,7 +126,12 @@ export function modelTriangles(root) {
     for (let i = 0; i < count; i += 3) {
       const tri = [point(i), point(i + 1), point(i + 2)].map((p) => [p.x, p.y, p.z]);
       out.push({
-        tri, role: material.userData.role, palette: material.userData.palette, part: mesh.userData?.structurePart,
+        tri,
+        role: material.userData.role,
+        palette: material.userData.palette,
+        part: mesh.userData?.structurePart,
+        collides: collides(mesh),
+        oriented: mesh.userData?.oriented === true,
       });
     }
   });
@@ -134,7 +164,8 @@ const unit = (v) => {
  * that crosses fewer surfaces before escaping is outward. Three slightly
  * different rays each way keep one that grazes an edge from deciding it. A
  * face buried inside the building crosses as much either way and keeps its
- * winding; nothing sees it.
+ * winding; nothing sees it. A face marked `oriented` (built wound from the
+ * mass into the air, as a walk-in room's are) is taken as it is.
  */
 export function windingsPointOutward(triangles) {
   const flat = new Float64Array(triangles.length * 9);
@@ -179,7 +210,11 @@ export function windingsPointOutward(triangles) {
     }
     return count;
   };
-  return triangles.map(({ tri }, i) => {
+  return triangles.map(({ tri, oriented }, i) => {
+    // (a face built wound outward keeps its winding, and needs no rays)
+    if (oriented) {
+      return true;
+    }
     const n = unit(cross(sub(tri[1], tri[0]), sub(tri[2], tri[0])));
     const centre = [0, 1, 2].map((k) => (tri[0][k] + tri[1][k] + tri[2][k]) / 3);
     const side = unit(cross(n, Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]));
@@ -226,6 +261,8 @@ export function buildGameFile(root, placement, project) {
     const n = cross(sub(tri[1], tri[0]), sub(tri[2], tri[0]));
     return Math.hypot(...n) / 2 > MIN_AREA;
   });
+  // faces built wound from the mass into the air (a walk-in shell's) keep their
+  // winding; the ray test (which a room's inner walls would fool) orients the rest
   const outward = windingsPointOutward(triangles);
   const cos = Math.cos(placement.rotation);
   const sin = Math.sin(placement.rotation);
@@ -270,7 +307,7 @@ export function buildGameFile(root, placement, project) {
   groups.forEach((group, key) => {
     near[key] = { verts: group.verts, indices: group.indices };
   });
-  return {
+  const file = {
     format: 'dixon-composed',
     version: 1,
     id: placement.id,
@@ -282,6 +319,17 @@ export function buildGameFile(root, placement, project) {
     near,
     project,
   };
+  if (root.userData?.interiorRooms?.length) {
+    // a walk-in building: collide with its surfaces, not its hull (see the file header)
+    const faces = [];
+    triangles.forEach((entry) => {
+      if (entry.collides) {
+        entry.tri.map(toGame).forEach((p) => faces.push(round(p[0]), round(p[1]), round(p[2])));
+      }
+    });
+    Object.assign(file, { version: 2, interior: true, collision: { faces } });
+  }
+  return file;
 }
 
 /** The convex hull of plan points (Andrew's monotone chain). */

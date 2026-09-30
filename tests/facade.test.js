@@ -138,6 +138,20 @@ describe('windows and doors round-trip through save/load', () => {
     assert.equal(['waterTable', 'beltCourse', 'cornice'].some((kind) => old.trim[kind].enabled), false);
   });
 
+  it('keeps each volume\'s own wall material, dropping volumes the footprint no longer has', () => {
+    const lLayout = computeFacadeLayout(lFootprint, {});
+    const [, wing] = lLayout.volumes;
+    const saved = serializeBuildingState(lLayout, { volumeMaterials: { [wing.id]: 'brick', 'volume-99': 'stone' } });
+    assert.deepEqual(deserializeBuildingState(saved).state.volumeMaterials, { [wing.id]: 'brick' });
+  });
+
+  it('keeps a walk-in interior; an older file\'s building stays solid', () => {
+    const { state } = deserializeBuildingState(serializeBuildingState(layout, { interior: { enabled: true, wallThickness: 0.3 } }));
+    assert.deepEqual(state.interior, { enabled: true, wallThickness: 0.3 });
+    const old = deserializeBuildingState({ format: 'building-composer', version: 1, footprint: sampleFootprint }).state;
+    assert.equal(old.interior.enabled, false);
+  });
+
   it('an old file with no openings key loads with an empty list, not an error', () => {
     const file = { format: 'building-composer', version: 1, footprint: sampleFootprint };
     const { state, valid } = deserializeBuildingState(file);

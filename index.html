@@ -579,6 +579,13 @@
             <input id="foundation-height" type="number" min="0" max="10" step="0.1" />
           </div>
           <div class="field">
+            <label class="field-inline"><input type="checkbox" id="interior-enabled" />Walk-in interior (ground floor)</label>
+          </div>
+          <div class="field" id="interior-thickness-field" style="display:none;">
+            <label for="interior-thickness">Wall thickness (<span class="unit-label">feet</span>)</label>
+            <input id="interior-thickness" type="number" min="0.3" max="1.4" step="0.05" />
+          </div>
+          <div class="field">
             <label for="knee-wall-height">Half story above: knee wall (<span class="unit-label">feet</span>; empty for none)</label>
             <input id="knee-wall-height" type="number" min="0" max="10" step="0.1" placeholder="none" />
           </div>
@@ -594,6 +601,7 @@
               <option value="stucco">Stucco</option>
               <option value="metal">Metal</option>
               <option value="stone">Stone</option>
+              <option value="paint">Painted white</option>
             </select>
           </div>
         </div>
@@ -802,6 +810,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=59"></script>
+    <script type="module" src="./js/main.js?v=63"></script>
   </body>
 </html>
