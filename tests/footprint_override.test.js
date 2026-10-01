@@ -1,9 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import {
-  outlineHashText, outlineHash, porchLegs, gamePorchKind, buildFootprintOverride, OVERRIDE_FORMAT,
+  porchLegs, gamePorchKind, buildFootprintOverride, OVERRIDE_FORMAT,
 } from '../js/footprint-override.js';
+import { outlineHash } from '../js/import.js';
 import { toComposerFrame, toGameFrame } from '../js/footprint-editor.js';
 import { cutPart, porchStructures } from '../js/footprint-porch.js';
 import { normalizeRoofStructures } from '../js/roof-structures.js';
@@ -19,19 +19,6 @@ const samePoint = (a, b, tolerance = 2e-3) => {
 const RECT = [[-5, -4], [5, -4], [5, 4], [-5, 4]];
 const PLACEMENT = { id: '115768678', source: 'dixon_dem', rotation: 0.3, center: [508.1, -212.7] };
 const VOLUMES = computeFacadeLayout(RECT, {}).volumes;
-
-describe('outline hash', () => {
-  it('writes each corner to the millimeter, x,z joined by ;', () => {
-    assert.equal(outlineHashText([[508.1081, -212.6684], [523.0954, -213.5549], [1e-5, -0.0002], [508.1081, -212.6684]]), '508.108,-212.668;523.095,-213.555;0.000,0.000');
-  });
-
-  it('is the SHA-256 of that text, as the game computes it', async () => {
-    const points = [[508.108, -212.668], [523.095, -213.555], [520.2, -200.1]];
-    const expected = createHash('sha256').update(outlineHashText(points)).digest('hex');
-    assert.equal(await outlineHash(points), expected);
-    assert.match(expected, /^[0-9a-f]{64}$/);
-  });
-});
 
 describe('porchLegs', () => {
   it('gives a projecting porch one leg along its wall, running as the outline does', () => {
@@ -73,7 +60,7 @@ describe('buildFootprintOverride', () => {
 
   it('writes the outline in game coordinates, where the building is', async () => {
     const trace = toGameFrame([[-5.02, -4], [5, -4.01], [5, 4], [-5, 4]], PLACEMENT);
-    const override = await buildFootprintOverride({ footprint: RECT, placement: { ...PLACEMENT, trace }, edited });
+    const override = buildFootprintOverride({ footprint: RECT, placement: { ...PLACEMENT, trace }, edited });
     assert.equal(override.format, OVERRIDE_FORMAT);
     assert.equal(override.version, 1);
     assert.equal(override.id, '115768678');
@@ -81,12 +68,12 @@ describe('buildFootprintOverride', () => {
     assert.equal(override.edited, '2026-09-30T14:00:00Z');
     assert.deepEqual(override.porches, []);
     toComposerFrame(override.footprint, PLACEMENT).forEach((point, i) => samePoint(point, RECT[i]));
-    assert.deepEqual(override.based_on, { source: 'dixon_dem', hash: await outlineHash(trace) });
+    assert.deepEqual(override.based_on, { source: 'dixon_dem', hash: outlineHash(trace) });
   });
 
   it("winds the outline as the game's trace does", async () => {
     const trace = toGameFrame([...RECT].reverse(), PLACEMENT);
-    const override = await buildFootprintOverride({ footprint: RECT, placement: { ...PLACEMENT, trace }, edited });
+    const override = buildFootprintOverride({ footprint: RECT, placement: { ...PLACEMENT, trace }, edited });
     const sign = (points) => Math.sign(computeFootprintMetrics(points).signedArea);
     assert.equal(sign(override.footprint), sign(trace));
   });
@@ -97,7 +84,7 @@ describe('buildFootprintOverride', () => {
       { kind: 'porch', hostVolumeId: 'volume-0', hostSide: 'minZ', offset: 0, width: 4, setback: -2.4, depth: 2.4, baseHeight: 'ground' },
       { kind: 'porch', mount: 'recess', hostVolumeId: 'volume-0', hostSide: 'maxX', offset: 0, width: 3, setback: 0, depth: 2, baseHeight: 'ground', fromFootprint: true },
     ]);
-    const override = await buildFootprintOverride({
+    const override = buildFootprintOverride({
       footprint: RECT, placement: { ...PLACEMENT, trace: toGameFrame(RECT, PLACEMENT) }, structures: records, volumes: VOLUMES, edited,
     });
     assert.equal(override.porches.length, 1);
@@ -113,7 +100,7 @@ describe('buildFootprintOverride', () => {
     const records = normalizeRoofStructures([
       { kind: 'porch', hostVolumeId: 'volume-0', hostSide: 'maxZ', offset: 0, width: 4, setback: -2.4, depth: 2.4, baseHeight: 'ground', fromFootprint: true },
     ]);
-    const override = await buildFootprintOverride({
+    const override = buildFootprintOverride({
       footprint: RECT, placement: { ...PLACEMENT, trace: toGameFrame([...RECT].reverse(), PLACEMENT) }, structures: records, volumes: VOLUMES, edited,
     });
     const [leg] = override.porches[0].legs;
@@ -121,7 +108,12 @@ describe('buildFootprintOverride', () => {
     samePoint(toComposerFrame([leg.b], PLACEMENT)[0], [2, 4]);
   });
 
-  it('needs a building from the game', async () => {
-    await assert.rejects(buildFootprintOverride({ footprint: RECT, placement: undefined }), RangeError);
+  it("prefers the fingerprint recorded at import, the game's own outline", () => {
+    const override = buildFootprintOverride({ footprint: RECT, placement: { ...PLACEMENT, sourceHash: '4-441db1ba', trace: toGameFrame(RECT, PLACEMENT) }, edited });
+    assert.equal(override.based_on.hash, '4-441db1ba');
+  });
+
+  it('needs a building from the game', () => {
+    assert.throws(() => buildFootprintOverride({ footprint: RECT, placement: undefined }), RangeError);
   });
 });

@@ -6,17 +6,14 @@
  * generated building gets them too. Pure functions with no DOM or THREE
  * dependency.
  *
- * The outline hash (`based_on.hash`, and later `placement.sourceHash`) is
- * the SHA-256, in lowercase hex, of the outline's canonical text: its
- * corners in the order given, without a repeated closing corner, each
- * coordinate rounded to the millimeter and written with three decimals
- * (`-0.000` as `0.000`), `x,z` pairs joined by `;`. For example
- * `508.108,-212.668;523.095,-213.555;...`. The game computes the same
- * (Python `hashlib.sha256(text.encode()).hexdigest()`, GDScript
- * `text.sha256_text()`) to notice when the outline an override replaced has
- * since changed.
+ * `based_on.hash` is the fingerprint of the game's outline the override
+ * replaces: outlineHash in js/import.js, the same as `outline_hash()` in
+ * dixon_dem's pipeline/buildings/footprints.py (the same for the same
+ * corners to the millimeter, whatever corner they start at or which way they
+ * run), so the game notices when that outline has since changed.
  */
 import { openRing, toGameFrame } from './footprint-editor.js';
+import { outlineHash } from './import.js';
 import { computeFootprintMetrics } from './footprint.js';
 
 export const OVERRIDE_FORMAT = 'dixon-footprint-override';
@@ -25,18 +22,6 @@ export const OVERRIDE_VERSION = 1;
 /** A porch under this deep and this wide is a stoop to the game. */
 const STOOP_DEPTH = 1.5;
 const STOOP_WIDTH = 2.5;
-
-/** The outline's canonical text, hashed for `based_on.hash` (see above). */
-export function outlineHashText(points) {
-  return openRing(points).map((point) => point.map(millimeters).join(',')).join(';');
-}
-
-/** The outline's hash: SHA-256 of outlineHashText, lowercase hex. */
-export async function outlineHash(points) {
-  const bytes = new TextEncoder().encode(outlineHashText(points));
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
 
 /**
  * A porch's legs in Composer's frame: the back edge of each part of it
@@ -108,7 +93,7 @@ export function gamePorchKind(structure) {
  * @param {Date} [args.edited]
  * @param {string} [args.note]
  */
-export async function buildFootprintOverride({
+export function buildFootprintOverride({
   footprint, placement, structures = [], volumes = [], edited = new Date(), note = '',
 }) {
   if (!placement?.id) {
@@ -141,7 +126,7 @@ export async function buildFootprintOverride({
     version: OVERRIDE_VERSION,
     id: String(placement.id),
     footprint: outline,
-    based_on: { source: placement.source ?? 'dixon_dem', hash: trace ? await outlineHash(trace) : null },
+    based_on: { source: placement.source ?? 'dixon_dem', hash: placement.sourceHash ?? (trace ? outlineHash(trace) : null) },
     source: 'building-composer',
     note,
     edited: edited.toISOString().replace(/\.\d{3}Z$/, 'Z'),
@@ -158,6 +143,3 @@ function roundPoint([x, z]) {
   return [round(x), round(z)];
 }
 
-function millimeters(value) {
-  return round(value).toFixed(3);
-}

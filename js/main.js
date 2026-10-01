@@ -28,7 +28,7 @@ import { buildGameFile, gameFileProblems } from './game-export.js';
 import {
   FINISH_SLOTS, colorOf, familyOf, finishesFor, gameManifest, loadGameManifest,
 } from './game-materials.js';
-import { importDixonFootprint, sameGameOutline } from './import.js';
+import { importDixonFootprint, sameGameOutline, outlineHash } from './import.js';
 import { toGameFrame, toComposerFrame, recenter, openRing } from './footprint-editor.js';
 import { openFootprintView } from './footprint-view.js';
 import { porchStructures } from './footprint-porch.js';
@@ -3429,7 +3429,8 @@ async function loadFootprintContext(view) {
       throw new Error(String(response.status));
     }
     const data = await response.json();
-    const records = Array.isArray(data) ? data : data.footprints ?? [];
+    // composer_server.py answers { buildings: [{ id, source, footprint }] }
+    const records = Array.isArray(data) ? data : data.buildings ?? data.footprints ?? [];
     const neighbors = records
       .filter((record) => String(record.id) !== String(placement.id) && Array.isArray(record.footprint))
       .map((record) => toComposerFrame(record.footprint, placement));
@@ -3503,7 +3504,7 @@ function useEditedFootprint(edited, porches = []) {
     }
   }
   const massMaps = ['volumeStoryOverrides', 'volumeKneeWalls', 'volumeFoundationHeights', 'volumeStoryHeights', 'volumeRidgeDirections',
-    'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves', 'volumeMaterials'];
+    'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves', 'volumeMaterials', 'volumeGameFinishes'];
   if (massesChanged) {
     if (massMaps.some((key) => Object.keys(modelConfig[key] ?? {}).length)) {
       dropped.push("the masses' own settings");
@@ -3562,7 +3563,7 @@ async function saveFootprintToGame() {
     setStatus('Only a building opened from the game (its X key) has a footprint to save back to it.', 'error');
     return;
   }
-  const override = await buildFootprintOverride({
+  const override = buildFootprintOverride({
     footprint: currentFootprint(), placement, structures: modelConfig.roofStructures, volumes: activeLayout.volumes,
   });
   const body = JSON.stringify(override, null, 2);
@@ -3576,6 +3577,8 @@ async function saveFootprintToGame() {
       throw new Error(`the game's server answered ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`);
     }
     setStatus(`Footprint of building ${placement.id} saved to the game${porches}. In the game, rebuild its chunk (Enter) to see it.`);
+    // the game sends this outline from now on: a design made on it opens again by its fingerprint (sameGameOutline)
+    modelConfig.placement = { ...placement, sourceHash: outlineHash(override.footprint) };
   } catch (error) {
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
@@ -3583,6 +3586,7 @@ async function saveFootprintToGame() {
     link.click();
     URL.revokeObjectURL(link.href);
     setStatus(`Not saved to the game (${error.message || 'no game server'}); downloaded ${placement.id}.json${porches}. Put it in dixon_dem/game/data/footprint_overrides/.`, 'error');
+    modelConfig.placement = { ...placement, sourceHash: outlineHash(override.footprint) };
   }
 }
 
