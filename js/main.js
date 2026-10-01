@@ -923,6 +923,9 @@ function syncInspector(layout = activeLayout) {
       fallback.open = true;
     }
   }
+  // the Roof section serves the building and a mass; how the footprint is cut
+  // into masses, and how their ridges are kept, are the building's alone
+  document.querySelector('.sidebar').classList.toggle('inspecting-mass', kind === 'mass');
   structureAddSummary.textContent = kind === 'structure' ? 'Add a structure' : 'Add a roof structure';
   syncOverrideTags(kind);
 }
@@ -4006,8 +4009,15 @@ roofUpperPitchInput.addEventListener('change', () => {
   setRoofShapeValue('upperPitchRise', 'roofUpperPitchRise', Math.max(0, Number(roofUpperPitchInput.value) || 0));
 });
 roofWalkEnabledInput.addEventListener('change', () => {
-  // turned on, the walk starts two thirds of the way up to the ridge
-  setRoofShapeValue('walkHeight', 'roofWalkHeight', roofWalkEnabledInput.checked ? Math.max(MIN_WALK_HEIGHT, hipRidgeHeight() * (2 / 3)) : undefined);
+  if (roofWalkEnabledInput.checked) {
+    // turned on, the walk starts two thirds of the way up to the ridge
+    setRoofShapeValue('walkHeight', 'roofWalkHeight', Math.max(MIN_WALK_HEIGHT, hipRidgeHeight() * (2 / 3)));
+    return;
+  }
+  // turned off on a mass of a building with a walk: its own "none" (0), not the
+  // building's walk coming back (a hip running on across masses keeps one walk)
+  const offOnMass = volumeShapeTarget() && modelConfig.roofWalkHeight > 0;
+  setRoofShapeValue('walkHeight', 'roofWalkHeight', offOnMass ? 0 : undefined);
 });
 roofWalkSlider.addEventListener('input', () => {
   roofWalkHeightInput.value = Number(roofWalkSlider.value).toFixed(2);

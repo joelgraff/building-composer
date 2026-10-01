@@ -120,6 +120,10 @@
         margin-top: 2px;
       }
 
+      .sidebar.inspecting-mass .building-only {
+        display: none !important;
+      }
+
       .sidebar > [data-inspector][hidden] {
         display: none !important;
       }
@@ -983,7 +987,7 @@
               <option value="flat">Flat (level from fascia)</option>
             </select>
           </div>
-          <div class="field" id="volume-split-field" style="display:none;">
+          <div class="field building-only" id="volume-split-field" style="display:none;">
             <label for="volume-split">Volumes</label>
             <select id="volume-split">
               <option value="auto" selected>Follow the massing (automatic)</option>
@@ -991,7 +995,7 @@
               <option value="x">Blocks run along Z</option>
             </select>
           </div>
-          <div class="field" id="roof-height-mode-field" style="display:none;">
+          <div class="field building-only" id="roof-height-mode-field" style="display:none;">
             <label for="roof-height-mode">Ridge Control</label>
             <select id="roof-height-mode">
               <option value="slope" selected>Constant slope</option>
@@ -1141,6 +1145,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=90"></script>
+    <script type="module" src="./js/main.js?v=94"></script>
   </body>
 </html>
