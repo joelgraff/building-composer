@@ -2,7 +2,7 @@
 
 Composer and the Dixon game (`dixon_dem`) already exchange buildings in both directions. This plan finishes that exchange: one material vocabulary owned by the game, the game editor's choices carried into Composer, and the loose ends in the round trip. Footprint correction is its own plan: [FOOTPRINT_EDITING_PLAN.md](FOOTPRINT_EDITING_PLAN.md).
 
-Status: planned (2026-09-30). Decisions in [Decisions](#decisions) were made with the project owner.
+Status: Phases 1–5 done (2026-09-30): dixon_dem `composer-integration` branch, Composer `game-materials` branch. Not yet checked end to end in a baked game (see [Verification](#verification)). Decisions in [Decisions](#decisions) were made with the project owner.
 
 ## Where it stands
 
@@ -38,7 +38,10 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
 
 ## Plan
 
-### Phase 1 — A material manifest (dixon_dem)
+### Phase 1 — A material manifest (dixon_dem) — done
+
+As built: each material has a list of `categories` (not one `category`: `roof_metal` is roof and wall, `trim_dark` is trim, door, and porch floor), and the manifest is `{ format: 'dixon-materials', version, hash, materials: [...] }`, where `hash` covers the names and categories. `porch-floor` was added to the categories. Tests are in `pipeline/buildings/test_palette.py`, which also runs the server's GET.
+
 
 - `pipeline/buildings/palette.py`: give every material a `category` and a `label`, and add `manifest()` returning `[{ name, category, label, color, resource }]`. `color` is the existing `APPROX_COLOR` as sRGB hex. Categories: `wall`, `roof`, `trim`, `foundation`, `glass`, `door`, `interior-wall`, `interior-floor`, `interior-ceiling`, `accent` (awnings, `steel_rusted`).
 - Write `game/data/materials_manifest.json` whenever the build plan is made (`build_building_plan.py`), and commit it, so it can't drift from `MATERIALS`.
@@ -46,7 +49,10 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
 - `composed.py`: choose the far-LOD tint from the largest `wall`-category group, from the manifest, instead of the hardcoded `WALL_MATERIALS`.
 - Tests (`pipeline/buildings/`): manifest names equal `MATERIALS` keys; every entry has a category, label, and color.
 
-### Phase 2 — New game materials (dixon_dem)
+### Phase 2 — New game materials (dixon_dem) — done
+
+As built: `trim_white` and `door_wood` reuse the clapboard texture, tinted. The interior materials use `concrete_sidewalk` (plaster) and clapboard (floorboards). The surface shader gained a `sheltered` flag, set on the three interior materials, that skips snow and wetness. Setting porosity to 0 would not have done it: at 0 the darkening is strongest. `composed.build` also prints unknown names with the building id.
+
 
 - Add `.tres` files for `door_wood`, `plaster_white`, `plaster_ceiling`, `floor_wood`, and `trim_white`, based on the existing building material shader (triplanar). The first four are names Composer already emits. `game/data/composed/` is empty today, so no earlier files depend on the old names.
 - `glass_clear` is not added: exterior glass is `window_lit` (Phase 3).
@@ -54,7 +60,17 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
 - `build_buildings.gd`: `push_warning` when a group key has no material, naming the building, instead of silently using the default.
 - `test_composed.py`: every group name in a composed file is a manifest name.
 
-### Phase 3 — Composer uses the game's finishes (building-composer)
+### Phase 3 — Composer uses the game's finishes (building-composer) — done
+
+As built:
+- The bundled copy is `js/game-materials-data.js`, a module, so tests and the page read it the same way.
+- Finishes are resolved after the model is built, not threaded through each builder. `applyGameFinishes` (end of `withStructuresAndWalks`) finds each mesh's volume and structure from its `userData` and records `userData.gameFinishes`. It recolors surfaces that have a chosen finish to the manifest color.
+- A wall, trim, or roof finish applies only to a surface of the same Composer family (`familyOf`). Door, foundation, and porch-floor finishes apply to all of their kind.
+- Choosing a finish sets the matching family.
+- A shopfront pane is a window at least 1.5 m wide with its sill at most 0.9 m above its wall's base. It is lit with probability 0.45, as the game does.
+- `materials_version` is written now, in version 1 and 2 files, not only in version 3.
+- Follow-up: gable-end triangles belong to the roof mesh, so they export as trim (`trim_white`), as they did before (as `siding_white`). They should take the wall finish.
+
 
 - `js/game-materials.js` (new, pure): load the manifest from `/game-materials` when served by the game's server, falling back to a bundled copy, `data/game-materials.json`. `scripts/sync-game-materials.mjs` refreshes the bundled copy from `../dixon_dem/game/data/materials_manifest.json`. Helpers: `finishesFor(category)`, `colorOf(name)`, `isGameMaterial(name)`, `familyOf(name)` (e.g. `brick_buff` is `brick`, `siding_sage` is `wood`, for Composer's own roughness and look).
 - Model: explicit game finishes, following the existing per-volume pattern (`volumeRoofShapes`, `volumeEaves`):
@@ -74,7 +90,15 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
 - Before Send to game: check every group name against the manifest. If any is unknown, refuse and name the surfaces (e.g. "doors use door_oak, which the game doesn't have"). The download fallback applies the same check.
 - Tests: manifest loading and fallback; finish resolution (building, volume, structure precedence); export uses explicit finishes; an unknown name is refused; `.bld` round trip keeps finishes.
 
-### Phase 4 — Carry the game editor's choices into Composer
+### Phase 4 — Carry the game editor's choices into Composer — done
+
+As built:
+- `_record` is the template index entry, which is resolved with the overrides as of the last bake, plus this session's edits.
+- `composer_hints(record)` (static, self-tested) sends `form`, `storeys`, `roof`, `roof_axis`, `material`, `color` (not `auto`), `dressing`, `porch`, `ground`, and `awnings`. Composer maps `storeys`, `roof`, `material`, `color`, and `roof_axis`, and ignores the rest for now.
+- `roof_axis` sets the building's `roofDirection` from the imported front side. A footprint cut into several volumes keeps each volume's own ridge.
+- `composer_server.py` now sends `Cache-Control: no-cache` on every file. Without it, a browser kept running an older Composer module after an update.
+- Follow-up: a gabled roof exports four small upward strips at the eaves (hidden under the rake overhang) as `roof_membrane`. They should be trim.
+
 
 - dixon_dem `building_edit.gd` `_export_composer()`: add `hints` from the building's resolved record (`_record`): `form`, `storeys`, `roof`, `roof_axis`, `material`, `color`, `dressing`, `porch`, and `awnings`. Confirm `_record` is the resolved template including overrides, not only the override.
 - `js/import.js` `settingsFromHints()`:
@@ -84,7 +108,14 @@ Not a problem: UVs. The game's building materials use triplanar mapping (`shader
 - A building sent back and reopened keeps its finishes through `project`, as today.
 - Tests (`tests/import.test.js`): each hint field; a `color` not in the manifest is ignored with a warning.
 
-### Phase 5 — Round-trip robustness
+### Phase 5 — Round-trip robustness — done
+
+As built:
+- `outlineHash` fingerprints the outline to the millimeter, whatever corner it starts at and whichever way it runs. `sameGameOutline` compares fingerprints, and falls back to the old placement comparison for a design saved without one.
+- The footprint editor's write-back must set the design's `placement.sourceHash` to the fingerprint of the outline it writes, so the design reopens on the edited outline.
+- There is no version 3. `materials_version` is an extra key in version 1 and 2 files, which older loaders ignore. `composed.build` prints a warning when it differs from the palette's hash.
+- Collision faces are chunk-local like the hulls. `build_buildings.gd` uses them when present. Only its parse is checked; the bake itself isn't run in tests.
+
 
 - **Identity by outline, not placement.** At import, store `placement.sourceHash`, a hash of the game outline as exported, rounded to the millimeter. Reopen `payload.project` when its `sourceHash` matches the export's outline hash, and keep the center/rotation comparison only for designs saved before this change. This is needed once outlines can be corrected, because an edited outline re-squares to a slightly different center. Shared with the footprint plan.
 - **Walk-in collision.** `composed.py` passes `collision.faces` through, and `build_buildings.gd` builds a `ConcavePolygonShape3D` (double-sided) from it, falling back to the hull when absent. Test with a version 2 file.

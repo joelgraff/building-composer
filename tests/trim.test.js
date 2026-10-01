@@ -195,7 +195,7 @@ describe('trim on a built building', () => {
   });
 
   it('goes to the game as its palette\'s wall material', () => {
-    assert.equal(gameMaterial({ role: 'trim', palette: 'paint' }, [1, 0, 0]), 'siding_white');
+    assert.equal(gameMaterial({ role: 'trim', palette: 'paint' }, [1, 0, 0]), 'trim_white');
     assert.equal(gameMaterial({ role: 'trim', palette: 'stone' }, [0, 1, 0]), 'limestone');
   });
 });

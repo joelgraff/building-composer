@@ -407,6 +407,16 @@
         color: var(--muted);
       }
 
+      .finish-swatch {
+        display: inline-block;
+        width: 0.8em;
+        height: 0.8em;
+        margin-left: 6px;
+        border: 1px solid var(--muted);
+        border-radius: 2px;
+        vertical-align: middle;
+      }
+
       .field input,
       .field select {
         width: 100%;
@@ -1023,6 +1033,14 @@
           </div>
         </details>
 
+        <details class="section" name="inspector-section" data-inspector="building" id="game-finishes-panel">
+          <summary>Game finishes</summary>
+          <div class="section-body">
+            <div id="game-finishes-source" class="field-note" style="margin-bottom:8px;"></div>
+            <div id="game-finishes-controls"></div>
+          </div>
+        </details>
+
         <div class="panel" id="wall-info-panel" data-inspector="wall">
           <div id="wall-info-summary" class="field-note" style="margin-bottom:12px;"></div>
           <div id="wall-panel-materials"></div>
@@ -1123,6 +1141,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=88"></script>
+    <script type="module" src="./js/main.js?v=90"></script>
   </body>
 </html>

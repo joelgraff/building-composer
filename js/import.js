@@ -14,6 +14,7 @@
  * exactly: game point = center + R(rotation) * Composer point.
  */
 import { angledWallProblem } from './facade.js';
+import { familyOf, finishesFor } from './game-materials.js';
 
 /** A wall within this of the building's main axes (or within MIN_EDGE of square) is squared to them; one further off is kept angled. */
 export const MAX_SKEW_DEGREES = 5;
@@ -283,10 +284,57 @@ export function importDixonFootprint(payload) {
       rotation: squared.rotation,
       center: squared.center,
       groundY: Number.isFinite(payload.ground_y_min) ? payload.ground_y_min : null,
+      // the game's outline as it was sent, to know a design made on it again (sameGameOutline)
+      sourceHash: outlineHash(payload.footprint),
     },
-    settings: { ...settingsFromHints(payload.hints ?? {}, payload), ...frontFrom(payload.front, squared.rotation) },
+    settings: (() => {
+      const front = frontFrom(payload.front, squared.rotation);
+      return { ...settingsFromHints(payload.hints ?? {}, payload, { frontSide: front.frontSide, warnings }), ...front };
+    })(),
     warnings,
   };
+}
+
+/**
+ * A short fingerprint of a game outline, to the millimeter: the same for
+ * the same corners whatever corner the list starts at or which way it runs.
+ */
+export function outlineHash(footprint) {
+  let ring = (footprint ?? []).filter((p) => Array.isArray(p) && p.length >= 2).map(([x, z]) => [Math.round(x * 1000), Math.round(z * 1000)]);
+  if (ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]) {
+    ring = ring.slice(0, -1);
+  }
+  const signed = ring.reduce((sum, [x, z], i) => {
+    const [nx, nz] = ring[(i + 1) % ring.length];
+    return sum + x * nz - nx * z;
+  }, 0);
+  if (signed < 0) {
+    ring.reverse();
+  }
+  const first = ring.reduce((best, p, i) => (p[0] < ring[best][0] || (p[0] === ring[best][0] && p[1] < ring[best][1]) ? i : best), 0);
+  const text = [...ring.slice(first), ...ring.slice(0, first)].map(([x, z]) => `${x},${z}`).join(';');
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0;
+  }
+  return `${ring.length}-${hash.toString(16).padStart(8, '0')}`;
+}
+
+/**
+ * Whether a design saved from the game (its project's placement) was made
+ * on the outline the game sends now: the same outline fingerprint, or, for
+ * a design saved before fingerprints, a squared placement within 5 cm and
+ * 0.005 radians.
+ */
+export function sameGameOutline(saved, imported) {
+  if (!saved || !imported) {
+    return false;
+  }
+  if (saved.sourceHash && imported.sourceHash) {
+    return saved.sourceHash === imported.sourceHash;
+  }
+  const turn = Math.atan2(Math.sin(saved.rotation - imported.rotation), Math.cos(saved.rotation - imported.rotation));
+  return Math.hypot(saved.center[0] - imported.center[0], saved.center[1] - imported.center[1]) < 0.05 && Math.abs(turn) < 0.005;
 }
 
 /**
@@ -312,10 +360,16 @@ function frontFrom(front, rotation) {
 }
 
 /**
- * Composer settings the game's building editor fields suggest: storeys (a
- * half is a knee wall), roof type, and wall material.
+ * Composer settings the game's building editor fields suggest (its
+ * composer_hints: the building's resolved template): storeys (a half is a
+ * knee wall), roof type, the ridge's direction from `roof_axis` (`front`:
+ * the gable faces the street, so the ridge runs away from the front wall;
+ * `side`: the ridge runs along it), and wall material, or, from `color`,
+ * the exact game wall finish. A `color` the game's manifest doesn't list is
+ * left out, with a warning. The game's other fields (form, dressing, porch,
+ * ground, awnings) have no Composer setting yet.
  */
-export function settingsFromHints(hints, payload = {}) {
+export function settingsFromHints(hints, payload = {}, { frontSide, warnings = [] } = {}) {
   const settings = {};
   const storeys = Number(hints.storeys ?? payload.tags?.levels);
   if (storeys > 0) {
@@ -333,6 +387,20 @@ export function settingsFromHints(hints, payload = {}) {
   }[hints.material ?? payload.tags?.building_material];
   if (material) {
     settings.wallMaterial = material;
+  }
+  if (typeof hints.color === 'string' && hints.color !== 'auto') {
+    if (finishesFor('wall').some((m) => m.name === hints.color)) {
+      settings.gameFinishes = { wall: hints.color };
+      settings.wallMaterial = familyOf(hints.color) ?? settings.wallMaterial;
+    } else {
+      warnings.push(`The game's color ${hints.color} isn't one of its wall materials Composer knows; the walls use ${settings.wallMaterial ?? 'the default'}.`);
+    }
+  }
+  if (['front', 'side'].includes(hints.roof_axis) && frontSide) {
+    // a direction is a high edge: one on an x side puts the ridge along z
+    const frontAlongX = frontSide === 'minX' || frontSide === 'maxX';
+    const ridgeAlongX = (hints.roof_axis === 'front') === frontAlongX;
+    settings.roofDirection = ridgeAlongX ? 'z-min' : 'x-min';
   }
   return settings;
 }

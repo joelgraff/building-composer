@@ -6,17 +6,14 @@
  * generated building gets them too. Pure functions with no DOM or THREE
  * dependency.
  *
- * The outline hash (`based_on.hash`, and later `placement.sourceHash`) is
- * the SHA-256, in lowercase hex, of the outline's canonical text: its
- * corners in the order given, without a repeated closing corner, each
- * coordinate rounded to the millimeter and written with three decimals
- * (`-0.000` as `0.000`), `x,z` pairs joined by `;`. For example
- * `508.108,-212.668;523.095,-213.555;...`. The game computes the same
- * (Python `hashlib.sha256(text.encode()).hexdigest()`, GDScript
- * `text.sha256_text()`) to notice when the outline an override replaced has
- * since changed.
+ * `based_on.hash` is the fingerprint of the game's traced outline the
+ * override replaces (`placement.basedOn`, recorded at import): outlineHash in js/import.js, the same as `outline_hash()` in
+ * dixon_dem's pipeline/buildings/footprints.py (the same for the same
+ * corners to the millimeter, whatever corner they start at or which way they
+ * run), so the game notices when that outline has since changed.
  */
 import { openRing, toGameFrame } from './footprint-editor.js';
+import { outlineHash } from './import.js';
 import { computeFootprintMetrics } from './footprint.js';
 
 export const OVERRIDE_FORMAT = 'dixon-footprint-override';
@@ -26,25 +23,14 @@ export const OVERRIDE_VERSION = 1;
 const STOOP_DEPTH = 1.5;
 const STOOP_WIDTH = 2.5;
 
-/** The outline's canonical text, hashed for `based_on.hash` (see above). */
-export function outlineHashText(points) {
-  return openRing(points).map((point) => point.map(millimeters).join(',')).join(';');
-}
-
-/** The outline's hash: SHA-256 of outlineHashText, lowercase hex. */
-export async function outlineHash(points) {
-  const bytes = new TextEncoder().encode(outlineHashText(points));
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 /**
  * A porch's legs in Composer's frame: the back edge of each part of it
  * along the house, `a` to `b`, and its depth out from the wall. A projecting
  * porch has one; a wraparound one per wall, the leg that turns a corner
  * running on past it by the depth (as the porch is built, see expandWraps in
  * js/roof-structures.js). Each leg runs the way a positive-area outline runs
- * along that wall (buildFootprintOverride turns them to the game's winding).
+ * along that wall, so its outward normal (dz, -dx) points away from the
+ * building (the game's edge_dir_normal, for counter-clockwise rings).
  *
  * @param {object} structure - a normalized porch record
  * @param {{ minX: number, maxX: number, minZ: number, maxZ: number }} volume - the mass it stands on
@@ -102,13 +88,13 @@ export function gamePorchKind(structure) {
  *
  * @param {object} args
  * @param {Array<[number, number]>} args.footprint - the outline, in Composer's frame
- * @param {{ id: string, source?: string, rotation: number, center: number[], trace?: Array<[number, number]> }} args.placement
+ * @param {{ id: string, source?: string, rotation: number, center: number[], trace?: Array<[number, number]>, basedOn?: { source: string, hash: string } }} args.placement
  * @param {object[]} [args.structures] - the building's structures; the porches made from the footprint (`fromFootprint`) go in the file, recessed ones aside (the game can't cut into its mass)
  * @param {Array<{ id: string }>} [args.volumes] - the masses, as Composer cut them (for the porches' walls)
  * @param {Date} [args.edited]
  * @param {string} [args.note]
  */
-export async function buildFootprintOverride({
+export function buildFootprintOverride({
   footprint, placement, structures = [], volumes = [], edited = new Date(), note = '',
 }) {
   if (!placement?.id) {
@@ -129,10 +115,11 @@ export async function buildFootprintOverride({
       if (!volume) {
         return [];
       }
+      // as a positive-area (the pipeline's counter-clockwise) outline runs, whatever the file's
+      // winding: the game builds a leg out along edge_dir_normal, outward only for that direction
       const legs = porchLegs(structure, volume).map(({ a, b, depth }) => {
         const [ga, gb] = toGameFrame([a, b], placement).map(roundPoint);
-        // the legs run as a positive-area outline does; the game's other way, turn them
-        return { a: gameWinding ? ga : gb, b: gameWinding ? gb : ga, depth: round(depth) };
+        return { a: ga, b: gb, depth: round(depth) };
       });
       return [{ kind: gamePorchKind(structure), legs }];
     });
@@ -141,7 +128,9 @@ export async function buildFootprintOverride({
     version: OVERRIDE_VERSION,
     id: String(placement.id),
     footprint: outline,
-    based_on: { source: placement.source ?? 'dixon_dem', hash: trace ? await outlineHash(trace) : null },
+    // the game's own outline this replaces (recorded at import; a building corrected
+    // before keeps the outline that correction replaced), never an earlier correction's
+    based_on: placement.basedOn ?? { source: placement.source ?? 'dixon_dem', hash: trace ? outlineHash(trace) : null },
     source: 'building-composer',
     note,
     edited: edited.toISOString().replace(/\.\d{3}Z$/, 'Z'),
@@ -158,6 +147,3 @@ function roundPoint([x, z]) {
   return [round(x), round(z)];
 }
 
-function millimeters(value) {
-  return round(value).toFixed(3);
-}

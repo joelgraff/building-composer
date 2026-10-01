@@ -775,6 +775,9 @@ export function serializeBuildingState(layout, modelConfig) {
     trim: normalizeTrim(modelConfig.trim),
     wallTrim: normalizeWallTrim(modelConfig.wallTrim),
     volumeMaterials: modelConfig.volumeMaterials ?? {},
+    // the Dixon game's materials chosen, for the building and by volume (see js/game-materials.js)
+    gameFinishes: modelConfig.gameFinishes ?? {},
+    volumeGameFinishes: modelConfig.volumeGameFinishes ?? {},
     interior: normalizeInterior(modelConfig.interior),
     chimneys: normalizeChimneys(modelConfig.chimneys),
     walkRailings: normalizeRailing(modelConfig.walkRailings),
@@ -859,6 +862,13 @@ export function deserializeBuildingState(data) {
   // a volume's own wall material, kept for the volumes the footprint still cuts
   const volumeMaterials = Object.fromEntries(Object.entries(data.volumeMaterials && typeof data.volumeMaterials === 'object' ? data.volumeMaterials : {})
     .filter(([volumeId, key]) => volumeIds.has(volumeId) && typeof key === 'string'));
+  // game finishes: names by slot, a volume's kept while the footprint still cuts it
+  const finishMap = (raw) => Object.fromEntries(Object.entries(raw && typeof raw === 'object' ? raw : {})
+    .filter(([, name]) => typeof name === 'string' && name));
+  const gameFinishes = finishMap(data.gameFinishes);
+  const volumeGameFinishes = Object.fromEntries(Object.entries(data.volumeGameFinishes && typeof data.volumeGameFinishes === 'object' ? data.volumeGameFinishes : {})
+    .filter(([volumeId]) => volumeIds.has(volumeId))
+    .map(([volumeId, finishes]) => [volumeId, finishMap(finishes)]));
   // chimneys stand on footprint walls: dropped, with a warning, where the wall's gone
   const chimneys = normalizeChimneys(data.chimneys).filter((chimney) => {
     const hostOk = wallRunIds.has(chimney.hostWallRunId);
@@ -919,6 +929,8 @@ export function deserializeBuildingState(data) {
       trim: normalizeTrim(data.trim),
       wallTrim,
       volumeMaterials,
+      gameFinishes,
+      volumeGameFinishes,
       // a walk-in interior; an older file's building is solid
       interior: normalizeInterior(data.interior),
       chimneys,

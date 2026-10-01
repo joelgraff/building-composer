@@ -4,6 +4,7 @@
 
 import * as THREE from '../node_modules/three/build/three.module.js';
 import { createMaterials, MATERIAL_PALETTE, paletteMaterial, glazingMaterial } from './materials.js';
+import { applyGameFinishes } from './game-materials.js';
 import { roofAxisForDirection, findVolumeAdjacencies, wallRunFrame } from './facade.js';
 import {
   resolveOpening, openingOutline, structureOpeningHost, normalizeSteps, flightFor, doorStepPieces, doorStepRails, STEP_RAIL_INSET, FRAME_DEPTH, PANE_RECESS, FRAME_CASING_WIDTH, STEP_SIDE_MARGIN,
@@ -418,6 +419,9 @@ function volumeWallMaterial(volumeId, config, materials) {
 
 /** How far a window/door's whole appliqué (frame + pane) sits proud of the wall face, to avoid z-fighting. */
 const OPENING_OUTWARD_NUDGE = 0.01;
+/** A window this wide, with its sill this low (off its wall's base), is a shopfront: the game lights it as one. */
+const SHOPFRONT_WIDTH = 1.5;
+const SHOPFRONT_SILL = 0.9;
 
 /**
  * A window or door's meshes: a thin frame ring (a THREE.Shape with the
@@ -457,10 +461,13 @@ function buildOpeningMeshes(resolved, materials, glazing, flight = null, { open 
   };
   const group = new THREE.Group();
   group.add(frameMesh);
-  panes.forEach(({ points, material }) => {
+  const shopfront = resolved.kind === 'window' && resolved.width >= SHOPFRONT_WIDTH && resolved.sillHeight <= SHOPFRONT_SILL;
+  panes.forEach(({ points, material }, pane) => {
     const paneMesh = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(points.map(([u, v]) => new THREE.Vector2(u, v)))), partMaterials[material]);
     paneMesh.position.z = -(FRAME_DEPTH - PANE_RECESS);
-    paneMesh.userData = { openingId: resolved.id, bodyPart: 'opening-pane' };
+    paneMesh.userData = {
+      openingId: resolved.id, bodyPart: 'opening-pane', pane, shopfront,
+    };
     group.add(paneMesh);
   });
   ['frame', 'shutter'].forEach((material) => {
@@ -856,7 +863,10 @@ function withOpenings(result, config) {
       } else if (cut?.warning) {
         warnings.push(cut.warning);
       }
-      result.building.add(buildOpeningMeshes(resolved, { ...materials, wall: wallMaterial }, glazing, flight, { open: Boolean(cut?.room) }));
+      const openingGroup = buildOpeningMeshes(resolved, { ...materials, wall: wallMaterial }, glazing, flight, { open: Boolean(cut?.room) });
+      // (its volume's game finishes reach its frame)
+      openingGroup.userData.volumeId = wallRun?.volumeId;
+      result.building.add(openingGroup);
       if (flight && steps.railings.enabled) {
         // the door's frame to world: u across the wall from the door's center, d out from it
         const { start, end, normal } = resolved.frame;
@@ -1303,6 +1313,8 @@ function withStructuresAndWalks(built, config, skeletonWalks = []) {
   delete result.railGaps;
   delete result.stairRails;
   delete result.stepPlans;
+  // the game finishes chosen for each surface (see js/game-materials.js)
+  applyGameFinishes(result.building, config);
   return { ...result, roofWalks };
 }
 
