@@ -29,7 +29,8 @@ const STOOP_WIDTH = 2.5;
  * porch has one; a wraparound one per wall, the leg that turns a corner
  * running on past it by the depth (as the porch is built, see expandWraps in
  * js/roof-structures.js). Each leg runs the way a positive-area outline runs
- * along that wall (buildFootprintOverride turns them to the game's winding).
+ * along that wall, so its outward normal (dz, -dx) points away from the
+ * building (the game's edge_dir_normal, for counter-clockwise rings).
  *
  * @param {object} structure - a normalized porch record
  * @param {{ minX: number, maxX: number, minZ: number, maxZ: number }} volume - the mass it stands on
@@ -114,10 +115,11 @@ export function buildFootprintOverride({
       if (!volume) {
         return [];
       }
+      // as a positive-area (the pipeline's counter-clockwise) outline runs, whatever the file's
+      // winding: the game builds a leg out along edge_dir_normal, outward only for that direction
       const legs = porchLegs(structure, volume).map(({ a, b, depth }) => {
         const [ga, gb] = toGameFrame([a, b], placement).map(roundPoint);
-        // the legs run as a positive-area outline does; the game's other way, turn them
-        return { a: gameWinding ? ga : gb, b: gameWinding ? gb : ga, depth: round(depth) };
+        return { a: ga, b: gb, depth: round(depth) };
       });
       return [{ kind: gamePorchKind(structure), legs }];
     });
