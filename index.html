@@ -567,6 +567,12 @@
         border-color: transparent;
       }
 
+      .menu-button:disabled {
+        color: var(--muted);
+        opacity: 0.5;
+        cursor: default;
+      }
+
       .menu-button[aria-expanded="true"] {
         background: rgba(50, 107, 245, 0.1);
       }
@@ -814,6 +820,8 @@
             <button role="menuitem" id="export-btn">Export GLB</button>
           </div>
         </div>
+        <button id="undo-btn" class="menu-button" title="Undo (Ctrl+Z)" disabled>↶ Undo</button>
+        <button id="redo-btn" class="menu-button" title="Redo (Ctrl+Shift+Z)" disabled>↷ Redo</button>
       </nav>
       <select id="footprint-select" aria-label="Footprint type" hidden>
         <option value="sample" selected>Rectangle</option>
@@ -1145,6 +1153,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=94"></script>
+    <script type="module" src="./js/main.js?v=95"></script>
   </body>
 </html>

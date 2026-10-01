@@ -89,6 +89,7 @@ npm test
 - **Native Persistence & Interchange**:
   - **Footprint editing** (File › Edit footprint…): drag corners and walls on a 2D plan with snapping, add bump-outs and notches, type lengths, re-square, undo and redo, over the game's trace; the building keeps its place in the game. **Turn into a porch** makes an open porch traced as part of the house into a porch structure (projecting, recessed, or a wraparound turned one leg at a time).
   - **Save footprint to game**: writes the corrected outline, and the porches made from it, to the game (`POST /game-footprint/<id>`) as a footprint override for its own generated building, or downloads it for `dixon_dem/game/data/footprint_overrides/`.
+  - **Undo and redo** (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, and the toolbar) for every change to the building, a slider drag counting as one.
   - **File menu**: New building (from a preset footprint, after asking, since it replaces the current one), Open, Save `.bld`, and Export GLB.
   - **Save Project (`.bld`)**: Serializes complete footprint, volumes, roof graph, story overrides, materials, edge pitches, per-volume roof shapes, eave settings, and roof structures into a native JSON document.
   - **Load Project**: Restores saved `.bld` files or raw footprint JSON arrays.

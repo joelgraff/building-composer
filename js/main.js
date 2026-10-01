@@ -2386,6 +2386,7 @@ async function loadFootprint(footprintData, preserveView = true) {
   topCamera.lookAt(topControls.target.x, 0, topControls.target.z);
 
   updateElevationCamera(activeLayout, previousElevationZoom, previousElevationTarget);
+  recordHistory();
 }
 
 async function loadSampleFootprint() {
@@ -3372,6 +3373,124 @@ function handleRegionMaterialChange(event) {
 storyMaterialsBox.addEventListener('change', handleRegionMaterialChange);
 wallPanelMaterialsBox.addEventListener('change', handleRegionMaterialChange);
 
+// --- Undo and redo ---------------------------------------------------------
+//
+// The model (modelConfig and the footprint) as it stood after each rebuild
+// that changed it; a rebuild that only changed the selection or the view adds
+// no step. Changes in quick succession (a slider dragged, a value typed) are
+// one step. Footprint mode keeps its own undo while it's open.
+
+const UNDO_LIMIT = 100;
+/** Changes closer together than this (ms) are one undo step. */
+const UNDO_MERGE_MS = 800;
+const undoHistory = {
+  past: [], future: [], committed: null, committedKey: '', lastAt: 0, restoring: false,
+};
+const undoBtn = document.getElementById('undo-btn');
+const redoBtn = document.getElementById('redo-btn');
+
+function modelSnapshot() {
+  return { footprint: structuredClone(loadedFootprint), config: structuredClone(modelConfig) };
+}
+
+/** Called after every successful rebuild: a new step when the model changed. */
+function recordHistory() {
+  if (undoHistory.restoring || !loadedFootprint) {
+    return;
+  }
+  const snapshot = modelSnapshot();
+  const key = JSON.stringify(snapshot);
+  if (key === undoHistory.committedKey) {
+    return;
+  }
+  const now = performance.now();
+  // the first change after a pause keeps what stood before it; later ones in the same burst merge into it
+  if (undoHistory.committed && now - undoHistory.lastAt > UNDO_MERGE_MS) {
+    undoHistory.past = [...undoHistory.past, undoHistory.committed].slice(-UNDO_LIMIT);
+  }
+  undoHistory.committed = snapshot;
+  undoHistory.committedKey = key;
+  undoHistory.future = [];
+  undoHistory.lastAt = now;
+  syncUndoButtons();
+}
+
+function syncUndoButtons() {
+  undoBtn.disabled = !undoHistory.past.length;
+  redoBtn.disabled = !undoHistory.future.length;
+}
+
+/** The building's controls from modelConfig (the rest are redrawn by loadFootprint). */
+function syncControlsFromConfig() {
+  storyCountInput.value = modelConfig.storyCount;
+  panelsPerRunInput.value = modelConfig.panelsPerRun;
+  wallMaterialSelect.value = modelConfig.wallMaterial;
+  roofTypeSelect.value = modelConfig.roofType;
+  roofDirectionSelect.value = modelConfig.roofDirection;
+  roofPitchRiseInput.value = modelConfig.roofPitchRise;
+  roofHeightModeSelect.value = modelConfig.roofHeightMode;
+  volumeSplitSelect.value = modelConfig.volumeSplit;
+  frontSelect.value = modelConfig.frontSide;
+  renderGameFinishControls();
+  nameSideControls();
+  syncLengthInputs();
+  updateRoofPitchDisplay();
+}
+
+async function restoreSnapshot(snapshot) {
+  undoHistory.restoring = true;
+  undoHistory.committed = snapshot;
+  undoHistory.committedKey = JSON.stringify(snapshot);
+  Object.keys(modelConfig).forEach((key) => { delete modelConfig[key]; });
+  Object.assign(modelConfig, structuredClone(snapshot.config));
+  syncControlsFromConfig();
+  try {
+    await loadFootprint(structuredClone(snapshot.footprint));
+  } finally {
+    undoHistory.restoring = false;
+    undoHistory.lastAt = 0;
+    syncUndoButtons();
+  }
+}
+
+function undoModel() {
+  if (!undoHistory.past.length || undoHistory.restoring) {
+    return;
+  }
+  undoHistory.future = [undoHistory.committed, ...undoHistory.future];
+  const previous = undoHistory.past[undoHistory.past.length - 1];
+  undoHistory.past = undoHistory.past.slice(0, -1);
+  restoreSnapshot(previous).then(() => setStatus('Undone.'));
+}
+
+function redoModel() {
+  if (!undoHistory.future.length || undoHistory.restoring) {
+    return;
+  }
+  undoHistory.past = [...undoHistory.past, undoHistory.committed];
+  const [next, ...rest] = undoHistory.future;
+  undoHistory.future = rest;
+  restoreSnapshot(next).then(() => setStatus('Redone.'));
+}
+
+undoBtn.addEventListener('click', undoModel);
+redoBtn.addEventListener('click', redoModel);
+document.addEventListener('keydown', (event) => {
+  const mod = event.ctrlKey || event.metaKey;
+  if (!mod || footprintView || event.target.closest?.('input, select, textarea, [contenteditable="true"]')) {
+    return;
+  }
+  const key = event.key.toLowerCase();
+  if (key === 'z' || key === 'y') {
+    event.preventDefault();
+    if (key === 'y' || event.shiftKey) {
+      redoModel();
+    } else {
+      undoModel();
+    }
+  }
+});
+
 // --- Footprint mode (see js/footprint-view.js, docs/FOOTPRINT_EDITING_PLAN.md) ---
 
 const footprintModeHost = document.getElementById('footprint-mode');
@@ -3794,17 +3913,16 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Delete' || event.key === 'Backspace') {
     if (selectedOpeningId) {
       event.preventDefault();
-      if (window.confirm(`Delete ${selectedOpeningId}?`)) {
-        deleteOpening(selectedOpeningId);
-      }
+      const id = selectedOpeningId;
+      deleteOpening(id);
+      setStatus(`Deleted ${id}. Ctrl+Z brings it back.`);
     } else if (selectedStructureId && !selectedWallId) {
       event.preventDefault();
       const structure = structureRecord(selectedStructureId);
       const stacked = modelConfig.roofStructures.some((candidate) => candidate.hostStructureId === selectedStructureId);
       const label = structure ? structureLabel(structure, modelConfig.frontSide, { withHost: false }) : selectedStructureId;
-      if (window.confirm(`Delete the ${label.toLowerCase()}${stacked ? ' and the structures standing on it' : ''}?`)) {
-        deleteStructure(selectedStructureId);
-      }
+      deleteStructure(selectedStructureId);
+      setStatus(`Deleted the ${label.toLowerCase()}${stacked ? ' and the structures standing on it' : ''}. Ctrl+Z brings it back.`);
     }
   }
 });
