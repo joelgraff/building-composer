@@ -5,7 +5,8 @@
  * structure. Pure functions with no DOM or THREE dependency.
  *
  * The part is an axis-aligned rectangle in Composer's frame (drawn across a
- * wall, or a traced bump: findBump). What it becomes depends on how it
+ * wall, or a traced bump: findBump); the outline's other walls may be at any
+ * angle. What it becomes depends on how it
  * touches the rest of the building:
  * - on one side: a porch projecting from that wall, standing on the ground,
  *   and the part is cut out of the footprint, leaving the wall straight;
@@ -21,7 +22,7 @@
  * used (porchStructures), from the final outline and its masses.
  */
 import { computeFacadeLayout } from './facade.js';
-import { computeFootprintMetrics } from './footprint.js';
+import { validateFootprint } from './footprint.js';
 import { structureFrame, structureWallSides } from './roof-structures.js';
 import { openRing, footprintWalls, MIN_WALL } from './footprint-editor.js';
 
@@ -82,51 +83,55 @@ export function findBump(footprint, wallIndex) {
 
 /**
  * Cuts `rect` out of the footprint as a porch, or finds it's a recessed
- * porch. Throws a RangeError saying why when it can't.
+ * porch. Throws a RangeError saying why when it can't. Works on the outline
+ * itself, so angled walls elsewhere are kept as they are.
  *
  * @returns {{ footprint: Array<[number, number]>, porch: { type: 'projecting'|'recess', side: string, rect: object, openSides: string[] } }}
  *   `side` is the side of the house the porch faces out of (its host side).
  */
 export function cutPart(footprint, rect) {
   const ring = openRing(footprint);
-  if (footprintWalls(ring).some((wall) => !wall.axis)) {
-    throw new RangeError('Turn into a porch works on square walls: straighten the angled ones first.');
-  }
   const box = normalizeRect(rect);
   if (box.maxX - box.minX < MIN_WALL || box.maxZ - box.minZ < MIN_WALL) {
     throw new RangeError('Draw a rectangle over the porch, at least a few inches each way.');
   }
-  const grid = cellGrid(ring, box);
-  const { cut, rest } = grid.count();
-  if (!cut) {
+  // the part of the building under the rectangle
+  // (clipping a concave outline can leave zero-width slivers along the box's edge: dropped)
+  const raw = clipToBox(ring, box);
+  const clipped = raw.length >= 3 ? dropAt(raw, new Set(raw)) : raw;
+  const partArea = clipped.length >= 3 ? Math.abs(signedArea(clipped)) : 0;
+  if (partArea < 1e-4) {
     throw new RangeError("The rectangle doesn't cover any of the building.");
   }
-  if (!rest) {
+  if (partArea > Math.abs(signedArea(ring)) - 1e-4) {
     throw new RangeError('That would take the whole building.');
   }
-  if (grid.components(REST) > 1) {
-    throw new RangeError('That would cut the building in two.');
-  }
-  if (!grid.touchesOutside(CUT)) {
-    throw new RangeError("That part is inside the building: draw the rectangle across an outside wall.");
-  }
-  const part = grid.bounds(CUT);
-  if (!grid.isFull(CUT, part)) {
+  const part = rectOf(clipped);
+  if (Math.abs((part.maxX - part.minX) * (part.maxZ - part.minZ) - partArea) > 1e-4) {
     throw new RangeError('Only a rectangular part can become a porch: draw the rectangle over just the porch (turn a wraparound one leg at a time).');
   }
-  const faces = grid.faces(part);
+  const faces = partFaces(ring, part);
   const house = SIDES.filter((side) => faces[side].rest > 0);
+  const open = SIDES.filter((side) => faces[side].outside > 0);
+  if (!open.length) {
+    throw new RangeError("That part is inside the building: draw the rectangle across an outside wall.");
+  }
   if (!house.length) {
     throw new RangeError("That part doesn't touch the rest of the building.");
   }
-  const rectCoords = grid.coords(part);
+  // open on two facing sides with the house on the other two: a strip right across the building
+  const openAt = (side) => faces[side].rest === 0;
+  const houseAt = (side) => faces[side].rest > 0;
+  if ((openAt('minX') && openAt('maxX') && houseAt('minZ') && houseAt('maxZ'))
+    || (openAt('minZ') && openAt('maxZ') && houseAt('minX') && houseAt('maxX'))) {
+    throw new RangeError('That would cut the building in two.');
+  }
   if (house.length === 1) {
     // standing out from one wall: cut it off, and a porch stands where it was
     const back = house[0];
-    const side = OPPOSITE[back];
     return {
-      footprint: orientLike(grid.outline(REST), ring),
-      porch: { type: 'projecting', side, rect: rectCoords, openSides: ['front', 'left', 'right'] },
+      footprint: spliceOff(ring, part, back),
+      porch: { type: 'projecting', side: OPPOSITE[back], rect: part, openSides: ['front', 'left', 'right'] },
     };
   }
   // inside the wall line: a recessed porch, open where it faces outside, the footprint kept
@@ -134,11 +139,142 @@ export function cutPart(footprint, rect) {
   if (!fronts.length) {
     throw new RangeError('That part has the house on facing sides with nothing to open onto: it can\'t be a porch.');
   }
-  const length = (side) => (side === 'minX' || side === 'maxX' ? rectCoords.maxZ - rectCoords.minZ : rectCoords.maxX - rectCoords.minX);
+  const length = (side) => (side === 'minX' || side === 'maxX' ? part.maxZ - part.minZ : part.maxX - part.minX);
   const side = fronts.reduce((best, candidate) => (length(candidate) > length(best) + EPS ? candidate : best));
   const names = structureWallSides(structureFrame(side));
   const openSides = ['front', 'left', 'right'].filter((name) => faces[names[name]].rest === 0);
-  return { footprint: ring, porch: { type: 'recess', side, rect: rectCoords, openSides } };
+  return { footprint: ring, porch: { type: 'recess', side, rect: part, openSides } };
+}
+
+// --- Cutting on the outline itself -------------------------------------------
+
+/** Samples along each face of the part, just outside it: how many lie in the rest of the building, and how many outside. */
+const FACE_SAMPLES = 64;
+const FACE_OFFSET = 1e-4;
+
+function partFaces(ring, part) {
+  const tally = Object.fromEntries(SIDES.map((side) => [side, { rest: 0, outside: 0 }]));
+  SIDES.forEach((side) => {
+    const acrossX = side === 'minX' || side === 'maxX';
+    const [lo, hi] = acrossX ? [part.minZ, part.maxZ] : [part.minX, part.maxX];
+    const at = part[side] + (side.startsWith('max') ? FACE_OFFSET : -FACE_OFFSET);
+    for (let i = 0; i < FACE_SAMPLES; i += 1) {
+      const t = lo + ((i + 0.5) / FACE_SAMPLES) * (hi - lo);
+      const point = acrossX ? [at, t] : [t, at];
+      tally[side][pointInPolygon(point, ring) ? 'rest' : 'outside'] += 1;
+    }
+  });
+  return tally;
+}
+
+/**
+ * The outline with a part standing out from its back face cut off: the run
+ * of corners beyond the back line within the part is replaced by the two
+ * points where the outline crosses that line, and corners left repeated or in
+ * line there are dropped. Other corners, angled walls among them, stay.
+ */
+function spliceOff(ring, part, back) {
+  const axis = back === 'minX' || back === 'maxX' ? 0 : 1;
+  const along = 1 - axis;
+  const line = part[back];
+  const outward = back.startsWith('min') ? 1 : -1;
+  const [lo, hi] = along === 0 ? [part.minX, part.maxX] : [part.minZ, part.maxZ];
+  const beyond = (point) => (point[axis] - line) * outward > EPS && point[along] > lo - EPS && point[along] < hi + EPS;
+  const n = ring.length;
+  const marks = ring.map(beyond);
+  // the run must be one stretch of the ring (it wraps round the start)
+  const starts = marks.map((marked, i) => marked && !marks[(i - 1 + n) % n]).filter(Boolean).length;
+  if (starts !== 1) {
+    throw new RangeError(starts ? 'That would cut the building in two.' : 'That part has no corners to cut off: draw the rectangle over a part standing out.');
+  }
+  const first = marks.findIndex((marked, i) => marked && !marks[(i - 1 + n) % n]);
+  let last = first;
+  while (marks[(last + 1) % n]) {
+    last = (last + 1) % n;
+  }
+  const previous = ring[(first - 1 + n) % n];
+  const next = ring[(last + 1) % n];
+  const entry = at(previous, ring[first], axis, line);
+  const exit = at(ring[last], next, axis, line);
+  // the outline in its own order (walls are numbered from it), the run replaced where it stood
+  const result = [];
+  ring.forEach((point, i) => {
+    if (!marks[i]) {
+      result.push(point);
+    } else if (i === first) {
+      result.push(entry, exit);
+    }
+  });
+  const cleaned = dropAt(result, new Set([previous, next, entry, exit]));
+  const { errors } = validateFootprint(cleaned, { expectedWinding: signedArea(ring) > 0 ? 'CCW' : 'CW' });
+  if (errors.length) {
+    throw new RangeError("That cut doesn't leave a clean outline.");
+  }
+  return cleaned;
+}
+
+/** Drops the given corners (by reference) where they repeat a neighbor or stand in line with both. */
+function dropAt(ring, loose) {
+  const result = [...ring];
+  for (let changed = true; changed && result.length > 3;) {
+    changed = false;
+    for (let i = 0; i < result.length && result.length > 3; i += 1) {
+      if (!loose.has(result[i])) {
+        continue;
+      }
+      const previous = result[(i - 1 + result.length) % result.length];
+      const point = result[i];
+      const next = result[(i + 1) % result.length];
+      const repeated = Math.hypot(point[0] - previous[0], point[1] - previous[1]) < 1e-6 || Math.hypot(next[0] - point[0], next[1] - point[1]) < 1e-6;
+      const inLine = Math.abs((point[0] - previous[0]) * (next[1] - point[1]) - (point[1] - previous[1]) * (next[0] - point[0])) < 1e-6;
+      if (repeated || inLine) {
+        result.splice(i, 1);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return result.map((point) => [...point]);
+}
+
+/** The polygon clipped to an axis-aligned box (Sutherland-Hodgman; the box is convex). */
+function clipToBox(ring, box) {
+  const edges = [
+    [(p) => p[0] >= box.minX, (a, b) => at(a, b, 0, box.minX)],
+    [(p) => p[0] <= box.maxX, (a, b) => at(a, b, 0, box.maxX)],
+    [(p) => p[1] >= box.minZ, (a, b) => at(a, b, 1, box.minZ)],
+    [(p) => p[1] <= box.maxZ, (a, b) => at(a, b, 1, box.maxZ)],
+  ];
+  return edges.reduce((points, [inside, cut]) => {
+    const out = [];
+    points.forEach((point, i) => {
+      const previous = points[(i - 1 + points.length) % points.length];
+      if (inside(point)) {
+        if (!inside(previous)) {
+          out.push(cut(previous, point));
+        }
+        out.push(point);
+      } else if (inside(previous)) {
+        out.push(cut(previous, point));
+      }
+    });
+    return out;
+  }, ring);
+}
+
+/** Where segment a-b crosses the line where `axis` equals `value` (exactly on it). */
+function at(a, b, axis, value) {
+  const t = (value - a[axis]) / (b[axis] - a[axis]);
+  const point = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  point[axis] = value;
+  return point;
+}
+
+function signedArea(points) {
+  return points.reduce((sum, [x, z], i) => {
+    const [nx, nz] = points[(i + 1) % points.length];
+    return sum + x * nz - nx * z;
+  }, 0) / 2;
 }
 
 /**
@@ -340,160 +476,6 @@ function chainWraps(porches) {
   });
 }
 
-// --- The cell grid ------------------------------------------------------------
-
-const OUTSIDE = 0;
-const REST = 1;
-const CUT = 2;
-
-/**
- * The footprint and rectangle cut into cells along every x and z either
- * has, each outside, in the rest of the building, or in the cut part.
- */
-function cellGrid(ring, box) {
-  const xs = uniqueSorted([...ring.map(([x]) => x), box.minX, box.maxX]);
-  const zs = uniqueSorted([...ring.map(([, z]) => z), box.minZ, box.maxZ]);
-  const [nx, nz] = [xs.length - 1, zs.length - 1];
-  const cells = [];
-  for (let i = 0; i < nx; i += 1) {
-    cells.push([]);
-    for (let j = 0; j < nz; j += 1) {
-      const center = [(xs[i] + xs[i + 1]) / 2, (zs[j] + zs[j + 1]) / 2];
-      const inside = pointInPolygon(center, ring);
-      const inBox = center[0] > box.minX && center[0] < box.maxX && center[1] > box.minZ && center[1] < box.maxZ;
-      cells[i].push(!inside ? OUTSIDE : inBox ? CUT : REST);
-    }
-  }
-  const at = (i, j) => (i < 0 || j < 0 || i >= nx || j >= nz ? OUTSIDE : cells[i][j]);
-  const each = (fn) => cells.forEach((column, i) => column.forEach((value, j) => fn(i, j, value)));
-
-  return {
-    count() {
-      let [cut, rest] = [0, 0];
-      each((i, j, value) => {
-        cut += value === CUT ? 1 : 0;
-        rest += value === REST ? 1 : 0;
-      });
-      return { cut, rest };
-    },
-    components(kind) {
-      const seen = new Set();
-      let count = 0;
-      each((i, j, value) => {
-        if (value !== kind || seen.has(`${i},${j}`)) {
-          return;
-        }
-        count += 1;
-        const stack = [[i, j]];
-        seen.add(`${i},${j}`);
-        while (stack.length) {
-          const [a, b] = stack.pop();
-          [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([da, db]) => {
-            const key = `${a + da},${b + db}`;
-            if (at(a + da, b + db) === kind && !seen.has(key)) {
-              seen.add(key);
-              stack.push([a + da, b + db]);
-            }
-          });
-        }
-      });
-      return count;
-    },
-    touchesOutside(kind) {
-      let touches = false;
-      each((i, j, value) => {
-        if (value === kind && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([di, dj]) => at(i + di, j + dj) === OUTSIDE)) {
-          touches = true;
-        }
-      });
-      return touches;
-    },
-    /** The index range of a kind's cells. */
-    bounds(kind) {
-      const range = { i0: Infinity, i1: -Infinity, j0: Infinity, j1: -Infinity };
-      each((i, j, value) => {
-        if (value === kind) {
-          range.i0 = Math.min(range.i0, i);
-          range.i1 = Math.max(range.i1, i);
-          range.j0 = Math.min(range.j0, j);
-          range.j1 = Math.max(range.j1, j);
-        }
-      });
-      return range;
-    },
-    isFull(kind, range) {
-      for (let i = range.i0; i <= range.i1; i += 1) {
-        for (let j = range.j0; j <= range.j1; j += 1) {
-          if (at(i, j) !== kind) {
-            return false;
-          }
-        }
-      }
-      return true;
-    },
-    coords(range) {
-      return {
-        minX: xs[range.i0], maxX: xs[range.i1 + 1], minZ: zs[range.j0], maxZ: zs[range.j1 + 1],
-      };
-    },
-    /** How much of each face of a cell range lies against the rest of the building (cells, by length). */
-    faces(range) {
-      const tally = Object.fromEntries(SIDES.map((side) => [side, { rest: 0, outside: 0 }]));
-      const add = (side, value, length) => {
-        if (value === REST) {
-          tally[side].rest += length;
-        } else if (value === OUTSIDE) {
-          tally[side].outside += length;
-        }
-      };
-      for (let j = range.j0; j <= range.j1; j += 1) {
-        add('minX', at(range.i0 - 1, j), zs[j + 1] - zs[j]);
-        add('maxX', at(range.i1 + 1, j), zs[j + 1] - zs[j]);
-      }
-      for (let i = range.i0; i <= range.i1; i += 1) {
-        add('minZ', at(i, range.j0 - 1), xs[i + 1] - xs[i]);
-        add('maxZ', at(i, range.j1 + 1), xs[i + 1] - xs[i]);
-      }
-      return tally;
-    },
-    /** The outline round a kind's cells, as one ring (positive signed area), corners in line dropped. */
-    outline(kind) {
-      const edges = new Map();
-      const addEdge = (from, to) => {
-        const key = pointKey(from);
-        if (edges.has(key)) {
-          throw new RangeError('That would leave two parts of the building touching only at a corner.');
-        }
-        edges.set(key, { from, to });
-      };
-      each((i, j, value) => {
-        if (value !== kind) {
-          return;
-        }
-        const [x0, x1, z0, z1] = [xs[i], xs[i + 1], zs[j], zs[j + 1]];
-        if (at(i, j - 1) !== kind) addEdge([x0, z0], [x1, z0]);
-        if (at(i + 1, j) !== kind) addEdge([x1, z0], [x1, z1]);
-        if (at(i, j + 1) !== kind) addEdge([x1, z1], [x0, z1]);
-        if (at(i - 1, j) !== kind) addEdge([x0, z1], [x0, z0]);
-      });
-      const [first] = edges.values();
-      const loop = [];
-      let edge = first;
-      for (let guard = 0; guard <= edges.size; guard += 1) {
-        loop.push(edge.from);
-        edge = edges.get(pointKey(edge.to));
-        if (!edge || edge === first) {
-          break;
-        }
-      }
-      if (loop.length !== edges.size) {
-        throw new RangeError('That would leave the building with a hole in it.');
-      }
-      return dropInLine(loop);
-    },
-  };
-}
-
 function pointInPolygon([x, z], ring) {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
@@ -506,25 +488,8 @@ function pointInPolygon([x, z], ring) {
   return inside;
 }
 
-function dropInLine(loop) {
-  return loop.filter((point, i) => {
-    const previous = loop[(i - 1 + loop.length) % loop.length];
-    const next = loop[(i + 1) % loop.length];
-    const cross = (point[0] - previous[0]) * (next[1] - point[1]) - (point[1] - previous[1]) * (next[0] - point[0]);
-    return Math.abs(cross) > EPS;
-  });
-}
 
-/** `ring` turned to wind the same way as `like`. */
-function orientLike(ring, like) {
-  const sign = (points) => Math.sign(computeFootprintMetrics(points).signedArea);
-  return sign(ring) === sign(like) ? ring : [...ring].reverse();
-}
 
-function uniqueSorted(values) {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted.filter((value, i) => i === 0 || value - sorted[i - 1] > EPS);
-}
 
 function normalizeRect(rect) {
   return {
@@ -540,6 +505,3 @@ function rectOf(points) {
   };
 }
 
-function pointKey([x, z]) {
-  return `${Math.round(x * 1e6)},${Math.round(z * 1e6)}`;
-}
