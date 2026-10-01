@@ -22,7 +22,7 @@
 
 import * as THREE from '../node_modules/three/build/three.module.js';
 import {
-  GLASS, gameManifest, gameMaterialFor, unknownMaterials,
+  FLAT, STEEP, GLASS, gameManifest, gameMaterialFor, unknownMaterials,
 } from './game-materials.js';
 
 export {
@@ -143,10 +143,67 @@ export function modelTriangles(root) {
           : null,
         collides: collides(mesh),
         oriented: mesh.userData?.oriented === true,
+        // which mesh it came from (refineRoofParts looks at a roof mesh as a whole)
+        mesh: mesh.id,
       });
     }
   });
   return out;
+}
+
+/**
+ * Roof triangles that are something else in the game. A roof mesh carries
+ * its gable ends (the wall above the plate under a gable), which are wall:
+ * a vertical roof triangle in the plane of one of the building's walls, just
+ * above it, takes that wall's material and finishes. And it carries the
+ * soffits and cornice ledges at its eaves, level strips at its bottom that
+ * the outward test can't orient (they're tucked under the overhang), which
+ * are trim (`part: 'soffit'`), not flat roof.
+ */
+// how far above a pitched roof's bottom a level face is still its eave (a soffit, a cornice's top)
+const SOFFIT_REACH = 0.3;
+
+export function refineRoofParts(triangles) {
+  const normalOf = (tri) => unit(cross(sub(tri[1], tri[0]), sub(tri[2], tri[0])));
+  const lowest = (tri) => Math.min(tri[0][1], tri[1][1], tri[2][1]);
+  const highest = (tri) => Math.max(tri[0][1], tri[1][1], tri[2][1]);
+  const walls = triangles.flatMap((entry) => {
+    if (entry.role !== 'wall') {
+      return [];
+    }
+    const n = normalOf(entry.tri);
+    return Math.abs(n[1]) < 0.01 ? [{ n, d: dot(n, entry.tri[0]), top: highest(entry.tri), entry }] : [];
+  });
+  // each roof mesh's bottom, and whether it has any slope (a flat roof's level faces are roof)
+  const roofs = new Map();
+  triangles.forEach(({ role, tri, mesh }) => {
+    if (role !== 'roof') {
+      return;
+    }
+    const ny = Math.abs(normalOf(tri)[1]);
+    const roof = roofs.get(mesh) ?? { bottom: Infinity, pitched: false };
+    roof.bottom = Math.min(roof.bottom, lowest(tri));
+    roof.pitched ||= ny > STEEP && ny < FLAT;
+    roofs.set(mesh, roof);
+  });
+  return triangles.map((entry) => {
+    if (entry.role !== 'roof') {
+      return entry;
+    }
+    const n = normalOf(entry.tri);
+    const ny = Math.abs(n[1]);
+    if (ny < STEEP) {
+      const wall = walls.find((candidate) => Math.abs(Math.abs(dot(candidate.n, n)) - 1) < 1e-4
+        && entry.tri.every((p) => Math.abs(dot(candidate.n, p) - candidate.d) < 0.01)
+        && Math.abs(candidate.top - lowest(entry.tri)) < 0.05);
+      return wall ? { ...entry, role: 'wall', palette: wall.entry.palette, finishes: wall.entry.finishes } : entry;
+    }
+    const roof = roofs.get(entry.mesh);
+    if (ny > FLAT && roof?.pitched && highest(entry.tri) - roof.bottom < SOFFIT_REACH) {
+      return { ...entry, part: 'soffit' };
+    }
+    return entry;
+  });
 }
 
 function materialOfWalls(root) {
@@ -268,10 +325,10 @@ function textureFrame(normal) {
  * @param {object} [project] - The serialized project (.bld) to keep beside the mesh.
  */
 export function buildGameFile(root, placement, project) {
-  const triangles = modelTriangles(root).filter(({ tri }) => {
+  const triangles = refineRoofParts(modelTriangles(root).filter(({ tri }) => {
     const n = cross(sub(tri[1], tri[0]), sub(tri[2], tri[0]));
     return Math.hypot(...n) / 2 > MIN_AREA;
-  });
+  }));
   // faces built wound from the mass into the air (a walk-in shell's) keep their
   // winding; the ray test (which a room's inner walls would fool) orients the rest
   const outward = windingsPointOutward(triangles);
@@ -345,7 +402,7 @@ export function buildGameFile(root, placement, project) {
     near,
     project,
   };
-  if (root.userData?.interiorRooms?.length) {
+  if (hasInteriorRooms(root)) {
     // a walk-in building: collide with its surfaces, not its hull (see the file header)
     const faces = [];
     triangles.forEach((entry) => {
@@ -356,6 +413,19 @@ export function buildGameFile(root, placement, project) {
     Object.assign(file, { version: 2, interior: true, collision: { faces } });
   }
   return file;
+}
+
+/**
+ * Whether the model has walk-in rooms: recorded on the building
+ * (`userData.interiorRooms`), which the editor sends wrapped in its scene
+ * group, so anywhere under `root`.
+ */
+function hasInteriorRooms(root) {
+  let found = false;
+  root.traverse((node) => {
+    found ||= Boolean(node.userData?.interiorRooms?.length);
+  });
+  return found;
 }
 
 /**
