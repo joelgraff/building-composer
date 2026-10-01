@@ -741,6 +741,28 @@
       .fp-footer button:disabled,
       .fp-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+      .choice-dialog {
+        max-width: 440px;
+        border: 1px solid rgba(17, 32, 51, 0.12);
+        border-radius: 12px;
+        padding: 18px 20px;
+        box-shadow: 0 12px 32px rgba(17, 32, 51, 0.2);
+        color: var(--text);
+      }
+
+      .choice-dialog::backdrop {
+        background: rgba(17, 32, 51, 0.35);
+      }
+
+      .choice-dialog h3 {
+        margin: 0 0 8px;
+      }
+
+      .choice-dialog .actions {
+        justify-content: flex-end;
+        margin-top: 14px;
+      }
+
       .statusbar {
         display: flex;
         align-items: center;
@@ -1131,6 +1153,18 @@
       <button id="issues-btn" class="issues" hidden></button>
     </footer>
 
+    <dialog id="outline-changed" class="choice-dialog" aria-labelledby="outline-changed-title">
+      <form method="dialog">
+        <h3 id="outline-changed-title">The outline has changed</h3>
+        <p>Building <span data-outline-changed-id></span>'s outline was changed in the game since this design was made.</p>
+        <p class="field-note" data-outline-changed-loses></p>
+        <div class="actions">
+          <button value="new">Start from the new outline</button>
+          <button value="keep" class="primary" autofocus>Keep the design on the new outline</button>
+        </div>
+      </form>
+    </dialog>
+
     <input id="file-input" type="file" accept="application/json,.json,.bld" hidden />
 
     <script type="importmap">
@@ -1141,6 +1175,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=90"></script>
+    <script type="module" src="./js/main.js?v=93"></script>
   </body>
 </html>

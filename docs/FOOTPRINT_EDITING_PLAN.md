@@ -134,6 +134,8 @@ The game's generator places porches by kind alone: on the main block's first wal
 
 Shared with the integration plan's Phase 5. Composer stores the hash of the outline a design was made from (`placement.sourceHash`), and reopens a saved design when the export's outline hash matches it, instead of comparing re-squared center and rotation. A design made on the old outline, opened after the footprint was corrected, opens with a notice that the outline changed and an offer to keep the design (fitting it to the new outline where possible) or start from the new outline.
 
+Done (Composer): a design opens by its outline fingerprint (`sameGameOutline`). When the game's outline no longer matches, a dialog offers to keep the design on the new outline or start from it. Keeping drops what is placed by position when the walls or masses change in number (windows, doors, chimneys, wall trim; masses' own settings and structures), listed in the dialog first (`outlineChangeLosses`, shared with Use this footprint). Starting fresh opens footprint mode on the new outline.
+
 ## Phases
 
 1. **Server, read-only** (dixon_dem): `/game-aerial` and `/game-footprints`, with pytest on a synthetic tile and a few records.
