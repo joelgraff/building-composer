@@ -26,7 +26,7 @@ import BUNDLED from './game-materials-data.js';
 /** The finishes a building can choose, with the manifest category each is drawn from. */
 export const FINISH_SLOTS = Object.freeze([
   { key: 'wall', category: 'wall', label: 'Walls' },
-  { key: 'roof', category: 'roof', label: 'Roof' },
+  { key: 'roof', category: 'roof', label: 'Pitched roof' },
   { key: 'flatRoof', category: 'roof', label: 'Flat roof' },
   { key: 'trim', category: 'trim', label: 'Trim' },
   { key: 'foundation', category: 'foundation', label: 'Foundation' },
@@ -104,6 +104,26 @@ export const categoriesOf = (name) => byName.get(name)?.categories ?? [];
 export function finishesFor(category) {
   return active.materials.filter((m) => m.categories.includes(category));
 }
+
+/**
+ * The game materials offered for a finish slot (a FINISH_SLOTS key): its
+ * category's, and for a roof only those that suit it. A pitched roof is
+ * shingles or metal, not membrane; a flat roof is membrane or metal, not
+ * shingles.
+ */
+export function finishesForSlot(key) {
+  const slot = FINISH_SLOTS.find((entry) => entry.key === key);
+  const names = finishesFor(slot?.category ?? key);
+  if (key === 'roof') {
+    return names.filter((m) => !FLAT_ROOF_ONLY.test(m.name));
+  }
+  if (key === 'flatRoof') {
+    return names.filter((m) => !PITCHED_ROOF_ONLY.test(m.name));
+  }
+  return names;
+}
+const FLAT_ROOF_ONLY = /membrane/;
+const PITCHED_ROOF_ONLY = /^shingles_/;
 
 /** The names in `names` the game doesn't have. */
 export function unknownMaterials(names) {

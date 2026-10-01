@@ -26,7 +26,7 @@ import { normalizeChimneys } from './chimneys.js';
 import { exportGlb } from './export.js';
 import { buildGameFile, gameFileProblems } from './game-export.js';
 import {
-  FINISH_SLOTS, colorOf, familyOf, finishesFor, gameManifest, loadGameManifest,
+  FINISH_SLOTS, colorOf, familyOf, finishesForSlot, gameManifest, loadGameManifest,
 } from './game-materials.js';
 import { importDixonFootprint, sameGameOutline, outlineHash } from './import.js';
 import { toGameFrame, toComposerFrame, recenter, openRing } from './footprint-editor.js';
@@ -1377,17 +1377,33 @@ function renderVolumeControls(layout) {
         ${createMaterialOptions(modelConfig.volumeMaterials?.[volume.id] ?? '')}
       </select>
     </div>
-    ${['wall', 'roof'].map((slot) => {
+    ${massFinishSlots(volume.id).map(([slot, label]) => {
     const own = modelConfig.volumeGameFinishes?.[volume.id]?.[slot] ?? '';
     return `
     <div class="field">
-      <label for="${volume.id}-game-${slot}">Game ${slot} finish${swatchHtml(own)}</label>
+      <label for="${volume.id}-game-${slot}">${label}${swatchHtml(own)}</label>
       <select data-volume-game-finish="${slot}" data-volume="${volume.id}" id="${volume.id}-game-${slot}">
         ${finishOptionsHtml(slot, own, "The building's")}
       </select>
     </div>`;
   }).join('')}
   `;
+}
+
+/**
+ * The game finishes a mass can set, as [slot, label]: its walls, and the
+ * roof finishes its roof type uses (a pitched roof's flat parts are a
+ * mansard's or gambrel's top, or a widow's walk).
+ */
+function massFinishSlots(volumeId) {
+  const roofType = modelConfig.volumeRoofTypes[volumeId] ?? modelConfig.roofType;
+  const flatParts = ['mansard', 'gambrel'].includes(roofType)
+    || (roofType === 'hip' && (modelConfig.volumeRoofShapes[volumeId]?.walkHeight ?? modelConfig.roofWalkHeight) > 0);
+  return [
+    ['wall', 'Game wall finish'],
+    ...(roofType === 'flat' ? [] : [['roof', 'Game roof finish']]),
+    ...(roofType === 'flat' ? [['flatRoof', 'Game roof finish']] : flatParts ? [['flatRoof', 'Game finish for its flat top']] : []),
+  ];
 }
 
 /** A small square of a game material's color, or nothing. */
@@ -1398,8 +1414,7 @@ function swatchHtml(name) {
 
 /** The options for a finish slot: the game's materials for it, after one for none. */
 function finishOptionsHtml(slot, selected, noneLabel) {
-  const { category } = FINISH_SLOTS.find((entry) => entry.key === slot);
-  const names = finishesFor(category).map((m) => [m.name, m.label]);
+  const names = finishesForSlot(slot).map((m) => [m.name, m.label]);
   // a finish the game no longer has stays listed, so it can be seen and changed
   if (selected && !names.some(([name]) => name === selected)) {
     names.push([selected, `${selected} (not in the game)`]);
@@ -2862,6 +2877,25 @@ function resetForNewFootprint() {
  * Opens a parsed file: a project (.bld), a footprint exported from the
  * Dixon project (see js/import.js), or a plain footprint (an array of [x, z]).
  */
+/**
+ * Which game material list Composer is using, for a building from the game:
+ * live from its server or the bundled copy, by version (its hash). When the
+ * game says it has another version (`materials_version` in its export), the
+ * finishes may not match the game's, which is said, and marked `stale`.
+ */
+function gameMaterialsNote(payload) {
+  const { hash } = gameManifest();
+  const used = gameMaterialsSource === 'game' ? `live from the game (${hash})` : `Composer's bundled copy (${hash})`;
+  const theirs = typeof payload?.materials_version === 'string' ? payload.materials_version : null;
+  if (theirs && theirs !== hash) {
+    return {
+      stale: true,
+      text: `Game materials: ${used}, but the game has ${theirs}: finishes may not match it. Serve Composer with the game's composer_server.py, or run scripts/sync-game-materials.mjs.`,
+    };
+  }
+  return { stale: false, text: `Game materials: ${used}.` };
+}
+
 /** Opens a saved design's state: its settings into the sidebar, and its building built. */
 function applyProjectState(state) {
   Object.assign(modelConfig, state);
@@ -2912,7 +2946,7 @@ function askOutlineChanged(id, dropped) {
  * kept on the new outline (re-centered there, with what would land in the
  * wrong place left out), or the new outline opened fresh in footprint mode.
  */
-async function openChangedDesign(saved, imported, placement, startFresh) {
+async function openChangedDesign(saved, imported, placement, startFresh, payload) {
   const state = saved.state;
   const masses = computeFacadeLayout(openRing(state.footprint), { volumeSplit: state.volumeSplit }).volumes.length;
   const losses = outlineChangeLosses(state, state.footprint, imported.footprint, masses);
@@ -2923,11 +2957,13 @@ async function openChangedDesign(saved, imported, placement, startFresh) {
   resetForNewFootprint();
   dropOutlineLosses(state, losses);
   await applyProjectState({ ...state, footprint: imported.footprint, placement });
+  const materials = gameMaterialsNote(payload);
   setStatus([
     `Building ${placement.id}: the design is kept on the outline the game has now.`,
     losses.dropped.length ? `Removed ${losses.dropped.join(', ')}.` : '',
     roofStructureIssues,
-  ].filter(Boolean).join(' '), roofStructureIssues ? 'error' : 'default');
+    materials.text,
+  ].filter(Boolean).join(' '), roofStructureIssues || materials.stale ? 'error' : 'default');
 }
 
 function openPayload(payload) {
@@ -2956,7 +2992,8 @@ function openPayload(payload) {
         openPayload(payload.project);
         // (a design saved before outline fingerprints gets one now)
         modelConfig.placement = { ...modelConfig.placement, sourceHash: modelConfig.placement?.sourceHash ?? now.sourceHash };
-        setStatus(`Building ${now.id}: the design saved from the game is open. ${imported.warnings.join(' ')}`.trim());
+        const materials = gameMaterialsNote(payload);
+        setStatus(`Building ${now.id}: the design saved from the game is open. ${imported.warnings.join(' ')} ${materials.text}`.replace(/\s+/g, ' ').trim(), materials.stale ? 'error' : 'default');
         return;
       }
     }
@@ -2993,11 +3030,11 @@ function openPayload(payload) {
       const angle = Math.abs(degrees) < 0.05 ? 0 : degrees;
       setStatus([
         `Building ${imported.placement.id} imported from ${imported.placement.source}, turned ${angle.toFixed(1)} degrees square to the axes.`,
-        ...imported.warnings, roofStructureIssues,
-      ].filter(Boolean).join(' '), roofStructureIssues ? 'error' : 'default');
+        ...imported.warnings, roofStructureIssues, gameMaterialsNote(payload).text,
+      ].filter(Boolean).join(' '), roofStructureIssues || gameMaterialsNote(payload).stale ? 'error' : 'default');
     };
     if (saved?.valid) {
-      openChangedDesign(saved, imported, placement, startFresh);
+      openChangedDesign(saved, imported, placement, startFresh, payload);
       return;
     }
     startFresh();
@@ -3040,7 +3077,9 @@ function openPayloadFromAddress() {
   try {
     const base64 = match[1].replace(/-/g, '+').replace(/_/g, '/');
     const bytes = Uint8Array.from(atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4)), (c) => c.charCodeAt(0));
-    openPayload(JSON.parse(new TextDecoder().decode(bytes)));
+    const payload = JSON.parse(new TextDecoder().decode(bytes));
+    // (the game's material list first: the import says which one finishes come from)
+    gameMaterialsReady.then(() => openPayload(payload));
   } catch (error) {
     setStatus('The footprint in the page address could not be read.', 'error');
   }
@@ -5060,14 +5099,14 @@ function structureEditorHtml(structure) {
     ? stepsFieldsHtml(normalizeSteps(structure.steps), flightFor(normalizeSteps(structure.steps), built.sillY, { deck: true }), { travel: porchStepsTravel(structure, built) })
     : [];
 
-  const finishOptions = (slot) => [['', "The building's"], ...finishesFor(slot).map((m) => [m.name, m.label])];
+  const finishOptions = (slot) => [['', "The building's"], ...finishesForSlot(slot).map((m) => [m.name, m.label])];
   const materials = [
     selectField('Wall material', 'wallMaterial', MATERIAL_OPTIONS, structure.materials?.wall ?? ''),
     selectField('Game wall finish', 'gameWall', finishOptions('wall'), structure.materials?.gameWall ?? ''),
   ];
   if (!recess) {
     materials.push(selectField('Roof material', 'roofMaterial', MATERIAL_OPTIONS, structure.materials?.roof ?? ''));
-    materials.push(selectField('Game roof finish', 'gameRoof', finishOptions('roof'), structure.materials?.gameRoof ?? ''));
+    materials.push(selectField('Game roof finish', 'gameRoof', finishOptions(structure.roofType === 'flat' ? 'flatRoof' : 'roof'), structure.materials?.gameRoof ?? ''));
   }
 
   const entry = activeStructureEntries.find((candidate) => candidate.id === structure.id);
@@ -5489,7 +5528,10 @@ syncInspector(null);
 
 // the game's materials: its live list when served by its composer_server.py
 renderGameFinishControls('bundled');
-loadGameManifest().then((source) => {
+// the game's material list: live from its server, or Composer's bundled copy (a game import waits for it)
+let gameMaterialsSource = 'bundled';
+const gameMaterialsReady = loadGameManifest().then((source) => {
+  gameMaterialsSource = source;
   renderGameFinishControls(source);
   if (source === 'game' && loadedFootprint) {
     loadFootprint(loadedFootprint);

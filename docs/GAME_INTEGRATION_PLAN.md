@@ -136,7 +136,7 @@ As built:
   4. Rebuild the chunk (Enter, or I). The walls are buff brick, trim is white, doors and the interior use their new materials, the interior can be walked into, and the Godot log has no unknown-material warnings. At night, about a third of the windows glow, with curtains varying as on the neighbors.
   5. Press X again. The design reopens.
 
-## Open questions
+## Decided after
 
-- **Roof finishes.** Offer `shingles_brown` and `roof_metal` for pitched roofs, and `roof_membrane` or `roof_metal` for flat roofs, per volume?
-- **Bundled manifest freshness.** Composer run on its own (not through the game's server) uses the bundled copy. Is a sync script enough, or should Composer show the manifest's version when it opens a game building?
+- **Roof finishes** (2026-09-30): the building, and each mass, choose a finish for a pitched roof (`shingles_dark`, `shingles_brown`, or `roof_metal`; never membrane) and for a flat one (`roof_membrane` or `roof_metal`; never shingles): `finishesForSlot` in `js/game-materials.js`. A mass offers the slots its roof type uses: a flat roof's, or a pitched roof's plus its flat top's for a mansard, a gambrel, or a hip with a widow's walk. A roof structure's list follows its own roof.
+- **Bundled manifest freshness** (2026-09-30): the game's X export carries `materials_version` (the manifest's hash, `building_edit.gd` `materials_version()`). Opening a game building, Composer's status line says which list it uses (live from the game's server or its bundled copy, by hash), and warns in red when the game's version differs, with how to update (serve Composer from `composer_server.py`, or run `scripts/sync-game-materials.mjs`).
