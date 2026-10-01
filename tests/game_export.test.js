@@ -44,6 +44,26 @@ describe('the file for the game', () => {
     });
   });
 
+  it('exports a gable end as its wall, and the soffits under the eaves as trim, not flat roof', () => {
+    const file = buildGameFile(build(RECT), { rotation: 0, center: [0, 0], id: 'x' });
+    assert.equal(file.near.roof_membrane, undefined, 'a gabled roof has no flat roof');
+    // the gable ends: the walls at x = +-5, above the plate (2 stories of 3 m on a 0.6 m floor)
+    const gable = file.near.siding_white.verts.filter((v) => Math.abs(Math.abs(v[0]) - 5) < 1e-3 && v[1] > 6.7);
+    assert.ok(gable.length >= 2, 'gable corners in the wall group');
+    assert.equal(file.near.trim_white.verts.filter((v) => Math.abs(Math.abs(v[0]) - 5) < 1e-3 && v[1] > 7).length, 0, 'no gable in the trim');
+  });
+
+  it("gives a gable end the wall's game finish", () => {
+    const building = build(RECT, { wallMaterial: 'brick', gameFinishes: { wall: 'brick_buff' } });
+    const file = buildGameFile(building, { rotation: 0, center: [0, 0], id: 'x' });
+    assert.ok(file.near.brick_buff.verts.some((v) => Math.abs(Math.abs(v[0]) - 5) < 1e-3 && v[1] > 7.5), 'the gable peak is buff brick');
+  });
+
+  it('keeps a flat roof as flat roof', () => {
+    const file = buildGameFile(build(RECT, { roofType: 'flat' }), { rotation: 0, center: [0, 0], id: 'x' });
+    assert.ok(file.near.roof_membrane, 'a flat roof is membrane');
+  });
+
   it('puts every triangle in the game\'s winding with an outward normal and a material', () => {
     const placement = { rotation: 0.3, center: [500, -200], id: '42', groundY: 17 };
     const file = buildGameFile(build(RECT), placement, { format: 'building-composer' });
