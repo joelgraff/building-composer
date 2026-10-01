@@ -120,6 +120,10 @@
         margin-top: 2px;
       }
 
+      .sidebar.inspecting-mass .building-only {
+        display: none !important;
+      }
+
       .sidebar > [data-inspector][hidden] {
         display: none !important;
       }
@@ -563,6 +567,12 @@
         border-color: transparent;
       }
 
+      .menu-button:disabled {
+        color: var(--muted);
+        opacity: 0.5;
+        cursor: default;
+      }
+
       .menu-button[aria-expanded="true"] {
         background: rgba(50, 107, 245, 0.1);
       }
@@ -810,6 +820,8 @@
             <button role="menuitem" id="export-btn">Export GLB</button>
           </div>
         </div>
+        <button id="undo-btn" class="menu-button" title="Undo (Ctrl+Z)" disabled>↶ Undo</button>
+        <button id="redo-btn" class="menu-button" title="Redo (Ctrl+Shift+Z)" disabled>↷ Redo</button>
       </nav>
       <select id="footprint-select" aria-label="Footprint type" hidden>
         <option value="sample" selected>Rectangle</option>
@@ -983,7 +995,7 @@
               <option value="flat">Flat (level from fascia)</option>
             </select>
           </div>
-          <div class="field" id="volume-split-field" style="display:none;">
+          <div class="field building-only" id="volume-split-field" style="display:none;">
             <label for="volume-split">Volumes</label>
             <select id="volume-split">
               <option value="auto" selected>Follow the massing (automatic)</option>
@@ -991,7 +1003,7 @@
               <option value="x">Blocks run along Z</option>
             </select>
           </div>
-          <div class="field" id="roof-height-mode-field" style="display:none;">
+          <div class="field building-only" id="roof-height-mode-field" style="display:none;">
             <label for="roof-height-mode">Ridge Control</label>
             <select id="roof-height-mode">
               <option value="slope" selected>Constant slope</option>
@@ -1141,6 +1153,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=90"></script>
+    <script type="module" src="./js/main.js?v=95"></script>
   </body>
 </html>
