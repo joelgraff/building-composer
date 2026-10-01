@@ -6,8 +6,8 @@
  * generated building gets them too. Pure functions with no DOM or THREE
  * dependency.
  *
- * `based_on.hash` is the fingerprint of the game's outline the override
- * replaces: outlineHash in js/import.js, the same as `outline_hash()` in
+ * `based_on.hash` is the fingerprint of the game's traced outline the
+ * override replaces (`placement.basedOn`, recorded at import): outlineHash in js/import.js, the same as `outline_hash()` in
  * dixon_dem's pipeline/buildings/footprints.py (the same for the same
  * corners to the millimeter, whatever corner they start at or which way they
  * run), so the game notices when that outline has since changed.
@@ -88,7 +88,7 @@ export function gamePorchKind(structure) {
  *
  * @param {object} args
  * @param {Array<[number, number]>} args.footprint - the outline, in Composer's frame
- * @param {{ id: string, source?: string, rotation: number, center: number[], trace?: Array<[number, number]> }} args.placement
+ * @param {{ id: string, source?: string, rotation: number, center: number[], trace?: Array<[number, number]>, basedOn?: { source: string, hash: string } }} args.placement
  * @param {object[]} [args.structures] - the building's structures; the porches made from the footprint (`fromFootprint`) go in the file, recessed ones aside (the game can't cut into its mass)
  * @param {Array<{ id: string }>} [args.volumes] - the masses, as Composer cut them (for the porches' walls)
  * @param {Date} [args.edited]
@@ -128,7 +128,9 @@ export function buildFootprintOverride({
     version: OVERRIDE_VERSION,
     id: String(placement.id),
     footprint: outline,
-    based_on: { source: placement.source ?? 'dixon_dem', hash: placement.sourceHash ?? (trace ? outlineHash(trace) : null) },
+    // the game's own outline this replaces (recorded at import; a building corrected
+    // before keeps the outline that correction replaced), never an earlier correction's
+    based_on: placement.basedOn ?? { source: placement.source ?? 'dixon_dem', hash: trace ? outlineHash(trace) : null },
     source: 'building-composer',
     note,
     edited: edited.toISOString().replace(/\.\d{3}Z$/, 'Z'),

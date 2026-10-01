@@ -2905,10 +2905,17 @@ function openPayload(payload) {
     }
     // the game's own outline and the squared import, in game coordinates (so
     // they survive re-centering), for footprint mode's layers
+    // an outline already corrected in Composer comes with the one it was drawn
+    // over (source_footprint) and what it replaced (based_on): the trace layer
+    // shows the traced outline, and a new correction still names the source
+    const traced = Array.isArray(payload.source_footprint) && payload.source_footprint.length >= 3 ? payload.source_footprint : payload.footprint;
     const placement = {
       ...imported.placement,
-      trace: openRing(payload.footprint),
+      trace: openRing(traced),
       squared: toGameFrame(imported.footprint, imported.placement),
+      basedOn: payload.override && payload.based_on?.hash
+        ? { source: payload.based_on.source ?? imported.placement.source, hash: payload.based_on.hash }
+        : { source: imported.placement.source, hash: outlineHash(traced) },
     };
     Object.assign(modelConfig, imported.settings, { placement });
     frontSelect.value = modelConfig.frontSide;
@@ -3457,13 +3464,19 @@ async function loadFootprintContext(view) {
         height: box.z1 - box.z0,
         transform: `rotate(${degrees}) translate(${-placement.center[0]} ${-placement.center[1]})`,
       },
+      ...(notes.length ? { contextNote: "No neighbors: the game's server didn't send them." } : {}),
     });
   };
   image.onerror = () => {
-    if (view === footprintView) {
-      notes.push('the aerial');
-      view.setContext({ contextNote: `No ${notes.join(' or ')}: they come from the game's server (python3 game/tools/composer_server.py in dixon_dem), which didn't answer.` });
+    if (view !== footprintView) {
+      return;
     }
+    // the server answered for the neighbors: it's only the imagery that isn't there
+    view.setContext({
+      contextNote: notes.length
+        ? "No aerial or neighbors: they come from the game's server (python3 game/tools/composer_server.py in dixon_dem), which didn't answer."
+        : "No aerial here: the game's server has no imagery for this spot (dixon_dem's pipeline/aerial/fetch_illinois.py fetches it).",
+    });
   };
   image.src = href;
 }

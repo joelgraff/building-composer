@@ -108,9 +108,15 @@ describe('buildFootprintOverride', () => {
     samePoint(toComposerFrame([leg.b], PLACEMENT)[0], [-2, 4]);
   });
 
-  it("prefers the fingerprint recorded at import, the game's own outline", () => {
-    const override = buildFootprintOverride({ footprint: RECT, placement: { ...PLACEMENT, sourceHash: '4-441db1ba', trace: toGameFrame(RECT, PLACEMENT) }, edited });
-    assert.equal(override.based_on.hash, '4-441db1ba');
+  it('names the traced outline recorded at import, not an earlier correction', () => {
+    const override = buildFootprintOverride({
+      footprint: RECT,
+      placement: {
+        ...PLACEMENT, sourceHash: '6-0badc0de', basedOn: { source: 'osm', hash: '4-441db1ba' }, trace: toGameFrame(RECT, PLACEMENT),
+      },
+      edited,
+    });
+    assert.deepEqual(override.based_on, { source: 'osm', hash: '4-441db1ba' });
   });
 
   it('needs a building from the game', () => {
