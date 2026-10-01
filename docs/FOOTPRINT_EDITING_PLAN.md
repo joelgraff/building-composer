@@ -4,6 +4,15 @@ The footprints the Dixon game exports come from OSM, Microsoft's ML footprints, 
 
 Status: planned (2026-09-30). Decisions in [Decisions](#decisions) were made with the project owner.
 
+Progress:
+
+- Phase 2 (editor core) is done: `js/footprint-editor.js`, tested in `tests/footprint_editor.test.js`. `squareFootprint` in `js/import.js` now takes its tolerances and a fixed rotation as options, for the editor's re-square; imports use the same defaults as before.
+- Phase 3 (editor UI) is done, except the aerial and neighbors, which wait for phase 1's endpoints: `js/footprint-view.js` draws footprint mode, and `js/main.js` opens it (File › Edit footprint…, the Building panel, and a building from the game with no saved design) and applies the result. It asks for `/game-footprints` and `/game-aerial` with the query this plan gives and, until they answer, says so in the Layers section. The game's trace and the squared import are kept in `placement.trace` and `placement.squared`, in game coordinates. Using an outline with a different number of walls drops the windows, doors, chimneys, and wall trim (placed by wall); with a different number of masses, also the masses' own settings and the roof structures; it asks first.
+- Phase 4 (Turn into a porch) is done: `js/footprint-porch.js`, tested in `tests/footprint_porch.test.js` (each case builds the house and checks the porch is accepted). A part is drawn as a rectangle, or picked as a traced bump (select its outer wall). It works on square walls only (a cell grid on the outline's own coordinates does the cut). A wraparound is turned one leg at a time, and legs meeting at a mass's corner with the same depth are joined when the footprint is used. The porches made are marked `fromFootprint` in their records, for phase 5.
+- Phase 5 (write-back), Composer's side, is done: `js/footprint-override.js` builds the override file, tested in `tests/footprint_override.test.js`; File › Save footprint to game (also in the Building panel) POSTs it to `/game-footprint/<id>` with the `X-Composer` header, or downloads `<id>.json` for `game/data/footprint_overrides/` when the server doesn't answer. The server endpoint is dixon_dem's part.
+  - **The outline hash** (`based_on.hash`): SHA-256, lowercase hex, of the outline's canonical text: its corners in the order exported, no repeated closing corner, each coordinate rounded to the millimeter and written with three decimals (`-0.000` as `0.000`), `x,z` pairs joined by `;`, e.g. `508.108,-212.668;523.095,-213.555;...`. Python: `hashlib.sha256(text.encode()).hexdigest()`; GDScript: `text.sha256_text()`. `based_on.source` is the export's `source` (`dixon_dem`); the game may want to put the record's own source (`osm`, `ms`, `curated`) in the export so it can go here.
+  - **Porch legs** run the way the override's own outline runs along that wall (the file's outline keeps the winding of the game's trace), so with counter-clockwise rings the outward normal points away from the building. A wraparound's leg that turns a corner runs on past it by the depth, covering the corner square, as Composer builds it.
+
 ## The problem
 
 Where footprints come from today (`dixon_dem`):
@@ -25,6 +34,7 @@ There is no footprint editor in either project. ARCHITECTURE.md §7 lists an in-
 ## Decisions
 
 - **Edit in Composer.** It already holds the outline, validates it (`validateFootprint`, `angledWallProblem`), and turns it into volumes, and web UI is quicker to build than a GDScript editor inside the 3D game.
+- **Footprint mode opens first only for a building with no saved design** (decided 2026-09-30). A building with a design opens in the 3D view, with Edit footprint at hand.
 - **Write the result back to the game** as a footprint override keyed by the building's own id. The game's generated building, collision, neighbors' context, and later X exports then all use the corrected outline, not only a composed design.
 
 ## What there is to trace against
@@ -156,5 +166,4 @@ Phases 1 and 2 are independent and can go in parallel. The UI needs both.
 
 ## Open questions
 
-- **Default entry point.** Should every X open in footprint mode first, or only buildings without a saved design (as proposed)?
 - **Imagery elsewhere.** The aerial tiles are only on the machine that fetched them. Should the server fetch a missing tile on demand (`fetch_illinois.py` logic), or should Composer do without?

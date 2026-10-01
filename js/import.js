@@ -32,13 +32,23 @@ const EPSILON = 1e-9;
  * angled walls (a clipped corner, a wedge-shaped lot) and are kept, each on
  * the line through its traced points.
  *
+ * The tolerances can be changed (the footprint editor's re-square keeps
+ * detail the defaults drop), and `rotation` fixes the main direction instead
+ * of estimating it from the walls (the editor squares to Composer's own axes).
+ *
  * @param {Array<[number, number]>} points - the outline, in any winding, closed or not
+ * @param {{ maxSkewDegrees?: number, minEdge?: number, align?: number, rotation?: number }} [options]
  * @returns {{ footprint: Array<[number, number]>, rotation: number, center: [number, number], maxShift: number, angled: number } | { error: string }}
  *   `footprint` in Composer's frame, centered on its centroid; `rotation`
  *   (radians) and `center` take it back to the source's frame; `angled`
  *   counts the angled walls kept.
  */
-export function squareFootprint(points) {
+export function squareFootprint(points, options = {}) {
+  const tolerances = {
+    maxSkewDegrees: options.maxSkewDegrees ?? MAX_SKEW_DEGREES,
+    minEdge: options.minEdge ?? MIN_EDGE,
+    align: options.align ?? ALIGN,
+  };
   let ring = points.map(([x, z]) => [Number(x), Number(z)]);
   if (ring.length > 1 && distance(ring[0], ring[ring.length - 1]) < EPSILON) {
     ring = ring.slice(0, -1);
@@ -63,31 +73,33 @@ export function squareFootprint(points) {
     return Math.atan2(s4, c4) / 4;
   };
   const rough = mainDirection(() => 1);
-  const rotation = mainDirection((angle) => (skewOf(angle - rough) <= MAX_SKEW_DEGREES ? 1 : 0));
+  const rotation = Number.isFinite(options.rotation)
+    ? options.rotation
+    : mainDirection((angle) => (skewOf(angle - rough) <= tolerances.maxSkewDegrees ? 1 : 0));
   const origin = [ring.reduce((sum, [x]) => sum + x, 0) / ring.length, ring.reduce((sum, [, z]) => sum + z, 0) / ring.length];
   const turned = ring.map((point) => rotate([point[0] - origin[0], point[1] - origin[1]], -rotation));
 
   // each wall along x, along z, or angled; consecutive walls of one kind
   // (angled ones heading the same way) are one side
-  let sides = mergeSides(turned.map((point, i) => {
+  let sides = mergeSides(tolerances, turned.map((point, i) => {
     const next = turned[(i + 1) % turned.length];
     const [dx, dz] = [next[0] - point[0], next[1] - point[1]];
     const skew = skewOf(Math.atan2(dz, dx));
     // off square by a few degrees, or by only a few centimeters on a short wall
-    const square = skew <= MAX_SKEW_DEGREES || Math.min(Math.abs(dx), Math.abs(dz)) <= MIN_EDGE;
+    const square = skew <= tolerances.maxSkewDegrees || Math.min(Math.abs(dx), Math.abs(dz)) <= tolerances.minEdge;
     const kind = !square ? 'angled' : Math.abs(dx) >= Math.abs(dz) ? 'x' : 'z';
     return side(kind, [point, next]);
   }));
   // put wall lines traced twice on one line, and drop tracing jogs (short
   // sides, merging the sides either side of each), until nothing changes
   for (let guard = 0; guard < 200; guard += 1) {
-    sides = alignSides(sides);
+    sides = alignSides(sides, tolerances.align);
     const corners = cornersOf(sides);
-    const short = sides.findIndex((_, i) => distance(corners[(i + sides.length - 1) % sides.length], corners[i]) < MIN_EDGE);
+    const short = sides.findIndex((_, i) => distance(corners[(i + sides.length - 1) % sides.length], corners[i]) < tolerances.minEdge);
     if (short < 0 || sides.length <= 3) {
       break;
     }
-    sides = mergeSides(sides.filter((_, i) => i !== short));
+    sides = mergeSides(tolerances, sides.filter((_, i) => i !== short));
   }
   const squared = cornersOf(sides);
   if (sides.length < 3 || squared.some((corner) => !corner.every(Number.isFinite)) || Math.abs(polygonArea(squared)) < 1) {
@@ -118,14 +130,14 @@ export function squareFootprint(points) {
  * traced twice (the two ends of a wall broken by a wing): each group is put
  * on its length-weighted mean line.
  */
-function alignSides(sides) {
+function alignSides(sides, align) {
   const aligned = sides.map((s) => ({ ...s }));
   ['x', 'z'].forEach((kind) => {
     const group = aligned.filter((s) => s.kind === kind).sort((a, b) => a.at - b.at);
     const clusters = [];
     group.forEach((s) => {
       const last = clusters[clusters.length - 1];
-      if (last && s.at - last[last.length - 1].at < ALIGN) {
+      if (last && s.at - last[last.length - 1].at < align) {
         last.push(s);
       } else {
         clusters.push([s]);
@@ -162,10 +174,10 @@ function side(kind, points) {
   return { kind, points, at, from: first, direction: normalize([last[0] - first[0], last[1] - first[1]]) };
 }
 
-/** Joins consecutive sides of one kind (angled ones within MAX_SKEW_DEGREES of each other); the ring wraps round. */
-function mergeSides(sides) {
+/** Joins consecutive sides of one kind (angled ones within the skew tolerance of each other); the ring wraps round. */
+function mergeSides({ maxSkewDegrees }, sides) {
   const same = (a, b) => a.kind === b.kind && (a.kind !== 'angled'
-    || (Math.acos(Math.min(1, a.direction[0] * b.direction[0] + a.direction[1] * b.direction[1])) * 180) / Math.PI <= MAX_SKEW_DEGREES);
+    || (Math.acos(Math.min(1, a.direction[0] * b.direction[0] + a.direction[1] * b.direction[1])) * 180) / Math.PI <= maxSkewDegrees);
   const join = (a, b) => side(a.kind, [...a.points, ...b.points.slice(1)]);
   const merged = [];
   sides.forEach((s) => {

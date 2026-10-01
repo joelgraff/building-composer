@@ -173,6 +173,25 @@ picked on their own meshes (the nearest of a volume, wall, or structure wins)
 and show their validation inline. Pick targets are editor-only and left out of
 the GLB export.
 
+**Footprint mode.** File › Edit footprint… (or the Building panel's button,
+or opening a building from the game with no saved design) covers the sidebar
+and views with a 2D plan of the outline in SVG (`js/footprint-view.js`):
+corners and walls to drag, with snapping; a wall's length, a move, a
+bump-out or notch, or straightening typed in; re-squaring with adjustable
+tolerances; undo and redo; and layers for the game's trace, the squared
+import, the eave guide (the outline inset by the eave depth, since an aerial
+shows roof edges), and, from the game's server, neighbors and the aerial.
+The edits themselves are pure functions in `js/footprint-editor.js`. Use
+this footprint re-centers the outline and moves `placement.center` to match,
+so the building stays in place in the game. Turn into a porch
+(`js/footprint-porch.js`) cuts an open porch traced as part of the house out
+of the outline (a rectangle drawn over it, or a traced bump), or keeps the
+outline for a recessed porch, and adds the porch structure when the
+footprint is used; legs turned one at a time round a corner join into a
+wraparound. Save footprint to game writes the outline and those porches as
+the game's footprint override (`js/footprint-override.js`), keyed by the
+building's id. See docs/FOOTPRINT_EDITING_PLAN.md.
+
 **Roofs meeting their neighbors.** A gable's end meeting a neighbor's roof
 merges into it by default (its ridge runs into the neighbor's slope with
 valleys), unless set to a standalone shell. A roof over a lower neighbor keeps

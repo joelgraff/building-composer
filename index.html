@@ -605,6 +605,132 @@
         color: var(--muted);
       }
 
+      .layout {
+        position: relative;
+      }
+
+      body.footprint-mode-on .menubar,
+      body.footprint-mode-on .toolbar .actions {
+        opacity: 0.45;
+        pointer-events: none;
+      }
+
+      .footprint-mode {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        display: grid;
+        grid-template-columns: 1fr minmax(280px, 330px);
+        background: var(--bg);
+      }
+
+      .footprint-mode[hidden] {
+        display: none;
+      }
+
+      .fp-canvas {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+        background: linear-gradient(#f6f8fa, #edf2f7);
+      }
+
+      .fp-svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        cursor: grab;
+        outline: none;
+        user-select: none;
+      }
+
+      .fp-hint {
+        position: absolute;
+        left: 10px;
+        bottom: 8px;
+        font-size: 0.78rem;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.8);
+        padding: 3px 8px;
+        border-radius: 6px;
+        pointer-events: none;
+      }
+
+      .fp-grid-line { stroke: rgba(17, 32, 51, 0.07); stroke-width: 1; }
+      .fp-neighbor { fill: rgba(17, 32, 51, 0.08); stroke: rgba(17, 32, 51, 0.45); stroke-width: 1; }
+      .fp-squared-line { fill: none; stroke: #7a5cc7; stroke-width: 1.5; stroke-dasharray: 2 3; }
+      .fp-trace-line { fill: none; stroke: #e0791b; stroke-width: 2; stroke-dasharray: 6 4; }
+      .fp-guide-line { fill: none; stroke: #00a6b8; stroke-width: 1; stroke-dasharray: 3 3; }
+      .fp-outline-fill { fill: rgba(50, 107, 245, 0.12); stroke: none; }
+      .fp-outline-fill.has-problems { fill: rgba(214, 69, 69, 0.12); }
+      .fp-wall { stroke: #1d3f8f; stroke-width: 2; }
+      .fp-wall.selected { stroke: #00a6b8; stroke-width: 4; }
+      .fp-wall.too-short { stroke: #c0392b; }
+      .fp-wall-hit { stroke: transparent; cursor: move; }
+      .fp-corner { fill: #fff; stroke: #1d3f8f; stroke-width: 2; cursor: move; }
+      .fp-corner.selected { fill: #00a6b8; stroke: #00a6b8; }
+      .fp-snap { fill: none; stroke: #f4b400; stroke-width: 2; }
+      .fp-svg.drawing { cursor: crosshair; }
+      .fp-hatch-back { fill: rgba(224, 121, 27, 0.12); }
+      .fp-hatch-line { stroke: rgba(224, 121, 27, 0.55); stroke-width: 0.06; }
+      .fp-porch { fill: url(#fp-hatch); stroke: #e0791b; stroke-width: 1.5; }
+      .fp-porch.recess { stroke-dasharray: 4 3; }
+      .fp-porch-label { fill: #9a4f0c; paint-order: stroke; stroke: rgba(255, 255, 255, 0.9); font-family: inherit; font-weight: 600; pointer-events: none; }
+      .fp-draft-rect { fill: rgba(224, 121, 27, 0.15); stroke: #e0791b; stroke-width: 1.5; stroke-dasharray: 5 3; }
+      .fp-actions button.active { background: #e0791b; border-color: #e0791b; color: #fff; }
+      .fp-porch-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
+      .fp-porch-row button { padding: 0 8px; border: 0; background: none; font-size: 1rem; color: var(--muted); }
+      .fp-porch-row button:hover { color: #c0392b; }
+      .fp-labels text { fill: var(--text); paint-order: stroke; stroke: rgba(255, 255, 255, 0.9); font-family: inherit; pointer-events: none; }
+
+      .fp-panel {
+        overflow-y: auto;
+        padding: 16px;
+        background: var(--panel-alt);
+        border-left: 1px solid rgba(17, 32, 51, 0.08);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        font-size: 0.85rem;
+      }
+
+      .fp-title { font-size: 1.15rem; font-weight: 700; }
+      .fp-subhead { font-weight: 700; margin-bottom: 6px; }
+      .fp-note { font-size: 0.8rem; color: var(--muted); font-weight: 400; }
+      .fp-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+      .fp-actions button { padding: 6px 10px; }
+      .fp-facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; }
+      .fp-facts > :nth-child(odd) { color: var(--muted); }
+
+      .fp-section {
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(17, 32, 51, 0.08);
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+
+      .fp-section > summary { cursor: pointer; font-weight: 700; }
+      .fp-section[open] > summary { margin-bottom: 8px; }
+      .fp-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px; margin-top: 6px; }
+      .fp-row label, .fp-row-label { display: grid; gap: 3px; font-size: 0.76rem; color: var(--muted); }
+      .fp-row input { width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(17, 32, 51, 0.12); font: inherit; }
+      .fp-check { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
+      .fp-check.unavailable { color: var(--muted); }
+      .fp-message, .fp-problems { color: #c0392b; font-size: 0.82rem; }
+      .fp-problems { margin: 0; padding-left: 18px; }
+
+      .fp-footer {
+        margin-top: auto;
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding-top: 8px;
+      }
+
+      .fp-footer button:disabled,
+      .fp-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
       .statusbar {
         display: flex;
         align-items: center;
@@ -665,6 +791,9 @@
             <button role="menuitem" data-new-footprint="narrow-lean-to">Narrow rear lean-to</button>
             <button role="menuitem" data-new-footprint="wide-wing">Wider attached wing</button>
             <hr />
+            <button role="menuitem" data-edit-footprint>Edit footprint…</button>
+            <button role="menuitem" data-save-footprint>Save footprint to game</button>
+            <hr />
             <button role="menuitem" id="load-btn">Open .bld or footprint JSON…</button>
             <button role="menuitem" id="save-btn">Save .bld</button>
             <hr />
@@ -690,6 +819,7 @@
     </div>
 
     <div class="layout">
+      <div id="footprint-mode" class="footprint-mode" hidden></div>
       <aside class="sidebar">
         <div class="scope-panel">
           <div class="scope-label">Editing</div>
@@ -710,6 +840,10 @@
               <option value="minX">The −X side</option>
             </select>
             <div class="field-note">Marked FRONT in the views. Walls are named from it.</div>
+          </div>
+          <div class="actions">
+            <button data-edit-footprint>Edit footprint…</button>
+            <button data-save-footprint title="Write the outline (and porches made from it) to the game, for its own generated building">Save footprint to game</button>
           </div>
         </div>
 
@@ -989,6 +1123,6 @@
       }
     </script>
     <script src="./node_modules/straight-skeleton/dist/index.js"></script>
-    <script type="module" src="./js/main.js?v=84"></script>
+    <script type="module" src="./js/main.js?v=88"></script>
   </body>
 </html>

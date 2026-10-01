@@ -87,6 +87,8 @@ npm test
   - Secondary top-down orthographic plan view synchronized with camera controls and dynamic bounding frustum.
 
 - **Native Persistence & Interchange**:
+  - **Footprint editing** (File › Edit footprint…): drag corners and walls on a 2D plan with snapping, add bump-outs and notches, type lengths, re-square, undo and redo, over the game's trace; the building keeps its place in the game. **Turn into a porch** makes an open porch traced as part of the house into a porch structure (projecting, recessed, or a wraparound turned one leg at a time).
+  - **Save footprint to game**: writes the corrected outline, and the porches made from it, to the game (`POST /game-footprint/<id>`) as a footprint override for its own generated building, or downloads it for `dixon_dem/game/data/footprint_overrides/`.
   - **File menu**: New building (from a preset footprint, after asking, since it replaces the current one), Open, Save `.bld`, and Export GLB.
   - **Save Project (`.bld`)**: Serializes complete footprint, volumes, roof graph, story overrides, materials, edge pitches, per-volume roof shapes, eave settings, and roof structures into a native JSON document.
   - **Load Project**: Restores saved `.bld` files or raw footprint JSON arrays.
@@ -106,6 +108,10 @@ building-composer/
 │   ├── extrusion.js       # 3D procedural geometry builders for walls, roofs, foundation; roof merge resolver
 │   ├── facade.js          # Facade layout (with roof structure surfaces), volume decomposition, roof graph, .bld persistence
 │   ├── footprint.js       # 2D polygon validation, normalization, and metrics
+│   ├── footprint-editor.js # Footprint editor core: edits, snapping, validation, undo, placement
+│   ├── footprint-view.js  # Footprint mode: the SVG plan editor and its panel
+│   ├── footprint-porch.js # Turn into a porch: cut a traced porch out, as a porch structure
+│   ├── footprint-override.js # The footprint override file written back to the game
 │   ├── main.js            # UI controller, scene management, dual viewport rendering
 │   ├── materials.js       # Shared PBR material definitions and palette presets
 │   ├── roof-planes.js     # Roof eave planes and their heights (shared by roofs and structures)
