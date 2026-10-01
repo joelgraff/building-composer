@@ -12,7 +12,6 @@ Progress:
 - Phase 5 (write-back), Composer's side, is done: `js/footprint-override.js` builds the override file, tested in `tests/footprint_override.test.js`; File › Save footprint to game (also in the Building panel) POSTs it to `/game-footprint/<id>` with the `X-Composer` header, or downloads `<id>.json` for `game/data/footprint_overrides/` when the server doesn't answer. The server endpoint is dixon_dem's part.
   - **The outline hash** (`based_on.hash`): SHA-256, lowercase hex, of the outline's canonical text: its corners in the order exported, no repeated closing corner, each coordinate rounded to the millimeter and written with three decimals (`-0.000` as `0.000`), `x,z` pairs joined by `;`, e.g. `508.108,-212.668;523.095,-213.555;...`. Python: `hashlib.sha256(text.encode()).hexdigest()`; GDScript: `text.sha256_text()`. `based_on.source` is the export's `source` (`dixon_dem`); the game may want to put the record's own source (`osm`, `ms`, `curated`) in the export so it can go here.
   - **Porch legs** run the way the override's own outline runs along that wall (the file's outline keeps the winding of the game's trace), so with counter-clockwise rings the outward normal points away from the building. A wraparound's leg that turns a corner runs on past it by the depth, covering the corner square, as Composer builds it.
-- Open question answered for now: only a building with no saved design opens in footprint mode (as proposed).
 
 ## The problem
 
@@ -35,6 +34,7 @@ There is no footprint editor in either project. ARCHITECTURE.md §7 lists an in-
 ## Decisions
 
 - **Edit in Composer.** It already holds the outline, validates it (`validateFootprint`, `angledWallProblem`), and turns it into volumes, and web UI is quicker to build than a GDScript editor inside the 3D game.
+- **Footprint mode opens first only for a building with no saved design** (decided 2026-09-30). A building with a design opens in the 3D view, with Edit footprint at hand.
 - **Write the result back to the game** as a footprint override keyed by the building's own id. The game's generated building, collision, neighbors' context, and later X exports then all use the corrected outline, not only a composed design.
 
 ## What there is to trace against
@@ -166,5 +166,4 @@ Phases 1 and 2 are independent and can go in parallel. The UI needs both.
 
 ## Open questions
 
-- **Default entry point.** Should every X open in footprint mode first, or only buildings without a saved design (as proposed)?
 - **Imagery elsewhere.** The aerial tiles are only on the machine that fetched them. Should the server fetch a missing tile on demand (`fetch_illinois.py` logic), or should Composer do without?
