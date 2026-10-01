@@ -2862,26 +2862,80 @@ function resetForNewFootprint() {
  * Opens a parsed file: a project (.bld), a footprint exported from the
  * Dixon project (see js/import.js), or a plain footprint (an array of [x, z]).
  */
+/** Opens a saved design's state: its settings into the sidebar, and its building built. */
+function applyProjectState(state) {
+  Object.assign(modelConfig, state);
+  syncUnitLabels();
+  syncControlsFromConfig();
+  return loadFootprint(state.footprint, false);
+}
+
+/**
+ * Asks what to do with a design whose building's outline has changed in the
+ * game since it was made: keep it on the new outline, or start from the new
+ * outline. Resolves 'keep' or 'new'.
+ */
+function askOutlineChanged(id, dropped) {
+  const dialog = document.getElementById('outline-changed');
+  dialog.querySelector('[data-outline-changed-id]').textContent = id;
+  const loses = dialog.querySelector('[data-outline-changed-loses]');
+  loses.textContent = dropped.length
+    ? `On the new outline its ${dropped.join(', ')} would go: they are placed by wall or mass, and those changed.`
+    : 'Everything in it carries over.';
+  // resolved from the buttons themselves (Escape is "new"), not the dialog's
+  // close event, which some embedded browsers don't deliver
+  return new Promise((resolve) => {
+    const choose = (choice) => {
+      dialog.querySelectorAll('button[value]').forEach((button) => { button.onclick = null; });
+      dialog.onkeydown = null;
+      dialog.close(choice);
+      resolve(choice);
+    };
+    dialog.querySelectorAll('button[value]').forEach((button) => {
+      button.onclick = (event) => {
+        event.preventDefault();
+        choose(button.value === 'keep' ? 'keep' : 'new');
+      };
+    });
+    dialog.onkeydown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        choose('new');
+      }
+    };
+    dialog.showModal();
+  });
+}
+
+/**
+ * A design saved from the game on an outline the game has since changed:
+ * kept on the new outline (re-centered there, with what would land in the
+ * wrong place left out), or the new outline opened fresh in footprint mode.
+ */
+async function openChangedDesign(saved, imported, placement, startFresh) {
+  const state = saved.state;
+  const masses = computeFacadeLayout(openRing(state.footprint), { volumeSplit: state.volumeSplit }).volumes.length;
+  const losses = outlineChangeLosses(state, state.footprint, imported.footprint, masses);
+  if (await askOutlineChanged(placement.id, losses.dropped) !== 'keep') {
+    startFresh();
+    return;
+  }
+  resetForNewFootprint();
+  dropOutlineLosses(state, losses);
+  await applyProjectState({ ...state, footprint: imported.footprint, placement });
+  setStatus([
+    `Building ${placement.id}: the design is kept on the outline the game has now.`,
+    losses.dropped.length ? `Removed ${losses.dropped.join(', ')}.` : '',
+    roofStructureIssues,
+  ].filter(Boolean).join(' '), roofStructureIssues ? 'error' : 'default');
+}
+
 function openPayload(payload) {
   resetForNewFootprint();
   if (payload && payload.format === 'building-composer') {
     const result = deserializeBuildingState(payload);
     if (result.valid) {
-      Object.assign(modelConfig, result.state);
-      storyCountInput.value = modelConfig.storyCount;
-      wallMaterialSelect.value = modelConfig.wallMaterial;
-      renderGameFinishControls();
-      roofTypeSelect.value = modelConfig.roofType;
-      roofDirectionSelect.value = modelConfig.roofDirection;
-      roofPitchRiseInput.value = modelConfig.roofPitchRise;
-      roofHeightModeSelect.value = modelConfig.roofHeightMode;
-      volumeSplitSelect.value = modelConfig.volumeSplit;
-      frontSelect.value = modelConfig.frontSide;
-      nameSideControls();
-      syncUnitLabels();
-      syncLengthInputs();
-      updateRoofPitchDisplay();
-      loadFootprint(result.state.footprint, false);
+      applyProjectState(result.state);
       const notes = [...result.warnings, roofStructureIssues].filter(Boolean);
       setStatus(notes.length
         ? `Project (.bld) loaded. ${notes.join(' ')}`
@@ -2905,11 +2959,10 @@ function openPayload(payload) {
         setStatus(`Building ${now.id}: the design saved from the game is open. ${imported.warnings.join(' ')}`.trim());
         return;
       }
-      imported.warnings.push('The outline was changed in the game since this design was made, so the design is not opened; the new outline is.');
     }
     // the game's own outline and the squared import, in game coordinates (so
-    // they survive re-centering), for footprint mode's layers
-    // an outline already corrected in Composer comes with the one it was drawn
+    // they survive re-centering), for footprint mode's layers; an outline
+    // already corrected in Composer comes with the one it was drawn
     // over (source_footprint) and what it replaced (based_on): the trace layer
     // shows the traced outline, and a new correction still names the source
     const traced = Array.isArray(payload.source_footprint) && payload.source_footprint.length >= 3 ? payload.source_footprint : payload.footprint;
@@ -2921,23 +2974,33 @@ function openPayload(payload) {
         ? { source: payload.based_on.source ?? imported.placement.source, hash: payload.based_on.hash }
         : { source: imported.placement.source, hash: outlineHash(traced) },
     };
-    Object.assign(modelConfig, imported.settings, { placement });
-    frontSelect.value = modelConfig.frontSide;
-    nameSideControls();
-    storyCountInput.value = modelConfig.storyCount;
-    wallMaterialSelect.value = modelConfig.wallMaterial;
-    roofTypeSelect.value = modelConfig.roofType;
-    roofDirectionSelect.value = modelConfig.roofDirection;
-    renderGameFinishControls();
-    syncLengthInputs();
-    updateRoofPitchDisplay();
-    // a building with no design yet opens in footprint mode, to check the outline first
-    loadFootprint(imported.footprint, false).then(() => openFootprintMode());
-    const angle = (imported.placement.rotation * 180) / Math.PI;
-    setStatus([
-      `Building ${imported.placement.id} imported from ${imported.placement.source}, turned ${angle.toFixed(1)} degrees square to the axes.`,
-      ...imported.warnings, roofStructureIssues,
-    ].filter(Boolean).join(' '), roofStructureIssues ? 'error' : 'default');
+    // the new outline from scratch: the game's settings, in footprint mode to check it first
+    const startFresh = () => {
+      Object.assign(modelConfig, imported.settings, { placement });
+      frontSelect.value = modelConfig.frontSide;
+      nameSideControls();
+      storyCountInput.value = modelConfig.storyCount;
+      wallMaterialSelect.value = modelConfig.wallMaterial;
+      roofTypeSelect.value = modelConfig.roofType;
+      roofDirectionSelect.value = modelConfig.roofDirection;
+      renderGameFinishControls();
+      syncLengthInputs();
+      updateRoofPitchDisplay();
+      // a building with no design yet opens in footprint mode, to check the outline first
+      loadFootprint(imported.footprint, false).then(() => openFootprintMode());
+      const degrees = (imported.placement.rotation * 180) / Math.PI;
+      // (a square outline turns by -0.0 otherwise)
+      const angle = Math.abs(degrees) < 0.05 ? 0 : degrees;
+      setStatus([
+        `Building ${imported.placement.id} imported from ${imported.placement.source}, turned ${angle.toFixed(1)} degrees square to the axes.`,
+        ...imported.warnings, roofStructureIssues,
+      ].filter(Boolean).join(' '), roofStructureIssues ? 'error' : 'default');
+    };
+    if (saved?.valid) {
+      openChangedDesign(saved, imported, placement, startFresh);
+      return;
+    }
+    startFresh();
     return;
   }
   loadFootprint(payload, false);
@@ -3603,6 +3666,58 @@ async function loadFootprintContext(view) {
   image.src = href;
 }
 
+// A mass's own settings, by volume id (positional: volume-0, volume-1, ...)
+const MASS_MAPS = ['volumeStoryOverrides', 'volumeKneeWalls', 'volumeFoundationHeights', 'volumeStoryHeights', 'volumeRidgeDirections',
+  'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves', 'volumeMaterials', 'volumeGameFinishes'];
+
+/**
+ * What a design (`config`, modelConfig or a saved state) loses on a new
+ * outline. Windows, doors, chimneys, and wall trim are placed by wall run,
+ * and masses' own settings and structures by mass, both by position: when
+ * the walls or masses change in number, they would land on the wrong wall or
+ * mass, so they go. `massesBefore` is the old outline's mass count.
+ */
+function outlineChangeLosses(config, oldFootprint, newFootprint, massesBefore) {
+  const wallsChanged = openRing(newFootprint).length !== openRing(oldFootprint).length;
+  const massesAfter = computeFacadeLayout(openRing(newFootprint), { volumeSplit: config.volumeSplit }).volumes.length;
+  const massesChanged = massesAfter !== massesBefore;
+  const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const dropped = [];
+  if (wallsChanged) {
+    if (config.openings?.length) {
+      dropped.push(count(config.openings.length, 'window or door', 'windows and doors'));
+    }
+    if (config.chimneys?.length) {
+      dropped.push(count(config.chimneys.length, 'chimney', 'chimneys'));
+    }
+    if (Object.keys(config.wallTrim ?? {}).length) {
+      dropped.push("walls' own trim");
+    }
+  }
+  if (massesChanged) {
+    if (MASS_MAPS.some((key) => Object.keys(config[key] ?? {}).length)) {
+      dropped.push("the masses' own settings");
+    }
+    if (config.roofStructures?.length) {
+      dropped.push(count(config.roofStructures.length, 'roof structure', 'roof structures'));
+    }
+  }
+  return { wallsChanged, massesChanged, dropped };
+}
+
+/** Removes what outlineChangeLosses found would land in the wrong place. */
+function dropOutlineLosses(config, { wallsChanged, massesChanged }) {
+  if (wallsChanged) {
+    config.openings = [];
+    config.chimneys = [];
+    config.wallTrim = {};
+  }
+  if (massesChanged) {
+    MASS_MAPS.forEach((key) => { config[key] = {}; });
+    config.roofStructures = [];
+  }
+}
+
 /**
  * Builds on an edited footprint: re-centered, with the placement moved so the
  * building stays where it is in the game. Windows, doors, chimneys, and wall
@@ -3621,45 +3736,13 @@ function useEditedFootprint(edited, porches = []) {
     },
   }));
   const madePorches = porchStructures(footprint, moved, { volumeSplit: modelConfig.volumeSplit });
-  const wallsChanged = footprint.length !== currentFootprint().length;
-  const massesBefore = activeLayout?.volumes.length ?? 0;
-  const massesAfter = computeFacadeLayout(footprint, { volumeSplit: modelConfig.volumeSplit }).volumes.length;
-  const massesChanged = massesAfter !== massesBefore;
-  const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-  const dropped = [];
-  if (wallsChanged) {
-    if (modelConfig.openings.length) {
-      dropped.push(count(modelConfig.openings.length, 'window or door', 'windows and doors'));
-    }
-    if (modelConfig.chimneys.length) {
-      dropped.push(count(modelConfig.chimneys.length, 'chimney', 'chimneys'));
-    }
-    if (Object.keys(modelConfig.wallTrim ?? {}).length) {
-      dropped.push("walls' own trim");
-    }
-  }
-  const massMaps = ['volumeStoryOverrides', 'volumeKneeWalls', 'volumeFoundationHeights', 'volumeStoryHeights', 'volumeRidgeDirections',
-    'volumeRoofTypes', 'volumeRoofConnections', 'volumeRoofShapes', 'volumeEaves', 'volumeMaterials', 'volumeGameFinishes'];
-  if (massesChanged) {
-    if (massMaps.some((key) => Object.keys(modelConfig[key] ?? {}).length)) {
-      dropped.push("the masses' own settings");
-    }
-    if (modelConfig.roofStructures.length) {
-      dropped.push(count(modelConfig.roofStructures.length, 'roof structure', 'roof structures'));
-    }
-  }
-  if (dropped.length && !window.confirm(`The new footprint has ${massesChanged ? 'different masses' : 'different walls'}, so these go: ${dropped.join(', ')}. Use it anyway?`)) {
+  const masses = activeLayout?.volumes.length ?? 0;
+  const losses = outlineChangeLosses(modelConfig, currentFootprint(), footprint, masses);
+  if (losses.dropped.length && !window.confirm(`The new footprint has ${losses.massesChanged ? 'different masses' : 'different walls'}, so these go: ${losses.dropped.join(', ')}. Use it anyway?`)) {
     return;
   }
-  if (wallsChanged) {
-    modelConfig.openings = [];
-    modelConfig.chimneys = [];
-    modelConfig.wallTrim = {};
-  }
-  if (massesChanged) {
-    massMaps.forEach((key) => { modelConfig[key] = {}; });
-    modelConfig.roofStructures = [];
-  }
+  dropOutlineLosses(modelConfig, losses);
+  const { dropped } = losses;
   madePorches.structures.forEach((fields) => {
     modelConfig.roofStructures = [...modelConfig.roofStructures, createRoofStructure('porch', fields, modelConfig.roofStructures)];
   });
