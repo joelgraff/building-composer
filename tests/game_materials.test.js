@@ -6,8 +6,7 @@ import { normalizeRoofStructures } from '../js/roof-structures.js';
 import { buildGameFile, gameFileProblems, paneLight } from '../js/game-export.js';
 import {
   GAME_WALLS, GAME_ROOFS, GAME_DOORS, GAME_TRIM, GAME_INTERIOR, GLASS,
-  colorOf, familyOf, finishesFor, gameManifest, gameMaterialFor, isGameMaterial, loadGameManifest, resolveGameFinishes, setGameManifest,
-} from '../js/game-materials.js';
+  colorOf, familyOf, finishesFor, gameManifest, gameMaterialFor, isGameMaterial, loadGameManifest, resolveGameFinishes, setGameManifest, finishesForSlot} from '../js/game-materials.js';
 import BUNDLED from '../js/game-materials-data.js';
 
 const RECT = [[-5, -4], [5, -4], [5, 4], [-5, 4]];
@@ -211,5 +210,22 @@ describe('checking a file before it goes to the game', () => {
 
   it('records which vocabulary it was made against', () => {
     assert.equal(exported(build(RECT)).materials_version, gameManifest().hash);
+  });
+});
+
+describe('roof finishes by slot', () => {
+  const names = (slot) => finishesForSlot(slot).map((m) => m.name);
+
+  it('offers shingles and metal for a pitched roof, not membrane', () => {
+    assert.ok(names('roof').includes('shingles_dark') && names('roof').includes('shingles_brown') && names('roof').includes('roof_metal'));
+    assert.ok(!names('roof').includes('roof_membrane'));
+  });
+
+  it('offers membrane and metal for a flat roof, not shingles', () => {
+    assert.deepEqual(names('flatRoof').sort(), ['roof_membrane', 'roof_metal']);
+  });
+
+  it('offers a slot\'s whole category otherwise', () => {
+    assert.deepEqual(names('wall'), finishesFor('wall').map((m) => m.name));
   });
 });

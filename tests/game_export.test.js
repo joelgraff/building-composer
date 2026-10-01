@@ -73,6 +73,13 @@ describe('the file for the game', () => {
     assert.ok(file.collision.faces.length > 0);
   });
 
+  it('exports a chosen roof finish: brown shingles on a pitched roof, metal on a flat one', () => {
+    const pitched = buildGameFile(build(RECT, { gameFinishes: { roof: 'shingles_brown' } }), { rotation: 0, center: [0, 0], id: 'x' });
+    assert.ok(pitched.near.shingles_brown && !pitched.near.shingles_dark, `roof groups ${Object.keys(pitched.near)}`);
+    const flat = buildGameFile(build(RECT, { roofType: 'flat', gameFinishes: { flatRoof: 'roof_metal' } }), { rotation: 0, center: [0, 0], id: 'x' });
+    assert.ok(flat.near.roof_metal && !flat.near.roof_membrane, `roof groups ${Object.keys(flat.near)}`);
+  });
+
   it('keeps a flat roof as flat roof', () => {
     const file = buildGameFile(build(RECT, { roofType: 'flat' }), { rotation: 0, center: [0, 0], id: 'x' });
     assert.ok(file.near.roof_membrane, 'a flat roof is membrane');
