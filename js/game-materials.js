@@ -53,7 +53,9 @@ const SHINGLES = 'shingles_dark';
 const MEMBRANE = 'roof_membrane';
 const FOUNDATION = 'stone_foundation';
 const PORCH_FLOOR = 'trim_dark';
-const FLAT = 0.98;
+export const FLAT = 0.98;
+/** A roof face whose outward normal points up less than this is trim (fascia, rake, soffit), not roof. */
+export const STEEP = 0.1;
 
 let active = null;
 let byName = new Map();
@@ -172,11 +174,16 @@ export function gameMaterialFor({ role, palette, part, finishes = {} }, normal) 
   if (part === 'floor') {
     return chosen('porchFloor', 'porch-floor') ?? PORCH_FLOOR;
   }
+  if (part === 'soffit') {
+    return chosen('trim', 'trim') ?? TRIM;
+  }
   if (role === 'foundation') {
     return chosen('foundation', 'foundation') ?? FOUNDATION;
   }
   if (role === 'roof') {
-    if (normal[1] < 0.5) {
+    // trim faces sideways or down (fascia, rakes, soffits); anything facing up,
+    // however steep (a mansard's lower slope, a tower's spire), is roof
+    if (normal[1] < STEEP) {
       return chosen('trim', 'trim') ?? TRIM;
     }
     if (normal[1] > FLAT) {

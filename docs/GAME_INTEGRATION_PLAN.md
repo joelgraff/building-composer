@@ -2,7 +2,7 @@
 
 Composer and the Dixon game (`dixon_dem`) already exchange buildings in both directions. This plan finishes that exchange: one material vocabulary owned by the game, the game editor's choices carried into Composer, and the loose ends in the round trip. Footprint correction is its own plan: [FOOTPRINT_EDITING_PLAN.md](FOOTPRINT_EDITING_PLAN.md).
 
-Status: Phases 1–5 done (2026-09-30): dixon_dem `composer-integration` branch, Composer `game-materials` branch. Not yet checked end to end in a baked game (see [Verification](#verification)). Decisions in [Decisions](#decisions) were made with the project owner.
+Status: Phases 1–5 done (2026-09-30): dixon_dem `composer-integration` branch; in Composer's `main`. Checked end to end through the pipeline (2026-09-30): a house opened from the game with `color: brick_buff` came in with that finish, 2 storeys and a gable; with a door, windows, and a walk-in interior it was sent through `composer_server.py` and baked into its chunk by `build_building_plan.py --chunk`, with every material name known to the palette, no warnings, and its 180 collision faces in the chunk. That check found Send to game never wrote walk-in collision (the rooms are recorded on the building inside the editor's scene group; fixed). Not yet checked in Godot itself (the Godot steps of [Verification](#verification)). Decisions in [Decisions](#decisions) were made with the project owner.
 
 ## Where it stands
 
@@ -69,7 +69,7 @@ As built:
 - Choosing a finish sets the matching family.
 - A shopfront pane is a window at least 1.5 m wide with its sill at most 0.9 m above its wall's base. It is lit with probability 0.45, as the game does.
 - `materials_version` is written now, in version 1 and 2 files, not only in version 3.
-- Follow-up: gable-end triangles belong to the roof mesh, so they export as trim (`trim_white`), as they did before (as `siding_white`). They should take the wall finish.
+- Follow-up, done: gable-end triangles belong to the roof mesh, so they exported as trim. Export now gives a vertical roof triangle in the plane of a wall, just above it, that wall's material and finishes (`refineRoofParts` in `js/game-export.js`).
 
 
 - `js/game-materials.js` (new, pure): load the manifest from `/game-materials` when served by the game's server, falling back to a bundled copy, `data/game-materials.json`. `scripts/sync-game-materials.mjs` refreshes the bundled copy from `../dixon_dem/game/data/materials_manifest.json`. Helpers: `finishesFor(category)`, `colorOf(name)`, `isGameMaterial(name)`, `familyOf(name)` (e.g. `brick_buff` is `brick`, `siding_sage` is `wood`, for Composer's own roughness and look).
@@ -97,7 +97,7 @@ As built:
 - `composer_hints(record)` (static, self-tested) sends `form`, `storeys`, `roof`, `roof_axis`, `material`, `color` (not `auto`), `dressing`, `porch`, `ground`, and `awnings`. Composer maps `storeys`, `roof`, `material`, `color`, and `roof_axis`, and ignores the rest for now.
 - `roof_axis` sets the building's `roofDirection` from the imported front side. A footprint cut into several volumes keeps each volume's own ridge.
 - `composer_server.py` now sends `Cache-Control: no-cache` on every file. Without it, a browser kept running an older Composer module after an update.
-- Follow-up: a gabled roof exports four small upward strips at the eaves (hidden under the rake overhang) as `roof_membrane`. They should be trim.
+- Follow-up, done: the strips at a pitched roof's eaves (soffits, a cornice's top) exported as `roof_membrane`, since the outward test can't orient faces tucked under the overhang. Level faces within 0.3 m of a pitched roof's bottom are trim now. Found with it: a roof face pointing up less than 0.5 (a mansard's lower slope, a steep spire) exported as trim; only faces pointing up less than 0.1 are trim now (`STEEP`).
 
 
 - dixon_dem `building_edit.gd` `_export_composer()`: add `hints` from the building's resolved record (`_record`): `form`, `storeys`, `roof`, `roof_axis`, `material`, `color`, `dressing`, `porch`, and `awnings`. Confirm `_record` is the resolved template including overrides, not only the override.
