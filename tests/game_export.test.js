@@ -1,4 +1,5 @@
 import { describe, it } from 'node:test';
+import * as THREE from '../node_modules/three/build/three.module.js';
 import assert from 'node:assert/strict';
 import { computeFacadeLayout } from '../js/facade.js';
 import { createBuildingFromFootprint } from '../js/extrusion.js';
@@ -57,6 +58,19 @@ describe('the file for the game', () => {
     const building = build(RECT, { wallMaterial: 'brick', gameFinishes: { wall: 'brick_buff' } });
     const file = buildGameFile(building, { rotation: 0, center: [0, 0], id: 'x' });
     assert.ok(file.near.brick_buff.verts.some((v) => Math.abs(Math.abs(v[0]) - 5) < 1e-3 && v[1] > 7.5), 'the gable peak is buff brick');
+  });
+
+  it('writes walk-in collision for a building sent inside the editor\'s scene group', () => {
+    const layout = computeFacadeLayout(RECT, { volumeSplit: 'auto' });
+    const { building } = createBuildingFromFootprint(RECT, {
+      storyCount: 2, storyHeight: 3, foundationDepth: 0.6, roofType: 'gable', roofDirection: 'x', roofPitchRise: 8, roofPitchRun: 12,
+      volumes: layout.volumes, facadeLayout: layout, interior: { enabled: true, wallThickness: 0.2 },
+    });
+    const group = new THREE.Group();
+    group.add(building);
+    const file = buildGameFile(group, { rotation: 0, center: [0, 0], id: 'x' });
+    assert.equal(file.version, 2);
+    assert.ok(file.collision.faces.length > 0);
   });
 
   it('keeps a flat roof as flat roof', () => {

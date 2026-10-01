@@ -402,7 +402,7 @@ export function buildGameFile(root, placement, project) {
     near,
     project,
   };
-  if (root.userData?.interiorRooms?.length) {
+  if (hasInteriorRooms(root)) {
     // a walk-in building: collide with its surfaces, not its hull (see the file header)
     const faces = [];
     triangles.forEach((entry) => {
@@ -413,6 +413,19 @@ export function buildGameFile(root, placement, project) {
     Object.assign(file, { version: 2, interior: true, collision: { faces } });
   }
   return file;
+}
+
+/**
+ * Whether the model has walk-in rooms: recorded on the building
+ * (`userData.interiorRooms`), which the editor sends wrapped in its scene
+ * group, so anywhere under `root`.
+ */
+function hasInteriorRooms(root) {
+  let found = false;
+  root.traverse((node) => {
+    found ||= Boolean(node.userData?.interiorRooms?.length);
+  });
+  return found;
 }
 
 /**

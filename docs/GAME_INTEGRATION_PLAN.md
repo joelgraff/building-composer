@@ -2,7 +2,7 @@
 
 Composer and the Dixon game (`dixon_dem`) already exchange buildings in both directions. This plan finishes that exchange: one material vocabulary owned by the game, the game editor's choices carried into Composer, and the loose ends in the round trip. Footprint correction is its own plan: [FOOTPRINT_EDITING_PLAN.md](FOOTPRINT_EDITING_PLAN.md).
 
-Status: Phases 1–5 done (2026-09-30): dixon_dem `composer-integration` branch, Composer `game-materials` branch. Not yet checked end to end in a baked game (see [Verification](#verification)). Decisions in [Decisions](#decisions) were made with the project owner.
+Status: Phases 1–5 done (2026-09-30): dixon_dem `composer-integration` branch; in Composer's `main`. Checked end to end through the pipeline (2026-09-30): a house opened from the game with `color: brick_buff` came in with that finish, 2 storeys and a gable; with a door, windows, and a walk-in interior it was sent through `composer_server.py` and baked into its chunk by `build_building_plan.py --chunk`, with every material name known to the palette, no warnings, and its 180 collision faces in the chunk. That check found Send to game never wrote walk-in collision (the rooms are recorded on the building inside the editor's scene group; fixed). Not yet checked in Godot itself (the Godot steps of [Verification](#verification)). Decisions in [Decisions](#decisions) were made with the project owner.
 
 ## Where it stands
 
