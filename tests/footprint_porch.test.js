@@ -86,6 +86,19 @@ describe('cutPart', () => {
     assert.equal(porch.openSides.length, 2);
   });
 
+  it('cuts a porch off an outline with an angled wall, keeping that wall', () => {
+    // a clipped back corner, and a porch traced on the front
+    const clipped = [[-5, -4], [3, -4], [5, -2], [5, 4], [-5, 4]];
+    const traced = addBump(clipped, 3, { start: 3, width: 4, depth: 2.4 });
+    const { footprint, porch } = cutPart(traced, { minX: -2, maxX: 2, minZ: 4, maxZ: 6.4 });
+    sameOutline(footprint, clipped);
+    assert.equal(porch.type, 'projecting');
+    assert.equal(porch.side, 'maxZ');
+    const { structures } = porchStructures(footprint, [porch]);
+    assert.equal(structures.length, 1);
+    assert.deepEqual(buildErrors(footprint, structures), [[]]);
+  });
+
   it('says why when the part cannot be a porch', () => {
     assert.throws(() => cutPart(RECT, { minX: 6, maxX: 8, minZ: 0, maxZ: 2 }), /doesn't cover/);
     assert.throws(() => cutPart(RECT, { minX: -6, maxX: 6, minZ: -1, maxZ: 1 }), /in two/);
@@ -93,7 +106,6 @@ describe('cutPart', () => {
     assert.throws(() => cutPart(RECT, { minX: -6, maxX: 6, minZ: -5, maxZ: 5 }), /whole building/);
     const withBump = addBump(RECT, 2, { start: 3, width: 4, depth: 2.4 });
     assert.throws(() => cutPart(withBump, { minX: 1, maxX: 3, minZ: 3, maxZ: 7 }), /rectangular/);
-    assert.throws(() => cutPart([[-5, -4], [5, -4], [5, 4], [-3, 4], [-5, 2]], { minX: -1, maxX: 1, minZ: 3, maxZ: 5 }), /square walls/);
   });
 });
 
@@ -150,6 +162,24 @@ describe('porchStructures', () => {
     near(wrap.wrap.endLength, 4);
     near(wrap.depth, 2.4);
     buildErrors(side.footprint, structures).forEach((errors) => assert.deepEqual(errors, []));
+  });
+
+  it('joins three legs round two corners into one wraparound, cut front, side, then back', () => {
+    // a 10 x 8 house traced with a 2.4 m porch across the front, down the right side, and across the back
+    const traced = [[-5, -6.4], [7.4, -6.4], [7.4, 6.4], [-5, 6.4]];
+    const front = cutPart(traced, { minX: -6, maxX: 8, minZ: 4, maxZ: 7 });
+    const side = cutPart(front.footprint, { minX: 5, maxX: 8, minZ: -7, maxZ: 4.5 });
+    const back = cutPart(side.footprint, { minX: -6, maxX: 5.5, minZ: -7, maxZ: -4 });
+    assert.deepEqual([front, side, back].map(({ porch }) => porch.side), ['maxZ', 'maxX', 'minZ']);
+    sameOutline(back.footprint, RECT);
+    const { structures, problems } = porchStructures(back.footprint, [front.porch, side.porch, back.porch]);
+    assert.deepEqual(problems, []);
+    assert.equal(structures.length, 1);
+    const [wrap] = structures;
+    assert.deepEqual(wrap.wrap.walls, ['maxZ', 'maxX', 'minZ']);
+    near(wrap.wrap.startLength, 10);
+    near(wrap.wrap.endLength, 10);
+    buildErrors(back.footprint, structures).forEach((errors) => assert.deepEqual(errors, []));
   });
 
   it('leaves out a porch whose wall has since moved', () => {
